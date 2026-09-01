@@ -36,6 +36,13 @@ final class MainWindowController: NSWindowController {
     private let editorPane = NSViewController()
     private let sidebarPane = NSViewController()
     private var sidebarItem: NSSplitViewItem?
+    private let previewPane = NSViewController()
+    private let markdownPreview = MarkdownPreviewView()
+    private var previewItem: NSSplitViewItem?
+    private var previewWorkItem: DispatchWorkItem?
+    /// Whether the pane is on screen right now — the preference says whether
+    /// it is wanted, zen mode says whether it may be shown.
+    private var previewIsVisible = false
     private var tabBarLeading: NSLayoutConstraint?
     private let statusSeparator = NSBox()
     private var editorTrailing: NSLayoutConstraint?
@@ -147,6 +154,7 @@ final class MainWindowController: NSWindowController {
         // frames, which is the only moment their real widths are known.
         pane.onLayout = { [weak self] in self?.updateCountsLabel() }
         buildSidebarPane()
+        buildPreviewPane()
         rebuildSplitItems()
         configureVim()
         restoreSession()
@@ -366,6 +374,32 @@ final class MainWindowController: NSWindowController {
         ])
     }
 
+    private func buildPreviewPane() {
+        previewIsVisible = preferences.showsMarkdownPreview
+        let container = previewPane.view
+        markdownPreview.translatesAutoresizingMaskIntoConstraints = false
+        markdownPreview.horizontalInset = preferences.padding.inset
+        markdownPreview.onWidthChange = { [weak self] in
+            self?.scheduleMarkdownPreviewRender()
+        }
+        container.addSubview(markdownPreview)
+        NSLayoutConstraint.activate([
+            markdownPreview.topAnchor.constraint(equalTo: container.topAnchor),
+            markdownPreview.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            markdownPreview.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            markdownPreview.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+
+        // The pane follows the editor rather than scrolling on its own, so it
+        // watches the editor's clip view move.
+        let clip = scrollView.contentView
+        clip.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(editorDidScroll),
+            name: NSView.boundsDidChangeNotification, object: clip
+        )
+    }
+
     /// A real sidebar item on the left, an inspector item on the right — both
     /// give the native translucent material, the full-height look under the
     /// titlebar, and animated collapsing for free.
@@ -379,6 +413,16 @@ final class MainWindowController: NSWindowController {
         editorItem.minimumThickness = 360
         editorItem.canCollapse = false
 
+        // A plain item, not an inspector: the preview is the note's other
+        // half rather than chrome about it, so it takes the paper background
+        // and an even split rather than the system's translucent material.
+        let preview = NSSplitViewItem(viewController: previewPane)
+        preview.minimumThickness = 240
+        preview.preferredThicknessFraction = 0.5
+        preview.canCollapse = true
+        preview.collapseBehavior = .preferResizingSplitViewWithFixedSiblings
+        preview.isCollapsed = !previewIsVisible
+
         let side = preferences.sidebarSide
         let item = side == .left
             ? NSSplitViewItem(sidebarWithViewController: sidebarPane)
@@ -389,14 +433,19 @@ final class MainWindowController: NSWindowController {
         item.collapseBehavior = .preferResizingSplitViewWithFixedSiblings
         item.isCollapsed = wasCollapsed
 
+        // The images stay outermost whichever edge they are on; the preview
+        // sits against the editor it belongs to.
         if side == .left {
             splitViewController.addSplitViewItem(item)
             splitViewController.addSplitViewItem(editorItem)
+            splitViewController.addSplitViewItem(preview)
         } else {
             splitViewController.addSplitViewItem(editorItem)
+            splitViewController.addSplitViewItem(preview)
             splitViewController.addSplitViewItem(item)
         }
         sidebarItem = item
+        previewItem = preview
         updateTabStripInset()
     }
 
@@ -461,6 +510,7 @@ final class MainWindowController: NSWindowController {
     }
 
     private func applyTextAttributes() {
+        markdownPreview.horizontalInset = preferences.padding.inset
         textView.font = preferences.font()
         textView.textColor = .textColor
         textView.defaultParagraphStyle = defaultAttributes[.paragraphStyle] as? NSParagraphStyle
@@ -532,6 +582,8 @@ final class MainWindowController: NSWindowController {
             rebuildSplitItems()
         }
         refreshImages(force: true)
+        applyPreviewVisibility()
+        renderMarkdownPreview()
         vimEngine.isEnabled = preferences.vimMode
         applyFooterVisibility()
         updateStatus()
@@ -640,6 +692,7 @@ final class MainWindowController: NSWindowController {
         textView.scrollRangeToVisible(textView.selectedRange())
         window?.makeFirstResponder(textView)
         lineNumberRuler?.refresh()
+        renderMarkdownPreview()
     }
 
     private func refreshTabs() {
@@ -1343,6 +1396,70 @@ extension MainWindowController: TabPickerPanelDelegate {
     }
 }
 
+// MARK: - Markdown preview
+
+extension MainWindowController {
+
+    /// Whether the pane is up, and what it is showing — for the tests.
+    var previewState: (isVisible: Bool, renderedText: String) {
+        (previewIsVisible, markdownPreview.renderedText)
+    }
+
+    var isMarkdownPreviewVisible: Bool { previewIsVisible }
+
+    /// ⇧⌘P. The choice is remembered across launches, so a note that is being
+    /// written in Markdown opens with its preview beside it.
+    func toggleMarkdownPreview() {
+        preferences.showsMarkdownPreview.toggle()
+        // The pane is read, not typed in: whatever it does to the layout, the
+        // caret stays where it was.
+        focusEditor()
+    }
+
+    /// The preference says whether the pane is wanted; zen says whether it may
+    /// be shown. Leaving zen brings back whatever the preference asks for.
+    private func applyPreviewVisibility() {
+        let shouldShow = preferences.showsMarkdownPreview && !isZenMode
+        guard shouldShow != previewIsVisible else { return }
+        previewIsVisible = shouldShow
+        previewItem?.animator().isCollapsed = !shouldShow
+    }
+
+    /// Debounced, like the cache write: a burst of keystrokes re-renders once,
+    /// about 150 ms after the typing stops.
+    private func scheduleMarkdownPreviewRender() {
+        guard previewIsVisible else { return }
+        previewWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.renderMarkdownPreview() }
+        previewWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
+    }
+
+    private func renderMarkdownPreview() {
+        previewWorkItem?.cancel()
+        previewWorkItem = nil
+        guard previewIsVisible else { return }
+        markdownPreview.show(MarkdownRenderer.render(
+            currentNote?.text ?? "",
+            font: preferences.font(),
+            assets: store.assets,
+            width: markdownPreview.contentWidth
+        ))
+        markdownPreview.follow(fraction: editorScrollFraction)
+    }
+
+    /// Proportional rather than line-for-line: the rendered column is a
+    /// different height from the source, so the two are matched end to end.
+    @objc fileprivate func editorDidScroll() {
+        guard previewIsVisible else { return }
+        markdownPreview.follow(fraction: editorScrollFraction)
+    }
+
+    private var editorScrollFraction: CGFloat {
+        MarkdownPreviewView.fraction(of: scrollView)
+    }
+}
+
 // MARK: - Images: chips and sidebar
 
 extension MainWindowController {
@@ -1719,6 +1836,7 @@ extension MainWindowController: NSTextViewDelegate {
         // The matches have moved with the edit.
         vimEngine.refreshSearchHighlights()
         scheduleImageRefresh()
+        scheduleMarkdownPreviewRender()
         scheduleSave()
     }
 

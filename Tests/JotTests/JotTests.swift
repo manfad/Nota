@@ -1028,9 +1028,10 @@ final class JotTests: XCTestCase {
             )
         }
 
-        // The split view survives the round trip intact.
+        // The split view survives the round trip intact: the editor, the
+        // preview and the image sidebar, the last two collapsed.
         XCTAssertEqual(
-            (window.contentViewController as? NSSplitViewController)?.splitViewItems.count, 2
+            (window.contentViewController as? NSSplitViewController)?.splitViewItems.count, 3
         )
     }
 

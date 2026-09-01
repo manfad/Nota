@@ -123,6 +123,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowController?.toggleZenMode()
     }
 
+    @objc private func toggleMarkdownPreview(_ sender: Any?) {
+        windowController?.toggleMarkdownPreview()
+    }
+
     /// The sidebar item is a verb, so its title flips with the state.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleImageSidebar(_:)) {
@@ -132,6 +136,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if menuItem.action == #selector(toggleZenMode(_:)) {
             let zen = windowController?.isZenMode ?? false
             menuItem.title = zen ? "Exit Zen Mode" : "Zen Mode"
+        }
+        // The preview is a place, not a verb: the title stays put and a
+        // checkmark says whether it is showing.
+        if menuItem.action == #selector(toggleMarkdownPreview(_:)) {
+            menuItem.state =
+                (windowController?.isMarkdownPreviewVisible ?? false) ? .on : .off
         }
         return true
     }
@@ -263,6 +273,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Actual Size", #selector(resetFontSize(_:)), key: "0", target: self),
             .separator(),
             item("Show Images", #selector(toggleImageSidebar(_:)), key: "b", target: self),
+            item("Markdown Preview", #selector(toggleMarkdownPreview(_:)), key: "p",
+                 modifiers: [.command, .shift], target: self),
             item("Zen Mode", #selector(toggleZenMode(_:)), key: "z",
                  modifiers: [.command, .option], target: self),
         ])
