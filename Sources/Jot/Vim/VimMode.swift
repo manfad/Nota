@@ -29,7 +29,7 @@ enum VimMode: Equatable {
         }
     }
 
-    /// Every mode wears the same quiet capsule except insert, which is the
-    /// state you spend most of your time in and so shows the bare word.
-    var showsCapsule: Bool { self != .insert }
+    /// Every mode wears the same quiet capsule, insert included, so the badge
+    /// reads as one thing that changes its word rather than two designs.
+    var showsCapsule: Bool { true }
 }

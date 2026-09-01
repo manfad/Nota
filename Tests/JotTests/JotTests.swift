@@ -748,7 +748,7 @@ final class JotTests: XCTestCase {
         XCTAssertEqual(VimMode.visual.badgeTitle, "Visual")
         XCTAssertEqual(VimMode.visualLine.badgeTitle, "Visual line")
         XCTAssertEqual(VimMode.replace.badgeTitle, "Replace")
-        XCTAssertFalse(VimMode.insert.showsCapsule)
+        XCTAssertTrue(VimMode.insert.showsCapsule)
         for mode in [VimMode.normal, .operatorPending, .visual, .visualLine,
                      .replace, .commandLine] {
             XCTAssertTrue(mode.showsCapsule, "\(mode) should wear the capsule")

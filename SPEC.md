@@ -66,8 +66,8 @@
 - Footer: LEFT mode indicator (+ showcmd), MIDDLE counts — Settings picks which of words / characters /
   images / lines show (default words + characters) — never tail-truncated: segments drop from the right, then numbers-only,
   RIGHT `line:col` (always shown). Mode indicator is monochrome/typographic ("as if Apple built vim"): sentence-case
-  label, SF 11pt medium, secondaryLabelColor, in a quiet capsule (labelColor @ 6%, radius 9, h18); Insert shows the bare
-  word with no capsule; no per-mode colours anywhere. Mode is conveyed primarily by cursor shape.
+  label, SF 11pt medium, secondaryLabelColor, in a quiet capsule (labelColor @ 6%, radius 9, h18) in every mode, Insert
+  included; no per-mode colours anywhere. "recording @a" shows beside the badge (footer showcmd slot), not in the pane. Mode is conveyed primarily by cursor shape.
 - Borrowed from NppVim (https://github.com/h-jangra/NppVim): `gt`/`gT` (+ `:bn`/`:bp`) switch tabs; ex ranges
   (`:10,20` `:'<,'>` `:%` `.` `$`) with `:d [reg]` `:y [reg]` `:j` `:m {addr}` `:t {addr}` `:sort [!iun]`;
   `:help` opens a read-only help tab listing supported keys; `:rc`/`:erc` opens the vimrc, `:so` reloads;
