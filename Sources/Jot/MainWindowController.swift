@@ -1,5 +1,4 @@
 import AppKit
-import UniformTypeIdentifiers
 
 /// The whole UI: tab strip in the title bar, one plain-text editor, a status
 /// line at the bottom.
@@ -437,6 +436,11 @@ final class MainWindowController: NSWindowController {
         textView.onChipClick = { [weak self] characterIndex in
             self?.revealChip(atCharacter: characterIndex)
         }
+        // A text file dropped on the editor is a note, not something to paste
+        // into one — the editor hands it back here to open in its own tab.
+        textView.onOpenFiles = { [weak self] urls in
+            for url in urls { self?.open(url: url) }
+        }
     }
 
     // MARK: - Text attributes
@@ -568,10 +572,14 @@ final class MainWindowController: NSWindowController {
         let fileURL = tab.path.map { URL(fileURLWithPath: $0) }
         var text = store.readText(for: tab.id) ?? ""
         var isDirty = tab.isDirty
+        // The session remembers the file's shape; only a session written
+        // before Jot did has to ask the file again.
+        var format = tab.format ?? .default
 
         if let fileURL {
-            if let onDisk = try? String(contentsOf: fileURL, encoding: .utf8) {
-                if !isDirty { text = onDisk }
+            if let opened = TextFile.read(at: fileURL) {
+                if !isDirty { text = opened.text }
+                if tab.format == nil { format = opened.format }
             } else {
                 isDirty = true
             }
@@ -583,7 +591,8 @@ final class MainWindowController: NSWindowController {
             untitledName: fileURL == nil ? tab.untitledName : nil,
             text: text,
             attributes: defaultAttributes,
-            assets: store.assets
+            assets: store.assets,
+            format: format
         )
         note.isDirty = isDirty
         note.selectionLocation = max(0, min(tab.selection, note.storage.length))
@@ -751,6 +760,12 @@ final class MainWindowController: NSWindowController {
         (!commandPane.isHidden, commandPane.text, commandPane.isShowingMessage)
     }
 
+    /// Every open tab, for the file tests: what it is called, what it holds,
+    /// which file it came from and the shape a save would put back.
+    var openNotes: [(title: String, text: String, fileURL: URL?, format: TextFileFormat)] {
+        notes.map { ($0.title, $0.text, $0.fileURL, $0.format) }
+    }
+
     /// The footer's three regions, for the layout tests: the vim badge, the
     /// centred counts, and the caret position.
     var footerRegions: (badge: NSView, pendingKeys: NSTextField,
@@ -785,11 +800,13 @@ final class MainWindowController: NSWindowController {
         flush()
     }
 
-    func addTab(fileURL: URL? = nil, text: String = "") {
+    func addTab(fileURL: URL? = nil, text: String = "",
+                format: TextFileFormat = .default) {
         let note: Note
         if let fileURL {
             note = Note(id: UUID(), fileURL: fileURL, untitledName: nil,
-                        text: text, attributes: defaultAttributes, assets: store.assets)
+                        text: text, attributes: defaultAttributes, assets: store.assets,
+                        format: format)
         } else {
             note = makeUntitledNote()
         }
@@ -873,13 +890,18 @@ final class MainWindowController: NSWindowController {
     /// panel, or by the name `:w` was given.
     @discardableResult
     private func write(note: Note, to destination: URL) -> Bool {
+        // The file goes back in the shape it came in — same encoding, same
+        // mark, same line endings — unless the text has outgrown it, which
+        // `encode` says by handing back a format of its own.
+        let encoded = TextFile.encode(note.text, format: note.format)
         do {
-            try Data(note.text.utf8).write(to: destination, options: .atomic)
+            try encoded.data.write(to: destination, options: .atomic)
         } catch {
             presentFailure("Couldn’t save “\(destination.lastPathComponent)”.", error)
             return false
         }
 
+        note.format = encoded.format
         note.fileURL = destination
         note.isDirty = false
         preferences.lastSaveDirectory = destination.deletingLastPathComponent()
@@ -890,19 +912,20 @@ final class MainWindowController: NSWindowController {
 
     private func runSavePanel(for note: Note) -> URL? {
         let panel = NSSavePanel()
-        // Markdown by default, plain text still allowed. `UTType.markdown`
-        // is not in this SDK, so it comes from the extension.
-        let markdown = UTType(filenameExtension: "md") ?? .plainText
-        panel.allowedContentTypes = [markdown, .plainText]
+        // Every text type Jot knows, and `allowsOtherFileTypes` for the ones
+        // it does not — a `.toml` typed into the panel stays a `.toml`.
+        panel.allowedContentTypes = TextFile.contentTypes
+        panel.allowsOtherFileTypes = true
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
+        panel.nameFieldStringValue = SuggestedName.panelName(
+            for: note.fileURL, text: note.countableText
+        )
         if let existing = note.fileURL {
             panel.directoryURL = existing.deletingLastPathComponent()
-            panel.nameFieldStringValue = existing.lastPathComponent
         } else {
             panel.directoryURL = preferences.lastSaveDirectory
                 ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-            panel.nameFieldStringValue = SuggestedName.from(text: note.countableText)
         }
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         // Next save opens where this one landed.
@@ -910,11 +933,14 @@ final class MainWindowController: NSWindowController {
         return url
     }
 
+    /// No type filter: Notepad++ opens whatever you point it at, and the
+    /// refusal — if there is one — comes from the bytes, not the panel.
     func openFiles() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
+        panel.allowedContentTypes = []
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { open(url: url) }
     }
@@ -925,12 +951,12 @@ final class MainWindowController: NSWindowController {
             selectTab(at: index)
             return
         }
-        guard let text = try? String(contentsOf: target, encoding: .utf8) else {
+        guard let opened = TextFile.read(at: target) else {
             presentFailure("Couldn’t open “\(target.lastPathComponent)”.",
-                           nil, detail: "Jot only opens UTF-8 plain text files.")
+                           nil, detail: "Jot only opens text files.")
             return
         }
-        addTab(fileURL: target, text: text)
+        addTab(fileURL: target, text: opened.text, format: opened.format)
     }
 
     private func presentFailure(_ message: String, _ error: Error?, detail: String? = nil) {

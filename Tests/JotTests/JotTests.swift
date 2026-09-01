@@ -688,20 +688,20 @@ final class JotTests: XCTestCase {
 
         let plain = "one\ntwo\nthree"
         let text = plain as NSString
-        XCTAssertEqual(TextStats.position(in: text, at: 0), "1:1")
-        XCTAssertEqual(TextStats.position(in: text, at: 3), "1:4")
+        XCTAssertEqual(TextStats.position(in: text, at: 0), "Ln 1, Col 1")
+        XCTAssertEqual(TextStats.position(in: text, at: 3), "Ln 1, Col 4")
         // Just past the newline is the start of the next line.
-        XCTAssertEqual(TextStats.position(in: text, at: 4), "2:1")
-        XCTAssertEqual(TextStats.position(in: text, at: 7), "2:4")
-        XCTAssertEqual(TextStats.position(in: text, at: 8), "3:1")
+        XCTAssertEqual(TextStats.position(in: text, at: 4), "Ln 2, Col 1")
+        XCTAssertEqual(TextStats.position(in: text, at: 7), "Ln 2, Col 4")
+        XCTAssertEqual(TextStats.position(in: text, at: 8), "Ln 3, Col 1")
         // Out-of-range locations clamp rather than trap.
-        XCTAssertEqual(TextStats.position(in: text, at: 9_999), "3:6")
-        XCTAssertEqual(TextStats.position(in: text, at: -4), "1:1")
-        XCTAssertEqual(TextStats.position(in: "" as NSString, at: 0), "1:1")
+        XCTAssertEqual(TextStats.position(in: text, at: 9_999), "Ln 3, Col 6")
+        XCTAssertEqual(TextStats.position(in: text, at: -4), "Ln 1, Col 1")
+        XCTAssertEqual(TextStats.position(in: "" as NSString, at: 0), "Ln 1, Col 1")
 
         // A composed character is one column, not two UTF-16 units.
         let emoji = "a👋b" as NSString
-        XCTAssertEqual(TextStats.position(in: emoji, at: emoji.length), "1:4")
+        XCTAssertEqual(TextStats.position(in: emoji, at: emoji.length), "Ln 1, Col 4")
 
         // And an inline image is a single glyph, so the caret after
         // "hi <image>" sits in column 5.
@@ -712,9 +712,9 @@ final class JotTests: XCTestCase {
         )
         let storage = NSTextStorage(attributedString: withImage).string as NSString
         XCTAssertEqual(storage.length, 10)   // "line\nhi " + U+FFFC + "x"
-        XCTAssertEqual(TextStats.position(in: storage, at: 8), "2:4")
-        XCTAssertEqual(TextStats.position(in: storage, at: 9), "2:5")
-        XCTAssertEqual(TextStats.position(in: storage, at: 10), "2:6")
+        XCTAssertEqual(TextStats.position(in: storage, at: 8), "Ln 2, Col 4")
+        XCTAssertEqual(TextStats.position(in: storage, at: 9), "Ln 2, Col 5")
+        XCTAssertEqual(TextStats.position(in: storage, at: 10), "Ln 2, Col 6")
     }
 
     func testVimModePreferenceIsOffUntilAskedFor() throws {
@@ -776,7 +776,7 @@ final class JotTests: XCTestCase {
 
         // An empty note: no words, no images, one line, caret at the top.
         XCTAssertEqual(footer.counts.stringValue, "0 words · 0 characters")
-        XCTAssertEqual(footer.cursor.stringValue, "1:1")
+        XCTAssertEqual(footer.cursor.stringValue, "Ln 1, Col 1")
 
         // Left, centre, right — in that order, with real gaps between them.
         XCTAssertEqual(footer.badge.frame.height, 18)

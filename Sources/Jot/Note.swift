@@ -18,22 +18,30 @@ final class Note {
     /// note, so nothing about it is worth keeping.
     var isScratch: Bool = false
     var selectionLocation: Int = 0
+    /// The shape the file was in when it was opened — encoding, byte-order
+    /// mark, line endings — and the shape ⌘S puts back. A note that has never
+    /// been a file starts out as UTF-8 with LF lines.
+    var format: TextFileFormat = .default
 
     let storage: NSTextStorage
     let undoManager = UndoManager()
 
     init(id: UUID = UUID(), fileURL: URL?, untitledName: String?, text: String,
-         attributes: [NSAttributedString.Key: Any], assets: AssetStore?) {
+         attributes: [NSAttributedString.Key: Any], assets: AssetStore?,
+         format: TextFileFormat = .default) {
         self.id = id
         self.fileURL = fileURL
         self.untitledName = untitledName
+        self.format = format
         self.storage = NSTextStorage(
             attributedString: NoteText.render(text, attributes: attributes, assets: assets)
         )
     }
 
+    /// The tab's name: the file's own, extension and all. `app.js` and
+    /// `app.css` are different files and the strip has to say so.
     var title: String {
-        if let fileURL { return fileURL.deletingPathExtension().lastPathComponent }
+        if let fileURL { return fileURL.lastPathComponent }
         return untitledName ?? UntitledNaming.base
     }
 
@@ -50,7 +58,10 @@ final class Note {
             path: fileURL?.path,
             untitledName: untitledName,
             isDirty: isDirty,
-            selection: selectionLocation
+            selection: selectionLocation,
+            // Only a real file has a shape worth keeping; an untitled note
+            // comes back as the default whatever happened in between.
+            format: fileURL == nil ? nil : format
         )
     }
 }

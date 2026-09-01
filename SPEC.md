@@ -69,7 +69,7 @@
   type, Esc restores), wraps, ICU regex like `:s`; matches highlighted monochrome (labelColor @ 12%) while `hlsearch`.
 - Footer: LEFT mode indicator (+ showcmd), MIDDLE counts — Settings picks which of words / characters /
   images / lines show (default words + characters) — never tail-truncated: segments drop from the right, then numbers-only,
-  RIGHT `line:col` (always shown). Mode indicator is monochrome/typographic ("as if Apple built vim"): sentence-case
+  RIGHT `Ln N, Col M` (always shown). Mode indicator is monochrome/typographic ("as if Apple built vim"): sentence-case
   label, SF 11pt medium, secondaryLabelColor, in a quiet capsule (labelColor @ 6%, radius 9, h18) in every mode, Insert
   included; no per-mode colours anywhere. "recording @a" shows beside the badge (footer showcmd slot), not in the pane. Mode is conveyed primarily by cursor shape.
 - Borrowed from NppVim (https://github.com/h-jangra/NppVim): `gt`/`gT` (+ `:bn`/`:bp`) switch tabs; ex ranges

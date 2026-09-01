@@ -21,6 +21,9 @@ final class JotTextView: NSTextView {
     var attributesProvider: (() -> [NSAttributedString.Key: Any])?
     /// A chip was clicked; the character index of the attachment.
     var onChipClick: ((Int) -> Void)?
+    /// Text files were dropped on the editor. They belong in tabs of their
+    /// own, which only the window controller can make.
+    var onOpenFiles: (([URL]) -> Void)?
 
     /// Vim's first refusal on a key press. Returning true swallows it.
     var vimKeyHandler: ((NSEvent) -> Bool)?
@@ -425,18 +428,27 @@ final class JotTextView: NSTextView {
     // MARK: - Dragging
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        droppableType(on: sender) != nil ? .copy : super.draggingEntered(sender)
+        claimsDrag(sender) ? .copy : super.draggingEntered(sender)
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        droppableType(on: sender) != nil ? .copy : super.draggingUpdated(sender)
+        claimsDrag(sender) ? .copy : super.draggingUpdated(sender)
     }
 
+    /// A drag can carry both kinds of file at once: the images come in as
+    /// chips where the caret is, the text files open as tabs beside this one.
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let openable = Self.textFiles(on: sender.draggingPasteboard)
+        if !openable.isEmpty { onOpenFiles?(openable) }
         guard let type = droppableType(on: sender) else {
-            return super.performDragOperation(sender)
+            return openable.isEmpty ? super.performDragOperation(sender) : true
         }
-        return readSelection(from: sender.draggingPasteboard, type: type)
+        return readSelection(from: sender.draggingPasteboard, type: type) || !openable.isEmpty
+    }
+
+    private func claimsDrag(_ sender: NSDraggingInfo) -> Bool {
+        droppableType(on: sender) != nil
+            || !Self.textFiles(on: sender.draggingPasteboard).isEmpty
     }
 
     /// Only claims a drag that actually carries an image; text drags fall
@@ -452,6 +464,15 @@ final class JotTextView: NSTextView {
             return type
         }
         return nil
+    }
+
+    /// The dropped files that are notes rather than images. Extensions are no
+    /// use on their own — a `.toml` has no type at all — so `TextFile` decides,
+    /// by the system's type where there is one and by the bytes where not.
+    static func textFiles(on pboard: NSPasteboard) -> [URL] {
+        guard pboard.types?.contains(.fileURL) == true else { return [] }
+        let urls = pboard.readObjects(forClasses: [NSURL.self]) as? [URL] ?? []
+        return urls.filter { !AssetStore.isImageFile($0) && TextFile.isTextFile(at: $0) }
     }
 
     // MARK: - Insertion

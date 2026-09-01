@@ -108,10 +108,11 @@ enum TextStats {
         return (line, head.count + 1)
     }
 
-    /// `"12:5"` — shown at the right of the footer.
+    /// `"Ln 12, Col 5"` — shown at the right of the footer, spelled out the
+    /// way a status bar says it rather than as a bare pair of numbers.
     static func position(in text: NSString, at location: Int) -> String {
         let position = cursorPosition(in: text, at: location)
-        return "\(position.line):\(position.column)"
+        return "Ln \(position.line), Col \(position.column)"
     }
 
     /// `"13 pt"` — shown next to the gear at the right of the status bar.
@@ -137,6 +138,17 @@ enum UntitledNaming {
 /// A file name proposed in the save panel: the first non-empty line of the
 /// text, trimmed and clipped, with path separators removed.
 enum SuggestedName {
+    /// What a new note is saved as unless the user types something else.
+    static let defaultExtension = "md"
+
+    /// The name the save panel opens with. A note that already has a file
+    /// keeps its own name, extension and all — saving `app.js` must never
+    /// propose `app.md`. A new one is proposed as Markdown.
+    static func panelName(for fileURL: URL?, text: String) -> String {
+        if let fileURL { return fileURL.lastPathComponent }
+        return from(text: text) + "." + defaultExtension
+    }
+
     static func from(text: String, limit: Int = 40) -> String {
         let firstLine = text
             .split(whereSeparator: \.isNewline)
@@ -164,6 +176,10 @@ struct SessionTab: Codable, Equatable {
     var isDirty: Bool
     /// Cursor location, restored on launch.
     var selection: Int
+    /// The file's encoding, byte-order mark and line endings, so a CRLF
+    /// Latin-1 file is still one after a relaunch. `nil` for a note with no
+    /// file, and for a session written before Jot remembered any of this.
+    var format: TextFileFormat?
 }
 
 struct SessionState: Codable, Equatable {
