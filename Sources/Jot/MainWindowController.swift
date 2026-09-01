@@ -66,7 +66,15 @@ final class MainWindowController: NSWindowController {
     private var tabBarTrailingToEdge: NSLayoutConstraint?
     private var tabBarTrailingToSearch: NSLayoutConstraint?
 
+    /// The footer, lualine style: the vim badge and its pending keys on the
+    /// left, the counts centred, the caret's line:col on the right.
     private let statusLabel = NSTextField(labelWithString: "")
+    private let modeBadge = VimModeBadge()
+    private let pendingKeysLabel = NSTextField(labelWithString: "")
+    private let cursorLabel = NSTextField(labelWithString: "")
+    private var countsLeadingToVim: NSLayoutConstraint?
+    private var countsLeadingToEdge: NSLayoutConstraint?
+    private var vimMode: VimMode = .normal
 
     /// Keeps the storage currently shown by the text view alive even before
     /// any note is installed.
@@ -178,7 +186,23 @@ final class MainWindowController: NSWindowController {
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         statusLabel.textColor = .secondaryLabelColor
+        statusLabel.alignment = .center
+        statusLabel.lineBreakMode = .byTruncatingTail
+        // The centre gives way to the two fixed regions rather than pushing
+        // into them, so a narrow window truncates the counts instead.
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         content.addSubview(statusLabel)
+
+        modeBadge.translatesAutoresizingMaskIntoConstraints = false
+        modeBadge.setMode(vimMode)
+        content.addSubview(modeBadge)
+
+        for label in [pendingKeysLabel, cursorLabel] {
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            label.textColor = .secondaryLabelColor
+            content.addSubview(label)
+        }
 
         zenDragRegion.translatesAutoresizingMaskIntoConstraints = false
         zenDragRegion.isHidden = true
@@ -209,13 +233,37 @@ final class MainWindowController: NSWindowController {
             separator.bottomAnchor.constraint(equalTo: content.bottomAnchor,
                                               constant: -Layout.statusBarHeight),
 
-            statusLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor,
-                                                 constant: Layout.statusInset),
-            statusLabel.centerYAnchor.constraint(equalTo: separator.bottomAnchor,
-                                                 constant: Layout.statusBarHeight / 2),
-            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor,
+            modeBadge.leadingAnchor.constraint(equalTo: content.leadingAnchor,
+                                               constant: Layout.statusInset),
+            modeBadge.centerYAnchor.constraint(equalTo: separator.bottomAnchor,
+                                               constant: Layout.statusBarHeight / 2),
+
+            pendingKeysLabel.leadingAnchor.constraint(equalTo: modeBadge.trailingAnchor,
+                                                      constant: 8),
+            pendingKeysLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
+
+            cursorLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor,
                                                   constant: -Layout.statusInset),
+            cursorLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
+
+            statusLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: cursorLabel.leadingAnchor,
+                                                  constant: -12),
         ])
+
+        // Centred in the footer, but only as far as the left and right
+        // regions allow — hence the yielding priority.
+        let centred = statusLabel.centerXAnchor.constraint(equalTo: content.centerXAnchor)
+        centred.priority = .defaultHigh
+        centred.isActive = true
+
+        countsLeadingToVim = statusLabel.leadingAnchor.constraint(
+            greaterThanOrEqualTo: pendingKeysLabel.trailingAnchor, constant: 12
+        )
+        countsLeadingToEdge = statusLabel.leadingAnchor.constraint(
+            greaterThanOrEqualTo: content.leadingAnchor, constant: Layout.statusInset
+        )
+        applyFooterVisibility()
 
         tabBarTrailingToEdge = tabBar.trailingAnchor.constraint(
             equalTo: content.trailingAnchor, constant: -8
@@ -397,6 +445,7 @@ final class MainWindowController: NSWindowController {
             rebuildSplitItems()
         }
         refreshImages(force: true)
+        applyFooterVisibility()
         updateStatus()
         scheduleSave()
     }
@@ -501,7 +550,57 @@ final class MainWindowController: NSWindowController {
     }
 
     private func updateStatus() {
-        statusLabel.stringValue = TextStats.counts(currentNote?.countableText ?? "")
+        let plain = currentNote?.text ?? ""
+        statusLabel.stringValue = TextStats.counts(
+            NoteText.strippingTokens(plain),
+            images: NoteText.assetIDs(in: plain).count,
+            lines: TextStats.lineCount(currentNote?.storage.string ?? "")
+        )
+        updateCursorPosition()
+    }
+
+    /// The caret's 1-based line and column, at the right of the footer.
+    private func updateCursorPosition() {
+        let text = (currentNote?.storage.string ?? "") as NSString
+        cursorLabel.stringValue = TextStats.position(
+            in: text, at: textView.selectedRange().location
+        )
+    }
+
+    // MARK: - Vim footer
+
+    /// Called by the engine when the mode changes; the badge is the only
+    /// thing on screen that shows it.
+    func setVimMode(_ mode: VimMode) {
+        guard mode != vimMode else { return }
+        vimMode = mode
+        modeBadge.setMode(mode)
+    }
+
+    /// "showcmd": the count, operator and register typed so far, or the macro
+    /// being recorded. Empty hides the label.
+    func setVimPendingKeys(_ keys: String) {
+        pendingKeysLabel.stringValue = keys
+        applyFooterVisibility()
+    }
+
+    /// The footer's three regions, for the layout tests: the vim badge, the
+    /// centred counts, and the caret position.
+    var footerRegions: (badge: NSView, pendingKeys: NSTextField,
+                        counts: NSTextField, cursor: NSTextField) {
+        (modeBadge, pendingKeysLabel, statusLabel, cursorLabel)
+    }
+
+    /// The badge and its pending keys belong to vim mode; the caret position
+    /// is always there. Zen takes the lot away.
+    private func applyFooterVisibility() {
+        let isVim = preferences.vimMode
+        countsLeadingToEdge?.isActive = !isVim
+        countsLeadingToVim?.isActive = isVim
+        modeBadge.isHidden = isZenMode || !isVim
+        pendingKeysLabel.isHidden =
+            isZenMode || !isVim || pendingKeysLabel.stringValue.isEmpty
+        cursorLabel.isHidden = isZenMode
     }
 
     func selectTab(at index: Int) {
@@ -758,6 +857,7 @@ extension MainWindowController {
 
         let chrome: [NSView] = [
             tabBar, statusSeparator, statusLabel,
+            modeBadge, pendingKeysLabel, cursorLabel,
         ]
 
         editorTopToTabBar?.isActive = !enabled
@@ -788,6 +888,9 @@ extension MainWindowController {
                 view.isHidden = false
                 view.alphaValue = 0
             }
+            // The badge and its pending keys only come back if vim mode
+            // actually wants them.
+            applyFooterVisibility()
         }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.15
@@ -805,6 +908,71 @@ extension MainWindowController {
 /// the title bar's own chrome is gone.
 private final class DragRegionView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
+}
+
+/// The vim mode chip at the left of the footer: a filled rounded rect with
+/// the mode's name in it, coloured per mode the way a lualine bar is.
+private final class VimModeBadge: NSView {
+    private static let height: CGFloat = 18
+    private static let horizontalPadding: CGFloat = 8
+
+    private let label = NSTextField(labelWithString: "")
+    /// The command line keeps whatever colour it was opened from, so the fill
+    /// is held here rather than derived from the mode on every draw.
+    private var fillColor: NSColor = .controlAccentColor
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 4
+
+        label.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .bold)
+        label.textColor = .white
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+
+        let leading = label.leadingAnchor.constraint(
+            equalTo: leadingAnchor, constant: Self.horizontalPadding
+        )
+        let trailing = label.trailingAnchor.constraint(
+            equalTo: trailingAnchor, constant: -Self.horizontalPadding
+        )
+        // Just short of required, so an unusually narrow footer squeezes the
+        // chip instead of logging a broken constraint.
+        leading.priority = .required - 1
+        trailing.priority = .required - 1
+        NSLayoutConstraint.activate([
+            leading, trailing,
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            heightAnchor.constraint(equalToConstant: Self.height),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func setMode(_ mode: VimMode) {
+        label.stringValue = mode.badgeTitle.uppercased()
+        if let color = mode.badgeColor {
+            fillColor = color
+            needsDisplay = true
+        }
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        // Accent and system colours are appearance-dependent; resolving them
+        // under the view's own appearance is what keeps dark mode right.
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = fillColor.cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
 }
 
 // MARK: - Tab picker
@@ -1101,6 +1269,7 @@ extension MainWindowController: NSTextViewDelegate {
 
     func textViewDidChangeSelection(_ notification: Notification) {
         currentNote?.selectionLocation = textView.selectedRange().location
+        updateCursorPosition()
         updateSidebarHighlight()
         scheduleSave()
     }

@@ -21,6 +21,47 @@ enum TextStats {
             + "\(characters) \(characters == 1 ? "character" : "characters")"
     }
 
+    /// `"12 words · 34 characters · 2 images · 5 lines"` — the middle of the
+    /// footer. `text` is the note with its image tokens already stripped, so
+    /// a picture counts as an image and as nothing else.
+    static func counts(_ text: String, images: Int, lines: Int) -> String {
+        counts(text)
+            + " · \(images) \(images == 1 ? "image" : "images")"
+            + " · \(lines) \(lines == 1 ? "line" : "lines")"
+    }
+
+    /// Hard lines: one per newline, plus the last line. An empty note is one
+    /// line — the same count the gutter numbers to.
+    static func lineCount(_ text: String) -> Int {
+        let source = text as NSString
+        var count = 1
+        for index in 0..<source.length where source.character(at: index) == 0x0A {
+            count += 1
+        }
+        return count
+    }
+
+    /// 1-based line and column for a caret. The column counts characters —
+    /// graphemes — from the start of the line, so an emoji and an inline
+    /// image are each worth one.
+    static func cursorPosition(in text: NSString, at location: Int) -> (line: Int, column: Int) {
+        let caret = max(0, min(location, text.length))
+        var line = 1
+        var lineStart = 0
+        for index in 0..<caret where text.character(at: index) == 0x0A {
+            line += 1
+            lineStart = index + 1
+        }
+        let head = text.substring(with: NSRange(location: lineStart, length: caret - lineStart))
+        return (line, head.count + 1)
+    }
+
+    /// `"12:5"` — shown at the right of the footer.
+    static func position(in text: NSString, at location: Int) -> String {
+        let position = cursorPosition(in: text, at: location)
+        return "\(position.line):\(position.column)"
+    }
+
     /// `"13 pt"` — shown next to the gear at the right of the status bar.
     static func pointSize(_ size: Int) -> String {
         "\(size) pt"

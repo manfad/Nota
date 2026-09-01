@@ -22,6 +22,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let paddingPopUp = NSPopUpButton()
     private let lineNumbersCheckbox = NSButton(checkboxWithTitle: "Line numbers", target: nil, action: nil)
     private let sidebarSidePopUp = NSPopUpButton()
+    private let vimModeCheckbox = NSButton(checkboxWithTitle: "Vim mode", target: nil, action: nil)
     private let hotKeyField = ShortcutRecorderField()
     private let hotKeyWarning = NSTextField(labelWithString: "")
     private var hasCentered = false
@@ -104,6 +105,9 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         lineNumbersCheckbox.target = self
         lineNumbersCheckbox.action = #selector(lineNumbersChanged)
 
+        vimModeCheckbox.target = self
+        vimModeCheckbox.action = #selector(vimModeChanged)
+
         hotKeyField.onRecord = { [weak self] shortcut in
             self?.preferences.hotKey = shortcut
         }
@@ -126,6 +130,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             [label("Padding"), paddingPopUp],
             [label("Gutter"), lineNumbersCheckbox],
             [label("Image sidebar"), sidebarSidePopUp],
+            [label("Vim mode"), vimModeCheckbox],
             [label("Summon"), hotKeyRow],
             [label(""), hotKeyWarning],
         ])
@@ -189,6 +194,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         select(paddingPopUp, raw: preferences.padding.rawValue)
         select(sidebarSidePopUp, raw: preferences.sidebarSide.rawValue)
         lineNumbersCheckbox.state = preferences.showsLineNumbers ? .on : .off
+        vimModeCheckbox.state = preferences.vimMode ? .on : .off
         hotKeyField.shortcut = preferences.hotKey
 
         let failed = (NSApp.delegate as? AppDelegate)?.hotKeyRegistrationFailed ?? false
@@ -277,6 +283,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     @objc private func lineNumbersChanged(_ sender: NSButton) {
         preferences.showsLineNumbers = sender.state == .on
+    }
+
+    @objc private func vimModeChanged(_ sender: NSButton) {
+        preferences.vimMode = sender.state == .on
     }
 
     @objc private func paddingChanged(_ sender: NSPopUpButton) {

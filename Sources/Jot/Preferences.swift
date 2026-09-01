@@ -101,6 +101,7 @@ final class Preferences {
         static let padding = "editorPadding"
         static let lineNumbers = "showsLineNumbers"
         static let sidebarSide = "sidebarSide"
+        static let vimMode = "vimMode"
         static let hotKeyCode = "hotKeyCode"
         static let hotKeyModifiers = "hotKeyModifiers"
         static let hotKeyDisabled = "hotKeyDisabled"
@@ -187,6 +188,16 @@ final class Preferences {
         set {
             guard newValue != sidebarSide else { return }
             defaults.set(newValue.rawValue, forKey: Key.sidebarSide)
+            announce()
+        }
+    }
+
+    /// Vim keys in the editor. Off unless asked for.
+    var vimMode: Bool {
+        get { defaults.object(forKey: Key.vimMode) as? Bool ?? false }
+        set {
+            guard newValue != vimMode else { return }
+            defaults.set(newValue, forKey: Key.vimMode)
             announce()
         }
     }

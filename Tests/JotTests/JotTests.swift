@@ -161,7 +161,7 @@ final class JotTests: XCTestCase {
 
         // Four label/control rows, laid out in one grid.
         let grid = window?.contentView?.subviews.compactMap { $0 as? NSGridView }.first
-        XCTAssertEqual(grid?.numberOfRows, 8)
+        XCTAssertEqual(grid?.numberOfRows, 9)
         XCTAssertEqual(grid?.numberOfColumns, 2)
 
         // Font popup offers the four designs plus "Other…".
@@ -172,12 +172,13 @@ final class JotTests: XCTestCase {
         )
 
         // Row labels, right-aligned in the first column.
-        let labels = (0..<7).compactMap {
+        let labels = (0..<8).compactMap {
             (grid?.cell(atColumnIndex: 0, rowIndex: $0).contentView as? NSTextField)?.stringValue
         }
         XCTAssertEqual(
             labels,
-            ["Font", "Size", "Line spacing", "Padding", "Gutter", "Image sidebar", "Summon"]
+            ["Font", "Size", "Line spacing", "Padding", "Gutter", "Image sidebar",
+             "Vim mode", "Summon"]
         )
     }
 
@@ -428,7 +429,6 @@ final class JotTests: XCTestCase {
 
     func testChipIsTextSizedAndRenumbersLive() {
         let font = NSFont.systemFont(ofSize: 13)
-        let fragment = CGRect(x: 0, y: 0, width: 2000, height: 20)
         let lineHeight = ceil(font.ascender - font.descender + font.leading)
 
         func bounds(_ chip: JotImageAttachment, width: CGFloat = 2000) -> CGRect {
@@ -526,6 +526,151 @@ final class JotTests: XCTestCase {
         // Word-boundary initials beat a scattered match.
         let initials = FuzzyMatch.rank(query: "td", titles: ["Think different", "toad"])
         XCTAssertEqual(initials.first?.index, 0)
+    }
+
+    // MARK: - Footer
+
+    func testFooterCountsIncludeImagesAndLines() {
+        XCTAssertEqual(
+            TextStats.counts("", images: 0, lines: 1),
+            "0 words · 0 characters · 0 images · 1 line"
+        )
+        XCTAssertEqual(
+            TextStats.counts("a", images: 1, lines: 1),
+            "1 word · 1 character · 1 image · 1 line"
+        )
+        XCTAssertEqual(
+            TextStats.counts("one two", images: 3, lines: 12),
+            "2 words · 7 characters · 3 images · 12 lines"
+        )
+
+        // Hard lines: one per newline plus the last, empty note included.
+        XCTAssertEqual(TextStats.lineCount(""), 1)
+        XCTAssertEqual(TextStats.lineCount("one line"), 1)
+        XCTAssertEqual(TextStats.lineCount("one\ntwo"), 2)
+        // A trailing newline opens a line of its own, as the gutter shows it.
+        XCTAssertEqual(TextStats.lineCount("one\n"), 2)
+        XCTAssertEqual(TextStats.lineCount("\n\n"), 3)
+    }
+
+    func testCursorPositionIsOneBasedAndCountsAnImageAsOneColumn() throws {
+        let assets = AssetStore(directory: try makeTemporaryDirectory())
+        let id = "dddddddd-0000-0000-0000-000000000004.png"
+
+        let plain = "one\ntwo\nthree"
+        let text = plain as NSString
+        XCTAssertEqual(TextStats.position(in: text, at: 0), "1:1")
+        XCTAssertEqual(TextStats.position(in: text, at: 3), "1:4")
+        // Just past the newline is the start of the next line.
+        XCTAssertEqual(TextStats.position(in: text, at: 4), "2:1")
+        XCTAssertEqual(TextStats.position(in: text, at: 7), "2:4")
+        XCTAssertEqual(TextStats.position(in: text, at: 8), "3:1")
+        // Out-of-range locations clamp rather than trap.
+        XCTAssertEqual(TextStats.position(in: text, at: 9_999), "3:6")
+        XCTAssertEqual(TextStats.position(in: text, at: -4), "1:1")
+        XCTAssertEqual(TextStats.position(in: "" as NSString, at: 0), "1:1")
+
+        // A composed character is one column, not two UTF-16 units.
+        let emoji = "a👋b" as NSString
+        XCTAssertEqual(TextStats.position(in: emoji, at: emoji.length), "1:4")
+
+        // And an inline image is a single glyph, so the caret after
+        // "hi <image>" sits in column 5.
+        let withImage = NoteText.render(
+            "line\nhi \(NoteText.token(for: id))x",
+            attributes: [.font: NSFont.systemFont(ofSize: 13)],
+            assets: assets
+        )
+        let storage = NSTextStorage(attributedString: withImage).string as NSString
+        XCTAssertEqual(storage.length, 10)   // "line\nhi " + U+FFFC + "x"
+        XCTAssertEqual(TextStats.position(in: storage, at: 8), "2:4")
+        XCTAssertEqual(TextStats.position(in: storage, at: 9), "2:5")
+        XCTAssertEqual(TextStats.position(in: storage, at: 10), "2:6")
+    }
+
+    func testVimModePreferenceIsOffUntilAskedFor() throws {
+        let suite = "JotTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults)
+
+        XCTAssertFalse(preferences.vimMode)
+        preferences.vimMode = true
+        XCTAssertTrue(Preferences(defaults: defaults).vimMode)
+        preferences.vimMode = false
+        XCTAssertFalse(Preferences(defaults: defaults).vimMode)
+
+        // Every mode names itself; only the command line borrows its colour.
+        XCTAssertEqual(VimMode.normal.badgeTitle, "NORMAL")
+        XCTAssertEqual(VimMode.operatorPending.badgeTitle, "NORMAL")
+        XCTAssertEqual(VimMode.visualLine.badgeTitle, "V-LINE")
+        XCTAssertEqual(VimMode.insert.badgeColor, .systemGreen)
+        XCTAssertEqual(VimMode.visual.badgeColor, VimMode.visualLine.badgeColor)
+        XCTAssertEqual(VimMode.replace.badgeColor, .systemRed)
+        XCTAssertNil(VimMode.commandLine.badgeColor)
+    }
+
+    @MainActor
+    func testFooterLaysOutLeftCentreRightWithoutOverlapping() throws {
+        _ = NSApplication.shared
+        let previous = Preferences.shared.vimMode
+        defer { Preferences.shared.vimMode = previous }
+        Preferences.shared.vimMode = true
+
+        let directory = try makeTemporaryDirectory()
+        let controller = MainWindowController(store: SessionStore(directory: directory))
+        let window = try XCTUnwrap(controller.window)
+        window.setContentSize(NSSize(width: 820, height: 560))
+        window.layoutIfNeeded()
+
+        let footer = controller.footerRegions
+        XCTAssertFalse(footer.badge.isHidden, "the badge shows while vim mode is on")
+        XCTAssertFalse(footer.cursor.isHidden, "the caret position is always shown")
+        // Nothing has been typed, so the pending keys stay away.
+        XCTAssertTrue(footer.pendingKeys.isHidden)
+
+        // An empty note: no words, no images, one line, caret at the top.
+        XCTAssertEqual(footer.counts.stringValue,
+                       "0 words · 0 characters · 0 images · 1 line")
+        XCTAssertEqual(footer.cursor.stringValue, "1:1")
+
+        // Left, centre, right — in that order, with real gaps between them.
+        XCTAssertEqual(footer.badge.frame.height, 18)
+        XCTAssertLessThan(footer.badge.frame.maxX, footer.counts.frame.minX)
+        XCTAssertLessThan(footer.counts.frame.maxX, footer.cursor.frame.minX)
+        // The counts sit centred in the window.
+        let content = try XCTUnwrap(window.contentView)
+        let centre = footer.counts.superview.map {
+            $0.convert(NSPoint(x: footer.counts.frame.midX, y: 0), to: content).x
+        } ?? 0
+        XCTAssertEqual(centre, content.bounds.midX, accuracy: 1)
+
+        // All three sit on one line, inside the footer strip.
+        XCTAssertEqual(footer.counts.frame.midY, footer.badge.frame.midY, accuracy: 1)
+        XCTAssertEqual(footer.cursor.frame.midY, footer.badge.frame.midY, accuracy: 1)
+
+        // Zen fades the whole footer out with the rest of the chrome, and
+        // giving it back respects the vim setting rather than showing
+        // everything.
+        controller.toggleZenMode()
+        let faded = expectation(description: "chrome finished fading out")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { faded.fulfill() }
+        wait(for: [faded], timeout: 2)
+        XCTAssertTrue(footer.badge.isHidden)
+        XCTAssertTrue(footer.counts.isHidden)
+        XCTAssertTrue(footer.cursor.isHidden)
+
+        controller.toggleZenMode()
+        XCTAssertFalse(footer.badge.isHidden)
+        XCTAssertFalse(footer.cursor.isHidden)
+        XCTAssertTrue(footer.pendingKeys.isHidden)
+
+        // With vim mode off the badge goes; the counts and caret stay.
+        Preferences.shared.vimMode = false
+        window.layoutIfNeeded()
+        XCTAssertTrue(footer.badge.isHidden)
+        XCTAssertFalse(footer.counts.isHidden)
+        XCTAssertFalse(footer.cursor.isHidden)
     }
 
     // MARK: - Zen mode

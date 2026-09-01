@@ -52,6 +52,15 @@
   `"` comments. Reloaded on save (file watcher) and via `:source`. Parse errors show line number in the status bar.
   Settings has "Open vimrc" (creates a commented template on first use).
 - Mode shown bottom-left of the status bar.
+- Footer: LEFT mode indicator (+ showcmd / command line), MIDDLE `N words · N characters · N images · N lines`,
+  RIGHT `line:col` (always shown). Mode indicator is monochrome/typographic ("as if Apple built vim"): sentence-case
+  label, SF 11pt medium, secondaryLabelColor, in a quiet capsule (labelColor @ 6%, radius 9, h18); Insert shows the bare
+  word with no capsule; no per-mode colours anywhere. Mode is conveyed primarily by cursor shape.
+- Borrowed from NppVim (https://github.com/h-jangra/NppVim): `gt`/`gT` (+ `:bn`/`:bp`) switch tabs; ex ranges
+  (`:10,20` `:'<,'>` `:%` `.` `$`) with `:d [reg]` `:y [reg]` `:j` `:m {addr}` `:t {addr}` `:sort [!iun]`;
+  `:help` opens a read-only help tab listing supported keys; `:rc`/`:erc` opens the vimrc, `:so` reloads;
+  `command Alias cmd` in vimrc; insert-mode ⌃W ⌃U ⌃T ⌃D; `:reg` / `:marks` open a scratch tab; `set cursorline`.
+  Not borrowed: jj escape, keyboard-layout switching, `:!cmd` filters, visual-block.
 
 ## Explicitly out
 - Created-date header, git/auto-commit, theming, menu-bar icon, collapse/expand images, jk escape, app icon (for now).
