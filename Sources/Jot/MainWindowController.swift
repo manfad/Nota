@@ -50,6 +50,9 @@ final class MainWindowController: NSWindowController {
     private var editorBottomToStatus: NSLayoutConstraint?
     private var editorBottomToPane: NSLayoutConstraint?
     private var sidebarWorkItem: DispatchWorkItem?
+    /// The chip most recently clicked, until the selection moves some other
+    /// way — see `ChipHighlight`.
+    private var clickedChipLocation: Int?
 
     /// The sidebar follows the note by default — it appears when the tab has
     /// images and goes away when it does not. ⌥⌘I pins it open or shut for
@@ -1123,19 +1126,11 @@ extension MainWindowController {
     /// chip inside the selection.
     fileprivate func updateSidebarHighlight() {
         guard sidebarIsVisible else { return }
-        let selection = textView.selectedRange()
-        var highlighted: Set<Int> = []
-
-        for (index, location) in chipLocations().enumerated() {
-            if selection.length > 0 {
-                if location >= selection.location, location < NSMaxRange(selection) {
-                    highlighted.insert(index)
-                }
-            } else if location == selection.location || location == selection.location - 1 {
-                highlighted.insert(index)
-            }
-        }
-
+        let highlighted = ChipHighlight.resolve(
+            clickedChipLocation: clickedChipLocation,
+            selection: textView.selectedRange(),
+            chipLocations: chipLocations()
+        )
         imageSidebar.setHighlighted(highlighted)
         if let first = highlighted.min() { imageSidebar.scrollItemToVisible(first) }
     }
@@ -1145,6 +1140,8 @@ extension MainWindowController {
     /// Clicking a chip brings the sidebar out and points at that thumbnail.
     fileprivate func revealChip(atCharacter characterIndex: Int) {
         revealSidebar()
+        // Set after `revealSidebar`, which moves the caret and so clears it.
+        clickedChipLocation = characterIndex
         guard let ordinal = chipLocations().firstIndex(of: characterIndex) else { return }
         imageSidebar.scrollItemToVisible(ordinal)
         updateSidebarHighlight()
@@ -1302,6 +1299,8 @@ extension MainWindowController: NSTextViewDelegate {
     func textViewDidChangeSelection(_ notification: Notification) {
         currentNote?.selectionLocation = textView.selectedRange().location
         updateCursorPosition()
+        // Moving the caret any other way retires the remembered click.
+        clickedChipLocation = nil
         updateSidebarHighlight()
         scheduleSave()
     }

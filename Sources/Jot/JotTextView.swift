@@ -38,7 +38,7 @@ final class JotTextView: NSTextView {
 
     // MARK: - Chip clicks
 
-    /// A single click on an `[Image N]` chip selects the picture rather than
+    /// A single click on an `Image N` chip selects the picture rather than
     /// just dropping a caret somewhere inside the line.
     override func mouseDown(with event: NSEvent) {
         guard event.clickCount == 1, let index = chipCharacterIndex(for: event) else {

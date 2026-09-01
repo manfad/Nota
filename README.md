@@ -43,7 +43,7 @@ That token is exactly what the cache file and your saved `.txt` contain, so a
 note with images is still an ordinary text file, still greppable, still fine in
 any other editor.
 
-In the text an image is a **chip** reading `[Image 1]` — editor font, softly
+In the text an image is a **chip** reading `Image 1` — editor font, softly
 filled, sitting in the line like a word — so a note with twenty screenshots
 still reads as prose. The number is the image's position in the note and is
 renumbered as you paste, delete and undo.
@@ -55,12 +55,12 @@ order, drawn the way Preview shows pages: a shadowed card with the selection
 washed in behind it. It slides in on its own
 when the tab has images and away when it has none; ⌘B (View > Show Images) pins
 it open or shut for the rest of the session. Click a thumbnail to put the caret
-on its chip, or click a `[Image N]` chip in the text to bring the sidebar out
+on its chip, or click an `Image N` chip in the text to bring the sidebar out
 and jump to that thumbnail. Double-click a thumbnail to open the file in
 Preview, or right-click to copy it, save it elsewhere, or reveal the asset in
 the Finder.
 
-An asset that has gone missing still gets a chip, reading `[Image 1 — missing]`,
+An asset that has gone missing still gets a chip, reading `Image 1 — missing`,
 and keeps its token, so nothing is silently lost.
 
 Copying inside Jot moves images between tabs by reference — no second copy of

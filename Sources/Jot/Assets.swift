@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 /// The attachment Jot puts in a text storage for `![](jot://<id>)`.
 ///
-/// It draws as a text chip reading `[Image 1]`, not a thumbnail: the point is
+/// It draws as a text chip reading `Image 1`, not a thumbnail: the point is
 /// that a note stays prose you can read, with the pictures themselves off in
 /// the sidebar. The number is the image's position in the note and is
 /// renumbered live as images are added, pasted or deleted.
@@ -32,7 +32,7 @@ final class JotImageAttachment: NSTextAttachment {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     var label: String {
-        isMissing ? "[Image \(displayIndex) — missing]" : "[Image \(displayIndex)]"
+        isMissing ? "Image \(displayIndex) — missing" : "Image \(displayIndex)"
     }
 
     /// Re-measures and redraws for a new font or a new position.

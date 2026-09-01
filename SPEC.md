@@ -23,7 +23,7 @@
 
 ## Images
 - Stored as originals in `<support>/assets/<uuid>.<ext>`; token in text `![](jot://<uuid>.<ext>)`.
-- Inline: always a text chip `[Image N]`, numbered in document order, renumbered live.
+- Inline: always a text chip `Image N`, numbered in document order, renumbered live.
 - Sidebar (native split pane, 150pt, side per Settings): 104pt thumbnails with `Image N` captions. Auto-shows when the note has ≥1 image,
   hides when none; ⌘B toggles it manually for the session. Settings: sidebar side Left / Right (default Right). Click → select chip; double-click → open in Preview.
   Context menu: Copy Image / Save Image As… / Reveal in Finder.
@@ -52,7 +52,8 @@
   `"` comments. Reloaded on save (file watcher) and via `:source`. Parse errors show line number in the status bar.
   Settings has "Open vimrc" (creates a commented template on first use).
 - Mode shown bottom-left of the status bar.
-- Footer: LEFT mode indicator (+ showcmd / command line), MIDDLE `N words · N characters · N images · N lines`,
+- Footer: LEFT mode indicator (+ showcmd / command line), MIDDLE counts — Settings picks which of words / characters /
+  images / lines show (default words + characters) — never tail-truncated: segments drop from the right, then numbers-only,
   RIGHT `line:col` (always shown). Mode indicator is monochrome/typographic ("as if Apple built vim"): sentence-case
   label, SF 11pt medium, secondaryLabelColor, in a quiet capsule (labelColor @ 6%, radius 9, h18); Insert shows the bare
   word with no capsule; no per-mode colours anywhere. Mode is conveyed primarily by cursor shape.

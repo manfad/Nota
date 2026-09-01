@@ -444,9 +444,9 @@ final class JotTests: XCTestCase {
         let tenth = JotImageAttachment(assetID: "b.png", isMissing: false, font: font, index: 10)
         let gone = JotImageAttachment(assetID: "c.png", isMissing: true, font: font, index: 1)
 
-        XCTAssertEqual(first.label, "[Image 1]")
-        XCTAssertEqual(tenth.label, "[Image 10]")
-        XCTAssertEqual(gone.label, "[Image 1 — missing]")
+        XCTAssertEqual(first.label, "Image 1")
+        XCTAssertEqual(tenth.label, "Image 10")
+        XCTAssertEqual(gone.label, "Image 1 — missing")
 
         // Height is the line height for every chip, whatever it says.
         XCTAssertEqual(bounds(first).height, lineHeight)
@@ -471,7 +471,7 @@ final class JotTests: XCTestCase {
         // Renumbering resizes in place, and reports whether anything moved.
         let widthAsOne = bounds(first).width
         XCTAssertTrue(first.updateChip(font: font, index: 10))
-        XCTAssertEqual(first.label, "[Image 10]")
+        XCTAssertEqual(first.label, "Image 10")
         XCTAssertGreaterThan(bounds(first).width, widthAsOne)
         XCTAssertFalse(first.updateChip(font: font, index: 10))
     }
@@ -491,10 +491,51 @@ final class JotTests: XCTestCase {
         // A repeated picture still gets its own number, by position.
         XCTAssertEqual(
             labels,
-            ["[Image 1 — missing]", "[Image 2 — missing]", "[Image 3 — missing]"]
+            ["Image 1 — missing", "Image 2 — missing", "Image 3 — missing"]
         )
         // Numbering is display only — it never reaches the file.
         XCTAssertEqual(NoteText.serialize(rendered), text)
+    }
+
+    func testAdjacentChipsLightOnlyOneThumbnail() {
+        // Two chips side by side at 4 and 5, a third further along.
+        let chips = [4, 5, 9]
+        func resolve(clicked: Int? = nil, _ selection: NSRange) -> Set<Int> {
+            ChipHighlight.resolve(
+                clickedChipLocation: clicked, selection: selection, chipLocations: chips
+            )
+        }
+
+        // The caret between the two adjacent chips belongs to the one before
+        // it — this is the case that used to light both.
+        XCTAssertEqual(resolve(NSRange(location: 5, length: 0)), [0])
+        XCTAssertEqual(resolve(NSRange(location: 6, length: 0)), [1])
+        // Sitting in front of a chip highlights nothing.
+        XCTAssertEqual(resolve(NSRange(location: 4, length: 0)), [])
+        XCTAssertEqual(resolve(NSRange(location: 0, length: 0)), [])
+
+        // A click is explicit, so it wins over where the caret landed.
+        XCTAssertEqual(resolve(clicked: 5, NSRange(location: 5, length: 0)), [1])
+        XCTAssertEqual(resolve(clicked: 9, NSRange(location: 6, length: 0)), [2])
+        // A remembered click on a chip that has since gone falls back to the
+        // caret rather than highlighting nothing.
+        XCTAssertEqual(resolve(clicked: 99, NSRange(location: 5, length: 0)), [0])
+
+        // A real selection lights every chip it covers, adjacency included.
+        XCTAssertEqual(resolve(NSRange(location: 4, length: 6)), [0, 1, 2])
+        XCTAssertEqual(resolve(NSRange(location: 4, length: 2)), [0, 1])
+        XCTAssertEqual(resolve(NSRange(location: 0, length: 5)), [0])
+        XCTAssertEqual(resolve(NSRange(location: 0, length: 4)), [])
+
+        // A note with no images never highlights anything.
+        XCTAssertEqual(
+            ChipHighlight.resolve(
+                clickedChipLocation: nil,
+                selection: NSRange(location: 3, length: 2),
+                chipLocations: []
+            ),
+            []
+        )
     }
 
     // MARK: - Fuzzy tab picker
