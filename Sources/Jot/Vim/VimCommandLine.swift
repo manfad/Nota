@@ -3,24 +3,23 @@ import AppKit
 /// One line being typed in the footer: the character that opened it, and what
 /// has been typed since.
 ///
-/// `:` is the only prompt that opens today. It is a value with a prefix rather
-/// than a bare string so that a `/` search prompt — if searching ever comes off
-/// the native find bar — is the same editing keys, the same history and the
-/// same footer slot, with only what Return does at the end of it to write.
+/// `:` runs an ex command and `/` and `?` search; all three are the same
+/// editing keys, the same history and the same pane, and differ only in what
+/// Return does at the end of them.
 struct VimPrompt: Equatable {
     var prefix: Character
     var text: String
 }
 
-/// The `:` line.
+/// The command pane's line.
 ///
 /// It is engine state and a string handed to the window, not a text field:
 /// giving a real control first responder would move the caret out of the note
 /// and scroll it, and the whole point of vim's command line is that the buffer
 /// stays exactly where it was. So the keys are read here, the text goes to the
-/// footer's left slot where showcmd normally sits, and the text view never
-/// stops being first responder — which is also what keeps every ⌘ shortcut
-/// working while a command is half typed.
+/// pane above the footer, and the text view never stops being first responder
+/// — which is also what keeps every ⌘ shortcut working while a command is half
+/// typed.
 extension VimEngine {
 
     /// The open prompt's text, without its prefix.
@@ -28,8 +27,14 @@ extension VimEngine {
 
     // MARK: - Opening and closing
 
+    /// Whether the open prompt is a search rather than an ex command.
+    var isSearchPrompt: Bool {
+        prompt.map { $0.prefix == "/" || $0.prefix == "?" } ?? false
+    }
+
     /// `:` in normal mode; from visual mode the selection's range comes with
-    /// it, exactly as vim prefills `'<,'>`.
+    /// it, exactly as vim prefills `'<,'>`. `/` and `?` come through
+    /// `beginSearch`, which puts the caret and the operator aside first.
     func beginPrompt(_ prefix: Character = ":", initialText: String = "") {
         resetPending()
         discardCommandKeys()
@@ -40,17 +45,31 @@ extension VimEngine {
         publishPrompt()
     }
 
-    /// Escape, ⌃C, ⌃[, or a Backspace that runs out of text.
+    /// Escape, ⌃C, ⌃[, or a Backspace that runs out of text. A search that is
+    /// cancelled leaves nothing behind: the caret and the view go back to
+    /// where they were before the first keystroke of it.
     func cancelPrompt() {
-        closePrompt()
+        closePrompt(cancelled: true)
     }
 
-    private func closePrompt() {
+    private func closePrompt(cancelled: Bool) {
         prompt = nil
         historyIndex = nil
         historyDraft = nil
         host?.vimCommandLineChanged(nil)
-        setMode(.normal)
+        if cancelled, let session = searchSession {
+            searchSession = nil
+            moveCaret(to: session.origin)
+            restoreScroll(to: session.scroll)
+            refreshSearchHighlights()
+        }
+        // A selection is still up when `/` was typed in visual mode, and the
+        // mode has to agree with it.
+        if let visual {
+            setMode(visual.isLinewise ? .visualLine : .visual)
+        } else {
+            setMode(.normal)
+        }
         clampCaret()
         publishPendingKeys()
     }
@@ -80,7 +99,7 @@ extension VimEngine {
 
         switch key.base {
         case .enter:
-            closePrompt()
+            closePrompt(cancelled: false)
             submit(open)
             return true
         case .backspace:
@@ -124,6 +143,10 @@ extension VimEngine {
     private func set(_ text: String) {
         prompt?.text = text
         publishPrompt()
+        // Vim's `'incsearch'`: the note moves under the pane as you type.
+        if let prompt, prompt.prefix == "/" || prompt.prefix == "?" {
+            searchIncrementally(text, forward: prompt.prefix == "/")
+        }
     }
 
     /// ⌃W: the trailing run of spaces and then the word before them.
@@ -179,13 +202,17 @@ extension VimEngine {
 
     // MARK: - Running
 
-    /// What Return does. Only `:` has anywhere to go so far; another prompt
-    /// keeps its history and does nothing else until there is something for it
-    /// to run.
+    /// What Return does: `:` runs an ex command, `/` and `?` commit the
+    /// search. Either way the line joins that prompt's history.
     private func submit(_ prompt: VimPrompt) {
         switch prompt.prefix {
-        case ":": run(prompt.text)
-        default: remember(prompt.text, for: prompt.prefix)
+        case ":":
+            run(prompt.text)
+        case "/", "?":
+            remember(prompt.text, for: prompt.prefix)
+            commitSearch(prompt.text, forward: prompt.prefix == "/")
+        default:
+            remember(prompt.text, for: prompt.prefix)
         }
     }
 

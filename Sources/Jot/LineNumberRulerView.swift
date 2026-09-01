@@ -13,6 +13,27 @@ final class LineNumberRulerView: NSRulerView {
     private weak var textView: NSTextView?
     private var fontSize: CGFloat = 13
 
+    /// The optional hairline down the gutter's inner edge — Settings →
+    /// "Gutter separator". Off by default: a bare gutter reads quieter.
+    var showsSeparator = false {
+        didSet {
+            guard showsSeparator != oldValue else { return }
+            needsDisplay = true
+        }
+    }
+
+    /// Where that hairline goes: one device pixel wide, hard against the
+    /// text, the full height of the gutter — or `nil` when it is off.
+    /// Drawing and the layout test read the same rect.
+    var separatorRect: NSRect? {
+        guard showsSeparator else { return nil }
+        let thickness = 1 / (window?.backingScaleFactor ?? 1)
+        return NSRect(
+            x: bounds.maxX - thickness, y: bounds.minY,
+            width: thickness, height: bounds.height
+        )
+    }
+
     init(scrollView: NSScrollView, textView: NSTextView) {
         self.textView = textView
         super.init(scrollView: scrollView, orientation: .verticalRuler)
@@ -80,6 +101,11 @@ final class LineNumberRulerView: NSRulerView {
         clipsToBounds = true
         NSColor.textBackgroundColor.setFill()
         bounds.fill()
+
+        if let separatorRect {
+            NSColor.separatorColor.setFill()
+            separatorRect.fill()
+        }
 
         guard let textView,
               let layoutManager = textView.layoutManager,

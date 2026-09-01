@@ -207,6 +207,41 @@ final class JotTextView: NSTextView {
         return bounds.width > 0 ? bounds.width : spaceWidth
     }
 
+    // MARK: - Search highlights
+
+    /// `'hlsearch'`: a quiet band behind every match.
+    ///
+    /// These are the layout manager's *temporary* attributes, which live
+    /// beside the text rather than in it — so a highlight can never reach the
+    /// text storage, and therefore never the cache, the pasteboard or the
+    /// file. Monochrome, like everything else vim draws here.
+    func setSearchHighlights(_ ranges: [NSRange]) {
+        guard let layoutManager, let storage = textStorage else { return }
+        let full = NSRange(location: 0, length: storage.length)
+        layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: full)
+        let colour = NSColor.labelColor.withAlphaComponent(0.12)
+        for range in ranges {
+            let clamped = NSIntersectionRange(range, full)
+            guard clamped.length > 0 else { continue }
+            layoutManager.addTemporaryAttributes([.backgroundColor: colour], forCharacterRange: clamped)
+        }
+        highlightedRanges = ranges
+    }
+
+    func clearSearchHighlights() {
+        guard !highlightedRanges.isEmpty, let layoutManager, let storage = textStorage else {
+            highlightedRanges = []
+            return
+        }
+        layoutManager.removeTemporaryAttribute(
+            .backgroundColor, forCharacterRange: NSRange(location: 0, length: storage.length)
+        )
+        highlightedRanges = []
+    }
+
+    /// What is lit up, for the tests and for a tab switch to put down again.
+    private(set) var highlightedRanges: [NSRange] = []
+
     // MARK: - Chip clicks
 
     /// A single click on an `Image N` chip selects the picture rather than

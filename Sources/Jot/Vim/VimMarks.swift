@@ -74,7 +74,7 @@ extension VimEngine {
     /// it set off from.
     func jumpToMark(_ name: Character, exact: Bool) {
         guard let stored = marks.location(name) else {
-            host?.vimShow(message: "Mark not set")
+            show("Mark not set")
             resetPending()
             return
         }

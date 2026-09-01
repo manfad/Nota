@@ -89,8 +89,11 @@ final class MainWindowController: NSWindowController {
     /// tabs lands you in normal mode rather than wherever the last tab was.
     private lazy var vimEngine = VimEngine(textView: textView)
     private var footerMessageWorkItem: DispatchWorkItem?
-    /// True while a `:` line is being typed, which is the one time showcmd
-    /// does not own the footer's left slot.
+    /// The one-line pane above the footer where `:` and `/` are typed.
+    private let commandPane = VimCommandPane(inset: Layout.statusInset)
+    private var paneBottomToStatus: NSLayoutConstraint?
+    private var paneBottomToContent: NSLayoutConstraint?
+    /// True while a prompt is being typed in the pane.
     private var isCommandLineOpen = false
 
     /// Keeps the storage currently shown by the text view alive even before
@@ -238,6 +241,11 @@ final class MainWindowController: NSWindowController {
         zenDragRegion.isHidden = true
         content.addSubview(zenDragRegion)
 
+        // Last in, so it lies over the bottom of the editor rather than
+        // taking room from it: opening `:` never moves the text.
+        commandPane.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(commandPane)
+
         NSLayoutConstraint.activate([
             background.topAnchor.constraint(equalTo: content.topAnchor),
             background.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -280,6 +288,21 @@ final class MainWindowController: NSWindowController {
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: cursorLabel.leadingAnchor,
                                                   constant: -12),
         ])
+
+        NSLayoutConstraint.activate([
+            commandPane.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            commandPane.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            commandPane.heightAnchor.constraint(equalToConstant: VimCommandPane.height),
+        ])
+        // It sits on the footer, and on the bottom of the window in zen mode,
+        // where there is no footer to sit on.
+        paneBottomToStatus = commandPane.bottomAnchor.constraint(
+            equalTo: statusSeparator.topAnchor
+        )
+        paneBottomToContent = commandPane.bottomAnchor.constraint(
+            equalTo: content.bottomAnchor
+        )
+        paneBottomToStatus?.isActive = true
 
         // Centred in the footer, but only as far as the left and right
         // regions allow — hence the yielding priority.
@@ -334,6 +357,7 @@ final class MainWindowController: NSWindowController {
         imageSidebar.translatesAutoresizingMaskIntoConstraints = false
         imageSidebar.assets = store.assets
         imageSidebar.delegate = self
+        imageSidebar.onSettings = { [weak self] in self?.openSettings(nil) }
         container.addSubview(imageSidebar)
         NSLayoutConstraint.activate([
             imageSidebar.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
@@ -444,6 +468,7 @@ final class MainWindowController: NSWindowController {
     fileprivate func applyLineNumberVisibility() {
         // The gutter is chrome, so zen hides it whatever the setting says.
         scrollView.rulersVisible = preferences.showsLineNumbers && !isZenMode
+        lineNumberRuler?.showsSeparator = preferences.showsGutterSeparator
         lineNumberRuler?.setFontSize(preferences.fontSize)
         applyEditorInsets()
     }
@@ -569,6 +594,9 @@ final class MainWindowController: NSWindowController {
         // keyboard does not.
         textView.isEditable = !note.isScratch
         vimEngine.isModifiable = !note.isScratch
+        // Temporary attributes belong to the layout manager, not the note, so
+        // the highlights are laid on again for whatever is now in it.
+        vimEngine.refreshSearchHighlights()
         applyTextAttributes()
         let location = max(0, min(note.selectionLocation, note.storage.length))
         textView.setSelectedRange(NSRange(location: location, length: 0))
@@ -656,10 +684,7 @@ final class MainWindowController: NSWindowController {
 
     /// "showcmd": the count, operator and register typed so far, or the macro
     /// being recorded. Empty hides the label.
-    ///
-    /// The `:` line borrows the same slot, and while it is up it keeps it.
     func setVimPendingKeys(_ keys: String) {
-        guard !isCommandLineOpen else { return }
         pendingKeysLabel.stringValue = keys
         applyFooterVisibility()
     }
@@ -691,6 +716,12 @@ final class MainWindowController: NSWindowController {
 
     /// Which tab is showing — for the tests that drive `gt` and `gT`.
     var selectedTabIndex: Int { selectedIndex }
+
+    /// The command pane, for the tests: whether it is up, what it says, and
+    /// whether that is a message rather than something being typed.
+    var commandPaneState: (isVisible: Bool, text: String, isMessage: Bool) {
+        (!commandPane.isHidden, commandPane.text, commandPane.isShowingMessage)
+    }
 
     /// The footer's three regions, for the layout tests: the vim badge, the
     /// centred counts, and the caret position.
@@ -985,6 +1016,9 @@ extension MainWindowController {
         editorTopToPane?.isActive = enabled
         editorBottomToStatus?.isActive = !enabled
         editorBottomToPane?.isActive = enabled
+        // The footer goes; the pane does not — `:` has to work in zen mode.
+        paneBottomToStatus?.isActive = !enabled
+        paneBottomToContent?.isActive = enabled
         zenDragRegion.isHidden = !enabled
 
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
@@ -1041,6 +1075,104 @@ private final class PaneView: NSView {
 /// the title bar's own chrome is gone.
 private final class DragRegionView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
+}
+
+/// The command pane: one line above the footer where `:` `/` `?` are typed,
+/// and where what they have to say appears afterwards.
+///
+/// It overlays the bottom of the editor rather than pushing it up, so opening
+/// it never moves the text under the caret — and it is present in zen mode,
+/// where the footer is not, because a command line you cannot see is a command
+/// line you cannot use.
+final class VimCommandPane: NSView {
+    static let height: CGFloat = 22
+
+    /// A caret drawn rather than blinked: the pane never takes first
+    /// responder, so AppKit would not draw one for it.
+    private static let caret = "\u{258F}"
+
+    private let label = NSTextField(labelWithString: "")
+    private let hairline = NSBox()
+    private(set) var isShowingMessage = false
+
+    init(inset: CGFloat) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        // Nothing to say yet: the pane is only there when it is holding
+        // something.
+        isHidden = true
+
+        hairline.boxType = .separator
+        hairline.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hairline)
+
+        label.font = .systemFont(ofSize: 11)
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            hairline.topAnchor.constraint(equalTo: topAnchor),
+            hairline.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hairline.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -inset),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// A prompt being typed: its character quiet, what has been typed since
+    /// in the text's own colour, and a bar caret after it.
+    func showPrompt(_ text: String) {
+        isShowingMessage = false
+        let line = NSMutableAttributedString()
+        let prefix = text.first.map(String.init) ?? ""
+        line.append(NSAttributedString(
+            string: prefix,
+            attributes: [.font: label.font as Any, .foregroundColor: NSColor.secondaryLabelColor]
+        ))
+        line.append(NSAttributedString(
+            string: String(text.dropFirst()) + Self.caret,
+            attributes: [.font: label.font as Any, .foregroundColor: NSColor.labelColor]
+        ))
+        label.attributedStringValue = line
+        isHidden = false
+    }
+
+    /// What a command or a search had to say, until the next key.
+    func showMessage(_ message: String) {
+        isShowingMessage = true
+        label.attributedStringValue = NSAttributedString(
+            string: message,
+            attributes: [.font: label.font as Any, .foregroundColor: NSColor.secondaryLabelColor]
+        )
+        isHidden = false
+    }
+
+    func clear() {
+        isShowingMessage = false
+        label.stringValue = ""
+        isHidden = true
+    }
+
+    /// What the tests read.
+    var text: String { label.stringValue }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
 }
 
 /// The vim mode chip at the left of the footer.
@@ -1409,17 +1541,32 @@ extension MainWindowController: VimEngineHost {
         selectTab(at: target)
     }
 
+    /// In vim mode the pane is where the engine speaks; the footer keeps the
+    /// counts. Everything else in the app still uses the footer.
     func vimShow(message: String) {
-        showFooterMessage(message)
+        guard preferences.vimMode else {
+            showFooterMessage(message)
+            return
+        }
+        commandPane.showMessage(message)
     }
 
-    /// The `:` line lives where showcmd does, with a bar caret drawn after it
-    /// — the text view never gives up first responder, so the note's own
-    /// caret and scroll position stay exactly where they were.
+    /// The prompt lives in the pane above the footer — the text view never
+    /// gives up first responder, so the note's own caret and scroll position
+    /// stay exactly where they were.
     func vimCommandLineChanged(_ text: String?) {
         isCommandLineOpen = text != nil
-        pendingKeysLabel.stringValue = text.map { $0 + "\u{258F}" } ?? ""
-        applyFooterVisibility()
+        if let text {
+            commandPane.showPrompt(text)
+        } else {
+            commandPane.clear()
+        }
+    }
+
+    /// A message stays in the pane until the next key.
+    func vimClearMessage() {
+        guard !isCommandLineOpen else { return }
+        commandPane.clear()
     }
 
     /// `:w` alone is ⌘S. `:w name` writes that name into the folder the last
@@ -1481,21 +1628,6 @@ extension MainWindowController: VimEngineHost {
         flush()
     }
 
-    /// `/` `?` `n` `N` `*` `#` and `:noh` all end up here: the native find bar
-    /// does the searching, driven the same way the Find menu drives it.
-    func vimFind(_ action: VimFindAction) {
-        let finderAction: NSTextFinder.Action
-        switch action {
-        case .showInterface: finderAction = .showFindInterface
-        case .next: finderAction = .nextMatch
-        case .previous: finderAction = .previousMatch
-        case .hide: finderAction = .hideFindInterface
-        }
-        let sender = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        sender.tag = finderAction.rawValue
-        textView.performTextFinderAction(sender)
-    }
-
     /// A name from `:w` or `:e`: `~` and an absolute path mean what they say,
     /// and anything else lands in the folder the last save used.
     private func resolvedURL(for name: String, near note: Note?) -> URL {
@@ -1528,6 +1660,8 @@ extension MainWindowController: NSTextViewDelegate {
         }
         note.selectionLocation = textView.selectedRange().location
         updateStatus()
+        // The matches have moved with the edit.
+        vimEngine.refreshSearchHighlights()
         scheduleImageRefresh()
         scheduleSave()
     }

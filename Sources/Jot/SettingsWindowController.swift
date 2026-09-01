@@ -21,6 +21,9 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let spacingPopUp = NSPopUpButton()
     private let paddingPopUp = NSPopUpButton()
     private let lineNumbersCheckbox = NSButton(checkboxWithTitle: "Line numbers", target: nil, action: nil)
+    private let gutterSeparatorCheckbox = NSButton(
+        checkboxWithTitle: "Gutter separator", target: nil, action: nil
+    )
     private let sidebarSidePopUp = NSPopUpButton()
     private let vimModeCheckbox = NSButton(checkboxWithTitle: "Vim mode", target: nil, action: nil)
     private let footerCheckboxes: [(TextStats.Segment, NSButton)] = [
@@ -111,6 +114,14 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         lineNumbersCheckbox.target = self
         lineNumbersCheckbox.action = #selector(lineNumbersChanged)
 
+        gutterSeparatorCheckbox.target = self
+        gutterSeparatorCheckbox.action = #selector(gutterSeparatorChanged)
+        // Both gutter switches on one line, the separator second: it only
+        // means anything while the numbers are there.
+        let gutterRow = NSStackView(views: [lineNumbersCheckbox, gutterSeparatorCheckbox])
+        gutterRow.orientation = .horizontal
+        gutterRow.spacing = 10
+
         vimModeCheckbox.target = self
         vimModeCheckbox.action = #selector(vimModeChanged)
 
@@ -148,7 +159,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             [label("Size"), sizeRow],
             [label("Line spacing"), spacingPopUp],
             [label("Padding"), paddingPopUp],
-            [label("Gutter"), lineNumbersCheckbox],
+            [label("Gutter"), gutterRow],
             [label("Status bar"), footerGrid],
             [label("Image sidebar"), sidebarSidePopUp],
             [label("Vim mode"), vimModeCheckbox],
@@ -215,6 +226,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         select(paddingPopUp, raw: preferences.padding.rawValue)
         select(sidebarSidePopUp, raw: preferences.sidebarSide.rawValue)
         lineNumbersCheckbox.state = preferences.showsLineNumbers ? .on : .off
+        gutterSeparatorCheckbox.state = preferences.showsGutterSeparator ? .on : .off
+        gutterSeparatorCheckbox.isEnabled = preferences.showsLineNumbers
         let enabled = Set(preferences.footerSegments)
         for (segment, checkbox) in footerCheckboxes {
             checkbox.state = enabled.contains(segment) ? .on : .off
@@ -308,6 +321,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     @objc private func lineNumbersChanged(_ sender: NSButton) {
         preferences.showsLineNumbers = sender.state == .on
+    }
+
+    @objc private func gutterSeparatorChanged(_ sender: NSButton) {
+        preferences.showsGutterSeparator = sender.state == .on
     }
 
     @objc private func footerSegmentsChanged(_ sender: NSButton) {

@@ -16,7 +16,8 @@ final class VimHostSpy: VimEngineHost {
     var opened: [String] = []
     var newTabs = 0
     var scratchTabs: [(title: String, text: String)] = []
-    var findActions: [VimFindAction] = []
+    /// How many times the pane's message was taken away by the next key.
+    var messagesCleared = 0
     /// What `:w` reports back, which is what `:wq` waits for.
     var saveSucceeds = true
 
@@ -33,7 +34,7 @@ final class VimHostSpy: VimEngineHost {
     func vimOpenScratchTab(title: String, text: String) {
         scratchTabs.append((title, text))
     }
-    func vimFind(_ action: VimFindAction) { findActions.append(action) }
+    func vimClearMessage() { messagesCleared += 1 }
 }
 
 /// Stage three: the `:` line, the ex commands and their ranges, the searching
@@ -118,9 +119,6 @@ final class VimStage3Tests: XCTestCase {
         // Private boards throughout: a test run must never touch the real
         // clipboard, and `*` must never disturb a real find bar.
         engine.pasteboard = NSPasteboard(name: NSPasteboard.Name("VimStage3-\(UUID().uuidString)"))
-        engine.findPasteboard = NSPasteboard(
-            name: NSPasteboard.Name("VimStage3Find-\(UUID().uuidString)")
-        )
         engine.isEnabled = true
         view.vimKeyHandler = { engine.handle($0) }
 
@@ -239,29 +237,27 @@ final class VimStage3Tests: XCTestCase {
         XCTAssertEqual(harness.engine.history(for: ":"), ["set cursorline", "noh"])
     }
 
-    /// Nothing opens a `/` prompt today — the find bar does the searching —
-    /// but the line itself knows nothing about the colon, so a search prompt
-    /// would be the same typing, the same history and the same footer slot.
+    /// The line itself knows nothing about the colon: `:` and `/` are the
+    /// same typing, the same history and the same pane.
     func testThePromptIsTheSameWhicheverCharacterOpenedIt() throws {
         let harness = try makeHarness("alpha")
-        harness.engine.beginPrompt("/")
-        harness.type("beta")
-        XCTAssertEqual(harness.engine.prompt, VimPrompt(prefix: "/", text: "beta"))
-        XCTAssertEqual(harness.host.commandLines.last, "/beta")
+        harness.type("/")
+        harness.type("lph")
+        XCTAssertEqual(harness.engine.prompt, VimPrompt(prefix: "/", text: "lph"))
+        XCTAssertEqual(harness.host.commandLines.last, "/lph")
 
-        harness.type("<C-w>x<CR>")
+        harness.type("<C-w>a<CR>")
         XCTAssertNil(harness.engine.prompt)
         XCTAssertEqual(harness.string, "alpha", "and nothing reaches the note")
 
         // Each prompt keeps its own history, the way vim keeps `:` and `/`
         // apart.
         harness.run("noh")
-        XCTAssertEqual(harness.engine.history(for: "/"), ["x"])
+        XCTAssertEqual(harness.engine.history(for: "/"), ["a"])
         XCTAssertEqual(harness.engine.history(for: ":"), ["noh"])
 
-        harness.engine.beginPrompt("/")
-        harness.type("<Up>")
-        XCTAssertEqual(harness.engine.commandLine, "x")
+        harness.type("/<Up>")
+        XCTAssertEqual(harness.engine.commandLine, "a")
         harness.type("<Esc>")
     }
 
@@ -547,9 +543,9 @@ final class VimStage3Tests: XCTestCase {
 
     func testAnEmptyPatternUsesTheLastSearch() throws {
         let harness = try makeHarness("alpha beta\nalpha")
-        harness.type("*")
+        harness.type("/beta<CR>")
         harness.run("%s//x/g")
-        XCTAssertEqual(harness.string, "x beta\nx")
+        XCTAssertEqual(harness.string, "alpha x\nalpha")
     }
 
     func testSubstituteWithNothingToRepeatSaysSo() throws {
@@ -902,58 +898,434 @@ final class VimStage3Tests: XCTestCase {
         XCTAssertEqual(harness.host.messages.last, VimEngine.notModifiableMessage)
     }
 
-    // MARK: - Searching
+    // MARK: - Searching: the pieces
 
-    func testSlashAndQuestionMarkOpenTheFindBar() throws {
-        let harness = try makeHarness("alpha")
-        harness.type("/")
-        XCTAssertEqual(harness.host.findActions, [.showInterface])
-        XCTAssertTrue(harness.engine.searchIsForward)
+    func testACaseFlagComesOutOfThePattern() {
+        XCTAssertEqual(VimSearch.caseFlag(in: "foo").pattern, "foo")
+        XCTAssertNil(VimSearch.caseFlag(in: "foo").ignoreCase)
 
-        harness.type("?")
-        XCTAssertEqual(harness.host.findActions, [.showInterface, .showInterface])
-        XCTAssertFalse(harness.engine.searchIsForward)
+        let insensitive = VimSearch.caseFlag(in: "\\cFoo")
+        XCTAssertEqual(insensitive.pattern, "Foo")
+        XCTAssertEqual(insensitive.ignoreCase, true)
+
+        let sensitive = VimSearch.caseFlag(in: "foo\\C")
+        XCTAssertEqual(sensitive.pattern, "foo")
+        XCTAssertEqual(sensitive.ignoreCase, false)
+
+        // Every other escape is the regex's own and stays whole.
+        XCTAssertEqual(VimSearch.caseFlag(in: "\\d+\\.\\d").pattern, "\\d+\\.\\d")
     }
 
-    func testNextAndPreviousFollowTheSearchsDirection() throws {
-        let harness = try makeHarness("alpha")
-        harness.type("/")
-        harness.type("n")
-        harness.type("N")
-        XCTAssertEqual(harness.host.findActions.suffix(2).map { $0 }, [.next, .previous])
-
-        harness.type("?")
-        harness.type("n")
-        harness.type("N")
-        XCTAssertEqual(
-            harness.host.findActions.suffix(2).map { $0 }, [.previous, .next],
-            "after `?` the two swap over"
+    func testSmartcaseOnlyMattersWithIgnorecase() {
+        XCTAssertFalse(
+            VimSearch.isCaseInsensitive(pattern: "foo", ignoreCase: false, smartCase: false)
+        )
+        XCTAssertTrue(
+            VimSearch.isCaseInsensitive(pattern: "Foo", ignoreCase: true, smartCase: false)
+        )
+        XCTAssertTrue(
+            VimSearch.isCaseInsensitive(pattern: "foo", ignoreCase: true, smartCase: true)
+        )
+        XCTAssertFalse(
+            VimSearch.isCaseInsensitive(pattern: "Foo", ignoreCase: true, smartCase: true),
+            "an uppercase letter means you meant it"
         )
     }
 
-    func testStarAndHashPutTheWordUnderTheCaretOnTheFindPasteboard() throws {
-        let harness = try makeHarness("alpha beta\nalpha")
+    func testTheStarPatternTakesWholeWordsOnly() {
+        XCTAssertEqual(VimSearch.wordPattern("foo"), "\\bfoo\\b")
+        // A word with regex punctuation in it is escaped, not interpreted.
+        XCTAssertEqual(VimSearch.wordPattern("a.b"), "\\ba\\.b\\b")
+
+        let text = "foo food foo" as NSString
+        let matches = VimSearch.matches(
+            of: VimSearch.wordPattern("foo"), in: text, ignoringCase: false
+        )
+        XCTAssertEqual(matches.map(\.location), [0, 9], "`food` is not `foo`")
+    }
+
+    func testSteppingThroughMatchesWrapsRoundTheEnds() {
+        let matches = [
+            NSRange(location: 0, length: 1),
+            NSRange(location: 4, length: 1),
+            NSRange(location: 8, length: 1),
+        ]
+        XCTAssertEqual(
+            VimSearch.step(matches, from: 0, forward: true, count: 1),
+            VimSearchMatch(range: matches[1], wrapped: false)
+        )
+        XCTAssertEqual(
+            VimSearch.step(matches, from: 0, forward: true, count: 2),
+            VimSearchMatch(range: matches[2], wrapped: false)
+        )
+        XCTAssertEqual(
+            VimSearch.step(matches, from: 8, forward: true, count: 1),
+            VimSearchMatch(range: matches[0], wrapped: true),
+            "past the last one is round to the first"
+        )
+        XCTAssertEqual(
+            VimSearch.step(matches, from: 4, forward: false, count: 1),
+            VimSearchMatch(range: matches[0], wrapped: false)
+        )
+        XCTAssertEqual(
+            VimSearch.step(matches, from: 0, forward: false, count: 1),
+            VimSearchMatch(range: matches[2], wrapped: true)
+        )
+        XCTAssertNil(VimSearch.step([], from: 0, forward: true, count: 1))
+    }
+
+    // MARK: - Searching: the prompt
+
+    func testSlashOpensASearchPromptInThePane() throws {
+        let harness = try makeHarness("alpha beta")
+        harness.type("/")
+        XCTAssertEqual(harness.engine.mode, .commandLine)
+        XCTAssertTrue(harness.engine.isSearchPrompt)
+        XCTAssertEqual(harness.host.commandLines.last, "/")
+
+        harness.type("?")
+        XCTAssertEqual(harness.engine.commandLine, "?", "only the first one is the prompt")
+    }
+
+    func testTheCaretFollowsTheSearchAsItIsTyped() throws {
+        let harness = try makeHarness("alpha beta alpha")
+        harness.type("/bet")
+        XCTAssertEqual(harness.caret, 6, "incremental: the caret is already there")
+        XCTAssertEqual(harness.string, "alpha beta alpha", "and nothing is typed into the note")
+
+        // A pattern that matches nothing leaves the caret where it started.
+        harness.type("z")
+        XCTAssertEqual(harness.caret, 0)
+    }
+
+    func testEscapeFromASearchPutsTheCaretBack() throws {
+        let harness = try makeHarness("alpha beta")
+        harness.type("l")
+        harness.type("/beta")
+        XCTAssertEqual(harness.caret, 6)
+        harness.type("<Esc>")
+        XCTAssertEqual(harness.caret, 1, "back to where the search started")
+        XCTAssertEqual(harness.engine.mode, .normal)
+        XCTAssertTrue(harness.view.highlightedRanges.isEmpty)
+    }
+
+    func testEnterCommitsTheSearch() throws {
+        let harness = try makeHarness("alpha beta alpha")
+        harness.type("/beta<CR>")
+        XCTAssertEqual(harness.caret, 6)
+        XCTAssertEqual(harness.engine.lastSearchPattern, "beta")
+        XCTAssertTrue(harness.engine.searchIsForward)
+        XCTAssertEqual(harness.engine.history(for: "/"), ["beta"])
+        XCTAssertNil(harness.engine.prompt)
+    }
+
+    func testQuestionMarkSearchesBackward() throws {
+        let harness = try makeHarness("one two one")
+        harness.type("$")
+        harness.type("?one<CR>")
+        XCTAssertEqual(harness.caret, 8, "the match behind the caret")
+        XCTAssertFalse(harness.engine.searchIsForward)
+        harness.type("n")
+        XCTAssertEqual(harness.caret, 0, "and `n` keeps going back")
+    }
+
+    func testAnEmptySearchRepeatsTheLastPattern() throws {
+        let harness = try makeHarness("a foo b foo")
+        harness.type("/foo<CR>")
+        XCTAssertEqual(harness.caret, 2)
+        harness.type("/<CR>")
+        XCTAssertEqual(harness.caret, 8, "an empty pattern is the last one again")
+
+        let fresh = try makeHarness("alpha")
+        fresh.type("/<CR>")
+        XCTAssertEqual(fresh.host.messages.last, "E35: No previous regular expression")
+    }
+
+    func testASearchThatFindsNothingSaysSoAndStaysPut() throws {
+        let harness = try makeHarness("alpha beta")
+        harness.type("l")
+        harness.type("/zebra<CR>")
+        XCTAssertEqual(harness.caret, 1)
+        XCTAssertEqual(harness.host.messages.last, "E486: Pattern not found: zebra")
+        XCTAssertTrue(harness.view.highlightedRanges.isEmpty)
+    }
+
+    func testASearchWrapsWithAWordAboutIt() throws {
+        let harness = try makeHarness("alpha beta")
+        harness.type("/beta<CR>")
+        harness.type("/alpha<CR>")
+        XCTAssertEqual(harness.caret, 0)
+        XCTAssertEqual(harness.host.messages.last, VimEngine.hitBottomMessage)
+
+        let backward = try makeHarness("alpha beta")
+        backward.type("?beta<CR>")
+        XCTAssertEqual(backward.caret, 6)
+        XCTAssertEqual(backward.host.messages.last, VimEngine.hitTopMessage)
+    }
+
+    func testACountOnASearchTakesThatManyMatches() throws {
+        let harness = try makeHarness("a a a a")
+        harness.type("3/a<CR>")
+        XCTAssertEqual(harness.caret, 6)
+    }
+
+    func testASearchIsAJumpSoTheBacktickComesBack() throws {
+        let harness = try makeHarness("alpha beta")
+        harness.type("/beta<CR>")
+        XCTAssertEqual(harness.caret, 6)
+        harness.type("``")
+        XCTAssertEqual(harness.caret, 0, "back to where the search set off from")
+    }
+
+    // MARK: - Searching: n, N, * and #
+
+    func testNextAndPreviousRepeatTheSearch() throws {
+        let harness = try makeHarness("a foo b foo c foo")
+        harness.type("/foo<CR>")
+        XCTAssertEqual(harness.caret, 2)
+        harness.type("n")
+        XCTAssertEqual(harness.caret, 8)
+        harness.type("n")
+        XCTAssertEqual(harness.caret, 14)
+        harness.type("N")
+        XCTAssertEqual(harness.caret, 8, "`N` goes back")
+        harness.type("2n")
+        XCTAssertEqual(harness.caret, 2, "a count, and round the end")
+    }
+
+    func testNextFollowsTheDirectionTheSearchWasStartedIn() throws {
+        let harness = try makeHarness("a foo b foo c foo")
+        harness.type("$")
+        harness.type("?foo<CR>")
+        XCTAssertEqual(harness.caret, 14)
+        harness.type("n")
+        XCTAssertEqual(harness.caret, 8, "`n` after `?` keeps going backward")
+        harness.type("N")
+        XCTAssertEqual(harness.caret, 14, "and `N` turns round")
+    }
+
+    func testRepeatingWithNothingToRepeatSaysSo() throws {
+        let harness = try makeHarness("alpha")
+        harness.type("n")
+        XCTAssertEqual(harness.host.messages.last, "E35: No previous regular expression")
+    }
+
+    func testStarAndHashSearchTheWordUnderTheCaret() throws {
+        let harness = try makeHarness("foo food foo")
         harness.type("*")
-        XCTAssertEqual(harness.engine.findPasteboard.string(forType: .string), "alpha")
-        XCTAssertEqual(harness.host.findActions, [.next])
-        XCTAssertEqual(harness.engine.lastSearchPattern, "alpha")
+        XCTAssertEqual(harness.caret, 9, "`food` is not the word `foo`")
+        XCTAssertEqual(harness.engine.lastSearchPattern, "\\bfoo\\b")
         XCTAssertTrue(harness.engine.searchIsForward)
 
-        harness.type("w#")
-        XCTAssertEqual(harness.engine.findPasteboard.string(forType: .string), "beta")
-        XCTAssertEqual(harness.host.findActions.last, .previous)
+        harness.type("#")
+        XCTAssertEqual(harness.caret, 0)
         XCTAssertFalse(harness.engine.searchIsForward)
     }
 
     func testStarFromABlankTakesTheNextWordOnTheLine() throws {
-        let harness = try makeHarness("  alpha\n")
+        let harness = try makeHarness("  alpha beta alpha")
         harness.type("*")
-        XCTAssertEqual(harness.engine.findPasteboard.string(forType: .string), "alpha")
+        XCTAssertEqual(harness.engine.lastSearchPattern, "\\balpha\\b")
+        XCTAssertEqual(harness.caret, 13, "on from the word, not to it")
 
         let empty = try makeHarness("   \nalpha")
         empty.type("*")
         XCTAssertEqual(empty.host.messages.last, "E348: No string under cursor")
     }
+
+    func testACountOnStarTakesThatManyMatches() throws {
+        let harness = try makeHarness("x a x a x a x")
+        harness.type("2*")
+        XCTAssertEqual(harness.caret, 8)
+    }
+
+    // MARK: - Searching: as a motion
+
+    func testAnOperatorTakesASearchAsAnExclusiveMotion() throws {
+        let harness = try makeHarness("alpha beta")
+        harness.type("d/beta<CR>")
+        XCTAssertEqual(harness.string, "beta", "up to the match, not through it")
+        XCTAssertEqual(harness.caret, 0)
+    }
+
+    func testAnOperatorTakesABackwardSearchToo() throws {
+        let harness = try makeHarness("bar alpha")
+        harness.type("w")
+        harness.type("y?bar<CR>")
+        XCTAssertEqual(harness.string, "bar alpha", "a yank changes nothing")
+        XCTAssertEqual(harness.caret, 0)
+        XCTAssertEqual(harness.engine.registers.read("0")?.text, "bar ")
+    }
+
+    func testACancelledSearchAbandonsTheOperator() throws {
+        let harness = try makeHarness("alpha beta")
+        harness.type("d/beta<Esc>")
+        XCTAssertEqual(harness.string, "alpha beta")
+        XCTAssertEqual(harness.caret, 0)
+        XCTAssertEqual(harness.engine.mode, .normal)
+    }
+
+    func testNextRepeatsUnderAnOperator() throws {
+        let harness = try makeHarness("a foo b foo c")
+        harness.type("/foo<CR>")
+        XCTAssertEqual(harness.caret, 2)
+        harness.type("dn")
+        XCTAssertEqual(harness.string, "a foo c")
+    }
+
+    func testASearchInVisualModeExtendsTheSelection() throws {
+        let harness = try makeHarness("alpha beta")
+        harness.type("v/beta<CR>")
+        XCTAssertEqual(harness.engine.mode, .visual)
+        XCTAssertEqual(harness.view.selectedRange(), NSRange(location: 0, length: 7))
+        harness.type("d")
+        XCTAssertEqual(harness.string, "eta")
+    }
+
+    func testACancelledSearchInVisualModeKeepsTheSelection() throws {
+        let harness = try makeHarness("alpha beta")
+        harness.type("vll")
+        harness.type("/beta<Esc>")
+        XCTAssertEqual(harness.engine.mode, .visual)
+        XCTAssertEqual(harness.view.selectedRange(), NSRange(location: 0, length: 3))
+    }
+
+    // MARK: - Searching: highlights
+
+    func testHlsearchLightsEveryMatchWithoutTouchingTheText() throws {
+        let harness = try makeHarness("a foo b foo")
+        harness.type("/foo<CR>")
+        XCTAssertEqual(
+            harness.view.highlightedRanges,
+            [NSRange(location: 2, length: 3), NSRange(location: 8, length: 3)]
+        )
+
+        // Temporary attributes: the layout manager has them, the storage —
+        // and so the cache, and so the file — never does.
+        let storage = try XCTUnwrap(harness.view.textStorage)
+        XCTAssertNil(storage.attribute(.backgroundColor, at: 2, effectiveRange: nil))
+        let temporary = harness.view.layoutManager?.temporaryAttribute(
+            .backgroundColor, atCharacterIndex: 2, effectiveRange: nil
+        )
+        XCTAssertNotNil(temporary)
+    }
+
+    func testNoHighlightPutsTheHighlightsDownUntilTheNextSearch() throws {
+        let harness = try makeHarness("a foo b foo")
+        harness.type("/foo<CR>")
+        XCTAssertFalse(harness.view.highlightedRanges.isEmpty)
+
+        harness.run("noh")
+        XCTAssertTrue(harness.view.highlightedRanges.isEmpty)
+        XCTAssertEqual(harness.engine.lastSearchPattern, "foo", "the pattern is remembered")
+
+        harness.type("n")
+        XCTAssertFalse(harness.view.highlightedRanges.isEmpty, "`n` brings them back")
+    }
+
+    func testHlsearchOffMeansNoHighlightsAtAll() throws {
+        let harness = try makeHarness("a foo b foo")
+        harness.engine.hlsearch = false
+        harness.type("/foo<CR>")
+        XCTAssertEqual(harness.caret, 2, "the search still works")
+        XCTAssertTrue(harness.view.highlightedRanges.isEmpty)
+    }
+
+    func testTheHighlightsFollowAnEdit() throws {
+        let harness = try makeHarness("foo foo")
+        harness.type("/foo<CR>")
+        XCTAssertEqual(harness.view.highlightedRanges.count, 2)
+        harness.engine.refreshSearchHighlights()
+        XCTAssertEqual(harness.view.highlightedRanges.count, 2)
+
+        // The caret is on the second match; breaking it puts its light out.
+        harness.type("x")
+        harness.engine.refreshSearchHighlights()
+        XCTAssertEqual(
+            harness.view.highlightedRanges, [NSRange(location: 0, length: 3)],
+            "the match that was broken is not lit any more"
+        )
+    }
+
+    // MARK: - Searching: case
+
+    func testIgnorecaseAndSmartcase() throws {
+        let harness = try makeHarness("bar Foo")
+        harness.type("/foo<CR>")
+        XCTAssertEqual(harness.caret, 0, "case-sensitive by default, so nothing")
+        XCTAssertEqual(harness.host.messages.last, "E486: Pattern not found: foo")
+
+        harness.engine.ignoreCase = true
+        harness.type("/foo<CR>")
+        XCTAssertEqual(harness.caret, 4, "and now the capital matches")
+
+        harness.engine.smartCase = true
+        harness.type("gg")
+        harness.type("/Bar<CR>")
+        XCTAssertEqual(
+            harness.host.messages.last, "E486: Pattern not found: Bar",
+            "an uppercase letter in the pattern means you meant it"
+        )
+        harness.type("/bar<CR>")
+        XCTAssertEqual(harness.caret, 0, "all lowercase is still insensitive")
+    }
+
+    func testABackslashCForcesIgnorecase() throws {
+        let harness = try makeHarness("FOO bar")
+        harness.type("/\\cfoo<CR>")
+        XCTAssertEqual(harness.caret, 0)
+        XCTAssertEqual(harness.host.messages.last, VimEngine.hitBottomMessage)
+    }
+
+    func testSubstituteHonoursABackslashCToo() throws {
+        let harness = try makeHarness("FOO foo")
+        harness.run("s/\\cfoo/x/g")
+        XCTAssertEqual(harness.string, "x x")
+    }
+
+    func testTheSearchOptionsAreSettable() throws {
+        let harness = try makeHarness("alpha")
+        harness.type("/alpha<CR>")
+        XCTAssertFalse(harness.view.highlightedRanges.isEmpty)
+        harness.run("set nohlsearch")
+        XCTAssertFalse(harness.engine.hlsearch)
+        XCTAssertTrue(
+            harness.view.highlightedRanges.isEmpty, "the highlights go out at once"
+        )
+        harness.run("set hlsearch")
+        XCTAssertTrue(harness.engine.hlsearch)
+        harness.run("set ic")
+        XCTAssertTrue(harness.engine.ignoreCase)
+        harness.run("set smartcase")
+        XCTAssertTrue(harness.engine.smartCase)
+        harness.run("set ignorecase!")
+        XCTAssertFalse(harness.engine.ignoreCase)
+        harness.run("set hlsearch?")
+        XCTAssertEqual(harness.host.messages.last, "hlsearch")
+    }
+
+    // MARK: - Searching: what it does not touch
+
+    func testASearchWorksInAReadOnlyTab() throws {
+        let harness = try makeHarness("alpha beta")
+        harness.engine.isModifiable = false
+        harness.type("/beta<CR>")
+        XCTAssertEqual(harness.caret, 6, "reading is not changing")
+        XCTAssertEqual(harness.string, "alpha beta")
+    }
+
+    func testAMessageStaysUntilTheNextKey() throws {
+        let harness = try makeHarness("alpha")
+        harness.type(":zebra<CR>")
+        XCTAssertEqual(harness.host.messages.last, "Not an editor command: zebra")
+        XCTAssertEqual(harness.host.messagesCleared, 0)
+
+        harness.type("l")
+        XCTAssertEqual(harness.host.messagesCleared, 1, "the next key takes it away")
+        harness.type("l")
+        XCTAssertEqual(harness.host.messagesCleared, 1, "and only the first one does")
+    }
+
 
     func testTheWordUnderTheCaretIsFoundFromAnywhereInIt() {
         let text = "alpha beta-gamma" as NSString
@@ -964,36 +1336,8 @@ final class VimStage3Tests: XCTestCase {
         XCTAssertNil(VimSearch.wordUnderCaret("" as NSString, at: 0))
     }
 
-    func testNoHighlightPutsTheFindBarAway() throws {
-        let harness = try makeHarness("alpha")
-        harness.run("noh")
-        XCTAssertEqual(harness.host.findActions, [.hide])
-        harness.run("nohlsearch")
-        XCTAssertEqual(harness.host.findActions, [.hide, .hide])
-    }
 
-    func testAFoundMatchBecomesTheCaretOnTheNextKey() throws {
-        let harness = try makeHarness("alpha beta gamma")
-        // What the find bar leaves behind: the match, selected.
-        harness.view.setSelectedRange(NSRange(location: 6, length: 4))
-        harness.type("x")
-        XCTAssertEqual(harness.string, "alpha eta gamma", "one character, at the match's head")
 
-        harness.view.setSelectedRange(NSRange(location: 6, length: 3))
-        harness.type("ciw!")
-        harness.type("<Esc>")
-        XCTAssertEqual(harness.string, "alpha ! gamma")
-    }
-
-    func testRepeatingASearchKeepsTheMatchSelected() throws {
-        let harness = try makeHarness("alpha beta")
-        harness.view.setSelectedRange(NSRange(location: 6, length: 4))
-        harness.type("n")
-        XCTAssertEqual(
-            harness.view.selectedRange(), NSRange(location: 6, length: 4),
-            "`n` searches on from the selection the bar made"
-        )
-    }
 
     // MARK: - Linewise put at the end of the note
 

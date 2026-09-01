@@ -15,7 +15,7 @@ extension VimEngine {
         // A scratch tab refuses before anything is worked out, so the refusal
         // is said once rather than once per line — and no report follows it.
         guard isModifiable || !Self.changesText(command.name) else {
-            host?.vimShow(message: Self.notModifiableMessage)
+            show(Self.notModifiableMessage)
             return
         }
 
@@ -41,13 +41,13 @@ extension VimEngine {
             }
         case .edit:
             guard !command.argument.isEmpty else {
-                host?.vimShow(message: "E32: No file name")
+                show("E32: No file name")
                 return
             }
             host?.vimOpen(path: command.argument)
 
         case .noHighlight:
-            host?.vimFind(.hide)
+            clearSearchHighlights()
         case .tabNew:
             host?.vimNewTab()
         case .tabNext:
@@ -70,7 +70,7 @@ extension VimEngine {
             setOption(command.argument)
 
         case .unknown(let typed):
-            host?.vimShow(message: "Not an editor command: \(typed)")
+            show("Not an editor command: \(typed)")
         }
     }
 
@@ -112,7 +112,7 @@ extension VimEngine {
             return (current, current)
         }
         guard let start = exLine(range.start), let end = exLine(range.end) else {
-            host?.vimShow(message: "Mark not set")
+            show("Mark not set")
             return nil
         }
         let total = VimMotions.lineCount(text)
@@ -165,14 +165,14 @@ extension VimEngine {
         var substitution: VimSubstitution
         if command.argument.trimmingCharacters(in: .whitespaces).isEmpty {
             guard let previous = lastSubstitution else {
-                host?.vimShow(message: "E33: No previous substitute regular expression")
+                show("E33: No previous substitute regular expression")
                 return
             }
             substitution = previous
         } else if let parsed = VimSubstitution.parse(command.argument) {
             substitution = parsed
         } else {
-            host?.vimShow(message: "E488: Trailing characters")
+            show("E488: Trailing characters")
             return
         }
 
@@ -180,20 +180,23 @@ extension VimEngine {
         // here is whatever `/`, `*` or the previous `:s` put on the find
         // pasteboard.
         if substitution.pattern.isEmpty {
-            guard let previous = lastSearchPattern ?? findPasteboard.string(forType: .string),
-                  !previous.isEmpty
+            guard let previous = lastSearchPattern, !previous.isEmpty
             else {
-                host?.vimShow(message: "E35: No previous regular expression")
+                show("E35: No previous regular expression")
                 return
             }
             substitution.pattern = previous
         }
 
+        // `\c` and `\C` mean the same in a substitution as in a search, and
+        // the `i` flag is the third way of asking for it.
+        let flagged = VimSearch.caseFlag(in: substitution.pattern)
+        substitution.pattern = flagged.pattern
         guard let regex = try? NSRegularExpression(
             pattern: substitution.pattern,
-            options: substitution.ignoreCase ? [.caseInsensitive] : []
+            options: (flagged.ignoreCase ?? substitution.ignoreCase) ? [.caseInsensitive] : []
         ) else {
-            host?.vimShow(message: "E486: Pattern not found: \(substitution.pattern)")
+            show("E486: Pattern not found: \(substitution.pattern)")
             return
         }
 
@@ -223,7 +226,7 @@ extension VimEngine {
         }
 
         guard !edits.isEmpty else {
-            host?.vimShow(message: "E486: Pattern not found: \(substitution.pattern)")
+            show("E486: Pattern not found: \(substitution.pattern)")
             return
         }
 
@@ -237,7 +240,7 @@ extension VimEngine {
         moveCaret(to: VimMotions.firstNonBlank(
             text, at: VimMotions.startOfLine(text, number: landing)
         ))
-        host?.vimShow(message: Self.substitutionReport(edits.count, lines: changedLines))
+        show(Self.substitutionReport(edits.count, lines: changedLines))
     }
 
     static func substitutionReport(_ count: Int, lines: Int) -> String {
@@ -329,13 +332,13 @@ extension VimEngine {
     private func moveLines(_ command: VimExCommand, copying: Bool) {
         guard let lines = exLines(command.range) else { return }
         guard let address = VimEx.address(command.argument), let target = exLine(address) else {
-            host?.vimShow(message: "E14: Invalid address")
+            show("E14: Invalid address")
             return
         }
         let total = VimMotions.lineCount(text)
         var destination = min(max(0, target), total)
         guard copying || !(destination >= lines.first && destination < lines.last) else {
-            host?.vimShow(message: "E134: Cannot move a range of lines into itself")
+            show("E134: Cannot move a range of lines into itself")
             return
         }
 
@@ -435,22 +438,65 @@ extension VimEngine {
     private func setOption(_ argument: String) {
         let option = argument.trimmingCharacters(in: .whitespaces)
         guard !option.isEmpty else {
-            host?.vimShow(message: cursorLine ? "cursorline" : "nocursorline")
+            show(Self.flags.values
+                .sorted { $0.name < $1.name }
+                .map { ($0.get(self) ? "" : "no") + $0.name }
+                .joined(separator: "  "))
             return
         }
-        switch option {
-        case "cursorline", "cul":
-            cursorLine = true
-        case "nocursorline", "nocul":
-            cursorLine = false
-        case "cursorline!", "cul!", "invcursorline":
-            cursorLine.toggle()
-        case "cursorline?", "cul?":
-            host?.vimShow(message: cursorLine ? "cursorline" : "nocursorline")
-        default:
-            host?.vimShow(message: "E518: Unknown option: \(option)")
+        // `set foo`, `set nofoo`, `set foo!` and `set foo?` for each of the
+        // flags there are. The vimrc will use the same table in stage four.
+        let name = option
+            .replacingOccurrences(of: "no", with: "", options: [.anchored])
+            .replacingOccurrences(of: "inv", with: "", options: [.anchored])
+            .trimmingCharacters(in: CharacterSet(charactersIn: "!?"))
+        let off = option.hasPrefix("no")
+        let toggled = option.hasPrefix("inv") || option.hasSuffix("!")
+        let asked = option.hasSuffix("?")
+
+        guard let flag = Self.flags[name] else {
+            show("E518: Unknown option: \(option)")
+            return
         }
+        if asked {
+            show((flag.get(self) ? "" : "no") + flag.name)
+            return
+        }
+        flag.set(self, toggled ? !flag.get(self) : !off)
+        // `nohlsearch` puts the highlights out now rather than at the next
+        // search, and a case flag re-lights what is really matching.
+        refreshSearchHighlights()
     }
+}
+
+// MARK: - Options
+
+extension VimEngine {
+    /// The `set` flags, under vim's names and its short forms.
+    struct Flag {
+        var name: String
+        var get: (VimEngine) -> Bool
+        var set: (VimEngine, Bool) -> Void
+    }
+
+    static let flags: [String: Flag] = {
+        let all = [
+            ("cursorline", ["cul"], \VimEngine.cursorLine),
+            ("hlsearch", ["hls"], \VimEngine.hlsearch),
+            ("ignorecase", ["ic"], \VimEngine.ignoreCase),
+            ("smartcase", ["scs"], \VimEngine.smartCase),
+        ]
+        var table: [String: Flag] = [:]
+        for (name, shorts, path) in all {
+            let flag = Flag(
+                name: name,
+                get: { engine in engine[keyPath: path] },
+                set: { engine, value in engine[keyPath: path] = value }
+            )
+            for key in [name] + shorts { table[key] = flag }
+        }
+        return table
+    }()
 }
 
 // MARK: - Sorting

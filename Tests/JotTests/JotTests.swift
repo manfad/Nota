@@ -171,6 +171,13 @@ final class JotTests: XCTestCase {
             ["System", "Serif", "Rounded", "Monospaced", "Other…"]
         )
 
+        // The gutter row carries both switches, numbers first.
+        let gutterRow = grid?.cell(atColumnIndex: 1, rowIndex: 4).contentView as? NSStackView
+        XCTAssertEqual(
+            gutterRow?.views.compactMap { ($0 as? NSButton)?.title },
+            ["Line numbers", "Gutter separator"]
+        )
+
         // Row labels, right-aligned in the first column.
         let labels = (0..<9).compactMap {
             (grid?.cell(atColumnIndex: 0, rowIndex: $0).contentView as? NSTextField)?.stringValue
@@ -882,6 +889,94 @@ final class JotTests: XCTestCase {
         XCTAssertFalse(footer.cursor.isHidden)
     }
 
+    // MARK: - The command pane
+
+    @MainActor
+    func testTheCommandPaneOverlaysTheEditorWithoutMovingIt() throws {
+        _ = NSApplication.shared
+        let directory = try makeTemporaryDirectory()
+        let controller = MainWindowController(store: SessionStore(directory: directory))
+        let window = try XCTUnwrap(controller.window)
+        let content = try XCTUnwrap(window.contentView)
+        content.layoutSubtreeIfNeeded()
+
+        let scrollView = try XCTUnwrap(descendant(of: content, ofType: NSScrollView.self))
+        let pane = try XCTUnwrap(descendant(of: content, ofType: VimCommandPane.self))
+        XCTAssertTrue(pane.isHidden, "nothing to show at rest")
+        let editorFrame = scrollView.frame
+
+        controller.vim.beginPrompt(":")
+        content.layoutSubtreeIfNeeded()
+        XCTAssertTrue(controller.commandPaneState.isVisible)
+        XCTAssertEqual(controller.commandPaneState.text, ":\u{258F}", "the prefix and a caret")
+        XCTAssertEqual(scrollView.frame, editorFrame, "the editor does not move for it")
+
+        // It lies over the bottom of the editor, under the footer.
+        let paneFrame = pane.convert(pane.bounds, to: content)
+        let editor = scrollView.convert(scrollView.bounds, to: content)
+        XCTAssertGreaterThanOrEqual(paneFrame.minY, editor.minY)
+        XCTAssertLessThanOrEqual(paneFrame.maxY, editor.maxY)
+        XCTAssertEqual(paneFrame.height, VimCommandPane.height)
+
+        controller.vim.cancelPrompt()
+        XCTAssertFalse(controller.commandPaneState.isVisible, "Escape collapses it")
+
+        // Zen takes the footer away; the pane goes to the window's own edge
+        // rather than with it.
+        controller.vim.beginPrompt(":")
+        controller.toggleZenMode()
+        content.layoutSubtreeIfNeeded()
+        XCTAssertTrue(controller.commandPaneState.isVisible, "`:` still works in zen mode")
+        XCTAssertEqual(pane.convert(pane.bounds, to: content).minY, 0, accuracy: 0.5)
+    }
+
+    @MainActor
+    func testTheCommandPaneDrawsPromptsAndMessagesDifferently() throws {
+        let pane = VimCommandPane(inset: 16)
+        XCTAssertTrue(pane.isHidden)
+
+        pane.showPrompt(":wq")
+        XCTAssertFalse(pane.isHidden)
+        XCTAssertEqual(pane.text, ":wq\u{258F}")
+        XCTAssertFalse(pane.isShowingMessage)
+
+        // The prompt's character is quieter than what was typed after it.
+        let label = try XCTUnwrap(descendant(of: pane, ofType: NSTextField.self))
+        let line = label.attributedStringValue
+        XCTAssertEqual(
+            line.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+            .secondaryLabelColor
+        )
+        XCTAssertEqual(
+            line.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor,
+            .labelColor
+        )
+
+        pane.showMessage("E486: Pattern not found: x")
+        XCTAssertTrue(pane.isShowingMessage)
+        XCTAssertEqual(pane.text, "E486: Pattern not found: x")
+        XCTAssertEqual(
+            label.attributedStringValue
+                .attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+            .secondaryLabelColor,
+            "a message is quiet all through"
+        )
+
+        pane.clear()
+        XCTAssertTrue(pane.isHidden)
+        XCTAssertFalse(pane.isShowingMessage)
+    }
+
+    /// The first view of a kind anywhere under another.
+    @MainActor
+    private func descendant<T: NSView>(of view: NSView, ofType type: T.Type) -> T? {
+        for subview in view.subviews {
+            if let match = subview as? T { return match }
+            if let match = descendant(of: subview, ofType: type) { return match }
+        }
+        return nil
+    }
+
     // MARK: - Zen mode
 
     @MainActor
@@ -917,6 +1012,94 @@ final class JotTests: XCTestCase {
         XCTAssertEqual(
             (window.contentViewController as? NSSplitViewController)?.splitViewItems.count, 2
         )
+    }
+
+    // MARK: - Sidebar utility row
+
+    @MainActor
+    func testSidebarUtilityRowSitsBelowTheThumbnails() throws {
+        _ = NSApplication.shared
+        let sidebar = ImageSidebarView(topInset: 8)
+        sidebar.frame = NSRect(x: 0, y: 0, width: ImageSidebarView.width, height: 400)
+        sidebar.layoutSubtreeIfNeeded()
+
+        let (row, gear, list) = sidebar.utilityRowViews
+
+        // Pinned to the bottom, full width, 28pt tall.
+        XCTAssertEqual(row.frame.minY, 0)
+        XCTAssertEqual(row.frame.height, ImageSidebarView.utilityRowHeight)
+        XCTAssertEqual(row.frame.width, sidebar.bounds.width)
+
+        // The gear sits inside the row, against its leading edge. AppKit pads
+        // a button's frame out past the rect it lays out, so the alignment
+        // rect is the one that has to land where it was asked to.
+        XCTAssertEqual(gear.superview, row)
+        let gearRect = gear.alignmentRect(forFrame: gear.frame)
+        XCTAssertEqual(gearRect.minX, 8)
+        XCTAssertTrue(row.bounds.contains(gearRect), "the gear must fit inside the row")
+        XCTAssertEqual(gearRect.midY, row.bounds.midY, accuracy: 0.5)
+
+        // The thumbnails stop where the row starts — nothing overlaps.
+        XCTAssertEqual(list.frame.minY, row.frame.maxY)
+        XCTAssertFalse(list.frame.intersects(row.frame))
+        XCTAssertEqual(list.frame.maxY, sidebar.bounds.maxY)
+
+        // Monochrome, labelled, and it opens Settings.
+        XCTAssertEqual(gear.toolTip, "Settings")
+        XCTAssertEqual(gear.accessibilityLabel(), "Settings")
+        XCTAssertEqual(gear.contentTintColor, .secondaryLabelColor)
+        XCTAssertFalse(gear.isBordered)
+        XCTAssertTrue(gear.image?.isTemplate ?? false)
+
+        var opened = 0
+        sidebar.onSettings = { opened += 1 }
+        gear.performClick(nil)
+        XCTAssertEqual(opened, 1)
+    }
+
+    // MARK: - Gutter separator
+
+    func testGutterSeparatorPreferenceRoundTrips() throws {
+        let suite = "JotTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults)
+
+        // Off until asked for, and it survives a fresh reader either way.
+        XCTAssertFalse(preferences.showsGutterSeparator)
+        preferences.showsGutterSeparator = true
+        XCTAssertTrue(Preferences(defaults: defaults).showsGutterSeparator)
+        preferences.showsGutterSeparator = false
+        XCTAssertFalse(Preferences(defaults: defaults).showsGutterSeparator)
+    }
+
+    @MainActor
+    func testGutterSeparatorHairlineHugsTheInnerEdge() throws {
+        _ = NSApplication.shared
+        let assets = AssetStore(directory: try makeTemporaryDirectory())
+        let textView = makeTextView(assets: assets)
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        scrollView.documentView = textView
+        let ruler = LineNumberRulerView(scrollView: scrollView, textView: textView)
+        scrollView.verticalRulerView = ruler
+        scrollView.hasVerticalRuler = true
+        scrollView.rulersVisible = true
+        scrollView.tile()
+
+        // Off is the default, and off draws nothing at all.
+        XCTAssertFalse(ruler.showsSeparator)
+        XCTAssertNil(ruler.separatorRect)
+
+        ruler.showsSeparator = true
+        let hairline = try XCTUnwrap(ruler.separatorRect)
+        // One device pixel wide, hard against the text, full height.
+        XCTAssertEqual(hairline.width, 1 / (ruler.window?.backingScaleFactor ?? 1))
+        XCTAssertGreaterThan(hairline.width, 0)
+        XCTAssertLessThanOrEqual(hairline.width, 1)
+        XCTAssertEqual(hairline.maxX, ruler.bounds.maxX)
+        XCTAssertEqual(hairline.minY, ruler.bounds.minY)
+        XCTAssertEqual(hairline.height, ruler.bounds.height)
+        XCTAssertGreaterThan(hairline.height, 0)
     }
 
     // MARK: - Helpers

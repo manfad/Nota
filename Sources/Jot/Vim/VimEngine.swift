@@ -24,9 +24,9 @@ protocol VimEngineHost: AnyObject {
     /// `:help`, `:reg`, `:marks`: a read-only tab, reused when one of that
     /// name is already open.
     func vimOpenScratchTab(title: String, text: String)
-    /// `/`, `?`, `n`, `N`, `*`, `#` and `:noh` — the native find bar does the
-    /// searching, so all the engine does is drive it.
-    func vimFind(_ action: VimFindAction)
+    /// Takes the last message off the command pane. The next key does this,
+    /// which is how long a message stays up.
+    func vimClearMessage()
 }
 
 /// Vim's normal-mode state machine, driving a real `NSTextView`.
@@ -54,7 +54,9 @@ final class VimEngine {
             } else {
                 visual = nil
                 prompt = nil
+                searchSession = nil
                 host?.vimCommandLineChanged(nil)
+                textView?.clearSearchHighlights()
                 mode = .insert          // the caret goes back to a bar
                 resetPending()
                 applyCursorStyle()
@@ -137,14 +139,27 @@ final class VimEngine {
 
     /// Which way `n` goes: `/` sets it forward, `?` backward.
     var searchIsForward = true
-    /// The last thing `*`, `#` or `:s` looked for — what an empty `:s//new/`
-    /// pattern falls back to.
+    /// The last thing `/`, `*`, `#` or `:s` looked for — what `n` repeats and
+    /// what an empty `:s//new/` pattern falls back to.
     var lastSearchPattern: String?
     /// What a bare `:s` runs again.
     var lastSubstitution: VimSubstitution?
-    /// Where `*` and `#` hand the word to the find bar. The tests swap in a
-    /// private board so a run never disturbs the real one.
-    var findPasteboard: NSPasteboard = .init(name: .find)
+    /// What a search prompt has to put back if it is cancelled.
+    var searchSession: VimSearchSession?
+
+    /// `'hlsearch'`: every match of the current search wears a quiet band.
+    /// On by default until the vimrc has a say.
+    var hlsearch = true
+    /// Whether the highlights are up. `:noh` puts them down without
+    /// forgetting the pattern; the next search brings them back.
+    var searchHighlightsVisible = false
+    /// `'ignorecase'` and `'smartcase'`, both off, as vim ships them.
+    var ignoreCase = false
+    var smartCase = false
+
+    /// True while the pane is holding a message, so the next key can take it
+    /// away again.
+    var isShowingMessage = false
 
     // MARK: - Recording state
 
@@ -274,7 +289,12 @@ final class VimEngine {
     @discardableResult
     func handle(_ key: VimKey) -> Bool {
         guard isEnabled else { return false }
-        collapseFoundSelection(before: key)
+        // A message stays up until the next key, whatever that key turns out
+        // to be — including one that puts a new message there.
+        if isShowingMessage {
+            isShowingMessage = false
+            host?.vimClearMessage()
+        }
         let wasRecording = recordingRegister
         let handled = dispatch(key)
         noteRecordedKey(key, wasRecording: wasRecording)
@@ -841,9 +861,16 @@ final class VimEngine {
     /// words, since it is vim's own rule.
     static let notModifiableMessage = "E21: Cannot make changes, 'modifiable' is off"
 
+    /// Everything the engine says goes through here, so the pane knows it is
+    /// holding a message and the next key can take it away.
+    func show(_ message: String) {
+        isShowingMessage = true
+        host?.vimShow(message: message)
+    }
+
     /// Once per command, not once per edit inside it.
     func refuseChange() {
-        host?.vimShow(message: Self.notModifiableMessage)
+        show(Self.notModifiableMessage)
         resetPending()
         discardCommandKeys()
     }

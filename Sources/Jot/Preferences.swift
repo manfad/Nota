@@ -100,6 +100,7 @@ final class Preferences {
         static let lineSpacing = "lineSpacing"
         static let padding = "editorPadding"
         static let lineNumbers = "showsLineNumbers"
+        static let gutterSeparator = "showsGutterSeparator"
         static let sidebarSide = "sidebarSide"
         static let vimMode = "vimMode"
         static let footerWords = "footerShowsWords"
@@ -182,6 +183,17 @@ final class Preferences {
         set {
             guard newValue != showsLineNumbers else { return }
             defaults.set(newValue, forKey: Key.lineNumbers)
+            announce()
+        }
+    }
+
+    /// A hairline down the gutter's inner edge. Off: the bare gutter is the
+    /// quieter default, and the numbers already mark the margin.
+    var showsGutterSeparator: Bool {
+        get { defaults.object(forKey: Key.gutterSeparator) as? Bool ?? false }
+        set {
+            guard newValue != showsGutterSeparator else { return }
+            defaults.set(newValue, forKey: Key.gutterSeparator)
             announce()
         }
     }

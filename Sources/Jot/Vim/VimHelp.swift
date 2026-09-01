@@ -36,7 +36,7 @@ enum VimHelp {
             Entry("o O", "open a line below or above"),
             Entry("R", "replace mode"),
             Entry("v V", "visual by characters, by lines"),
-            Entry(":", "the command line, in the footer"),
+            Entry(":", "the command pane, above the footer"),
             Entry("⌘…", "every menu shortcut works in every mode"),
         ]),
         Section("Motions", [
@@ -107,10 +107,13 @@ enum VimHelp {
             Entry("⌃T ⌃D", "indent, dedent this line"),
         ]),
         Section("Searching", [
-            Entry("/ ?", "open the find bar; ? searches backward"),
+            Entry("/pattern  ?pattern", "search on, search back — the regex `:s` uses"),
             Entry("n N", "the next match, the one the other way"),
-            Entry("* #", "search for the word under the caret"),
-            Entry(":noh", "put the find bar away"),
+            Entry("* #", "the whole word under the caret, on or back"),
+            Entry("d/foo", "a search is a motion, so the operators take one"),
+            Entry("\\c \\C", "ignore case in this pattern, or do not"),
+            Entry(":noh", "put the highlights down until the next search"),
+            Entry("⌘F ⌘G", "the native find bar, in every mode"),
         ]),
         Section("Tabs", [
             Entry("gt gT", "the next tab, the previous one"),
@@ -130,6 +133,7 @@ enum VimHelp {
             Entry(":sort [!iun]", "sort; ! reverses, i any case, u unique, n numeric"),
             Entry(":> :<", "indent, dedent; :>> shifts twice"),
             Entry(":set cursorline", "a quiet band under the caret's line"),
+            Entry(":set hlsearch ignorecase smartcase", "and the search's own flags"),
             Entry(":help :reg :marks", "these tables, in a read-only tab"),
         ]),
         Section("Ranges", [
