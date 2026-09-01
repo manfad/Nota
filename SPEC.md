@@ -5,8 +5,12 @@
 ## Model
 - **Tabs are the notes.** An open tab is the unit; the cache dir is the truth until ⌘S.
   Closed tabs are gone (after the Save / Don't Save / Cancel prompt; Don't Save = ⌘D).
-- Files are plain text. Editing a named file only updates the cache; disk changes on ⌘S only.
-- ⌘S default: `.md`, opens in the last-used folder.
+- Files are plain text of any kind — .md .txt .xml .json .css .js .html .yaml .toml .csv .log .ini .sh .py .swift and
+  anything else that is text (Notepad++ model). Jot registers as an editor for text/source types (Finder "Open With",
+  drag onto the Dock icon, drop onto the window). No syntax highlighting. Not .docx / .rtf / binaries.
+- Editing a named file only updates the cache; disk changes on ⌘S only. A named file keeps its extension, encoding
+  (UTF-8 / UTF-16 / Latin-1 / Windows-1252 detected on open) and line endings (LF / CRLF) on save.
+- ⌘S default for a new note: `.md`, opens in the last-used folder; any extension typed in the panel is kept.
 - Window close = hide (app stays alive). Quit never prompts; everything restores.
 - Search: ⌘F native find bar (in note); ⇧⌘F across all open tabs. In vim mode `/` `?` are vim's own search, typed in the
   command pane (see Vim mode); `n` `N` `*` `#` repeat it; `:noh` clears highlights. ⌘F stays native in every mode.
