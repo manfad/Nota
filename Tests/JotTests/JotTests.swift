@@ -504,6 +504,26 @@ final class JotTests: XCTestCase {
         XCTAssertEqual(NoteText.serialize(rendered), text)
     }
 
+    func testABlockCaretLightsTheChipItSitsOn() {
+        let chips = [4, 5, 9]
+        func resolve(_ location: Int, block: Bool) -> Set<Int> {
+            ChipHighlight.resolve(
+                clickedChipLocation: nil, selection: NSRange(location: location, length: 0),
+                chipLocations: chips, caretIsBlock: block
+            )
+        }
+        // Normal mode: the block on the chip is the chip.
+        XCTAssertEqual(resolve(4, block: true), [0])
+        XCTAssertEqual(resolve(5, block: true), [1])
+        XCTAssertEqual(resolve(9, block: true), [2])
+        // Just past a chip is not on it any more.
+        XCTAssertEqual(resolve(6, block: true), [])
+        XCTAssertEqual(resolve(10, block: true), [])
+        // Insert mode is unchanged: the chip before the bar.
+        XCTAssertEqual(resolve(5, block: false), [0])
+        XCTAssertEqual(resolve(4, block: false), [])
+    }
+
     func testAdjacentChipsLightOnlyOneThumbnail() {
         // Two chips side by side at 4 and 5, a third further along.
         let chips = [4, 5, 9]

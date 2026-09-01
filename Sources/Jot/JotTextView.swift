@@ -255,8 +255,10 @@ final class JotTextView: NSTextView {
             return
         }
         // Caret goes just after the chip, which is also what makes the
-        // sidebar's caret-adjacent highlight agree with the selection.
-        setSelectedRange(NSRange(location: index + 1, length: 0))
+        // sidebar's caret-adjacent highlight agree with the selection — or,
+        // when vim's block caret is up, onto the chip, where the block sits.
+        let location = vimCursorStyle == .bar ? index + 1 : index
+        setSelectedRange(NSRange(location: location, length: 0))
         onChipClick?(index)
     }
 

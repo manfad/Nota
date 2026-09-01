@@ -1441,7 +1441,8 @@ extension MainWindowController {
         let highlighted = ChipHighlight.resolve(
             clickedChipLocation: clickedChipLocation,
             selection: textView.selectedRange(),
-            chipLocations: chipLocations()
+            chipLocations: chipLocations(),
+            caretIsBlock: textView.vimCursorStyle != .bar
         )
         imageSidebar.setHighlighted(highlighted)
         if let first = highlighted.min() { imageSidebar.scrollItemToVisible(first) }
