@@ -14,6 +14,7 @@ final class MainWindowController: NSWindowController {
         static let textPadding: CGFloat = 20
         static let textPaddingVertical: CGFloat = 14
         static let statusInset: CGFloat = 16
+        static let editorTrailingGap: CGFloat = 4
         static let statusBarHeight: CGFloat = 26
         /// Keeps zen-mode text clear of the traffic-light zone.
         static let zenTopInset: CGFloat = 28
@@ -66,8 +67,6 @@ final class MainWindowController: NSWindowController {
     private var tabBarTrailingToSearch: NSLayoutConstraint?
 
     private let statusLabel = NSTextField(labelWithString: "")
-    private let pointSizeLabel = NSTextField(labelWithString: "")
-    private let gearButton = NSButton()
 
     /// Keeps the storage currently shown by the text view alive even before
     /// any note is installed.
@@ -176,28 +175,14 @@ final class MainWindowController: NSWindowController {
         separator.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(separator)
 
-        for label in [statusLabel, pointSizeLabel] {
-            label.translatesAutoresizingMaskIntoConstraints = false
-            label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-            label.textColor = .secondaryLabelColor
-            content.addSubview(label)
-        }
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        statusLabel.textColor = .secondaryLabelColor
+        content.addSubview(statusLabel)
 
         zenDragRegion.translatesAutoresizingMaskIntoConstraints = false
         zenDragRegion.isHidden = true
         content.addSubview(zenDragRegion)
-
-        let gearConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
-        gearButton.translatesAutoresizingMaskIntoConstraints = false
-        gearButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")?
-            .withSymbolConfiguration(gearConfig)
-        gearButton.isBordered = false
-        gearButton.bezelStyle = .inline
-        gearButton.imagePosition = .imageOnly
-        gearButton.contentTintColor = .secondaryLabelColor
-        gearButton.target = self
-        gearButton.action = #selector(openSettings)
-        content.addSubview(gearButton)
 
         NSLayoutConstraint.activate([
             background.topAnchor.constraint(equalTo: content.topAnchor),
@@ -228,17 +213,8 @@ final class MainWindowController: NSWindowController {
                                                  constant: Layout.statusInset),
             statusLabel.centerYAnchor.constraint(equalTo: separator.bottomAnchor,
                                                  constant: Layout.statusBarHeight / 2),
-            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: pointSizeLabel.leadingAnchor,
-                                                  constant: -8),
-
-            pointSizeLabel.trailingAnchor.constraint(equalTo: gearButton.leadingAnchor,
-                                                     constant: -8),
-            pointSizeLabel.centerYAnchor.constraint(equalTo: gearButton.centerYAnchor),
-
-            gearButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
-            gearButton.centerYAnchor.constraint(equalTo: statusLabel.centerYAnchor),
-            gearButton.widthAnchor.constraint(equalToConstant: 18),
-            gearButton.heightAnchor.constraint(equalToConstant: 18),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor,
+                                                  constant: -Layout.statusInset),
         ])
 
         tabBarTrailingToEdge = tabBar.trailingAnchor.constraint(
@@ -254,11 +230,10 @@ final class MainWindowController: NSWindowController {
         )
         tabBarLeading?.isActive = true
 
-        // The text view's own inset is symmetric, so the right margin is made
-        // up here instead: the gutter eats the left inset, and this pulls the
-        // same amount back off the trailing edge.
+        // A small breathing gap so the scroller never touches the pane edge
+        // (or the sidebar divider).
         editorTrailing = scrollView.trailingAnchor.constraint(
-            equalTo: content.trailingAnchor
+            equalTo: content.trailingAnchor, constant: -Layout.editorTrailingGap
         )
         editorTrailing?.isActive = true
 
@@ -376,27 +351,16 @@ final class MainWindowController: NSWindowController {
         applyEditorInsets()
     }
 
-    /// With the gutter on, the text sits just clear of it rather than a full
-    /// padding further right again.
+    /// Symmetric, so both margins match the padding setting and the scroll
+    /// view stays flush with the pane (and the scroller with the sidebar).
     private var horizontalTextInset: CGFloat {
-        if isZenMode { return Layout.zenTextPadding }
-        return preferences.showsLineNumbers ? 8 : preferences.padding.inset
-    }
-
-    /// How much to pull the editor off the pane's trailing edge so the right
-    /// margin still matches the padding setting once the gutter has claimed
-    /// the left inset.
-    private var trailingMarginMakeUp: CGFloat {
-        // Zen has no gutter, so its padding is already symmetric.
-        if isZenMode { return 0 }
-        return preferences.showsLineNumbers ? max(0, preferences.padding.inset - 8) : 0
+        isZenMode ? Layout.zenTextPadding : preferences.padding.inset
     }
 
     private func applyEditorInsets() {
         textView.textContainerInset = NSSize(
             width: horizontalTextInset, height: Layout.textPaddingVertical
         )
-        editorTrailing?.constant = -trailingMarginMakeUp
     }
 
     fileprivate func applyLineNumberVisibility() {
@@ -538,7 +502,6 @@ final class MainWindowController: NSWindowController {
 
     private func updateStatus() {
         statusLabel.stringValue = TextStats.counts(currentNote?.countableText ?? "")
-        pointSizeLabel.stringValue = TextStats.pointSize(Int(fontSize.rounded()))
     }
 
     func selectTab(at index: Int) {
@@ -794,7 +757,7 @@ extension MainWindowController {
         isZenMode = enabled
 
         let chrome: [NSView] = [
-            tabBar, statusSeparator, statusLabel, pointSizeLabel, gearButton,
+            tabBar, statusSeparator, statusLabel,
         ]
 
         editorTopToTabBar?.isActive = !enabled

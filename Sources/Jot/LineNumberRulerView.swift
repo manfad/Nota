@@ -75,6 +75,9 @@ final class LineNumberRulerView: NSRulerView {
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
+        // macOS 14 stopped clipping views to their bounds by default, so the
+        // ruler must clip itself or its numbers leak into the footer.
+        clipsToBounds = true
         NSColor.textBackgroundColor.setFill()
         bounds.fill()
 
@@ -88,6 +91,12 @@ final class LineNumberRulerView: NSRulerView {
         let offset = convert(NSPoint.zero, from: textView).y + origin.y
 
         let visible = scrollView?.contentView.bounds ?? .zero
+        // Never draw a number outside the band the clip view actually shows;
+        // `glyphRange(forBoundingRect:)` also returns fragments that merely
+        // intersect it, whose numbers would otherwise land on the footer.
+        if let clipView = scrollView?.contentView {
+            NSBezierPath(rect: convert(clipView.bounds, from: clipView).intersection(bounds)).addClip()
+        }
         let visibleGlyphs = layoutManager.glyphRange(forBoundingRect: visible, in: container)
         let visibleChars = layoutManager.characterRange(
             forGlyphRange: visibleGlyphs, actualGlyphRange: nil
