@@ -441,22 +441,50 @@ final class MainWindowController: NSWindowController {
 
     // MARK: - Text attributes
 
+    /// The settings' attributes, with the right margin pushed in when the
+    /// gutter has pulled the left one out (see `horizontalTextInset`).
     private var defaultAttributes: [NSAttributedString.Key: Any] {
-        preferences.textAttributes()
+        var attributes = preferences.textAttributes()
+        let extra = trailingTextInsetExtra
+        if extra > 0,
+           let style = (attributes[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy()
+               as? NSMutableParagraphStyle {
+            // A negative tail indent is measured from the trailing edge.
+            style.tailIndent = -extra
+            attributes[.paragraphStyle] = style
+        }
+        return attributes
     }
 
     private func applyTextAttributes() {
         textView.font = preferences.font()
         textView.textColor = .textColor
-        textView.defaultParagraphStyle = preferences.paragraphStyle()
+        textView.defaultParagraphStyle = defaultAttributes[.paragraphStyle] as? NSParagraphStyle
         textView.typingAttributes = defaultAttributes
         applyEditorInsets()
     }
 
-    /// Symmetric, so both margins match the padding setting and the scroll
-    /// view stays flush with the pane (and the scroller with the sidebar).
-    private var horizontalTextInset: CGFloat {
-        isZenMode ? Layout.zenTextPadding : preferences.padding.inset
+    /// With the gutter showing, the text sits this far off it — the numbers
+    /// already keep 6pt of air on their side, so the two together read as one
+    /// margin rather than the gutter plus a whole second padding.
+    static let gutterTextGap: CGFloat = 8
+
+    var isGutterVisible: Bool { preferences.showsLineNumbers && !isZenMode }
+
+    /// The container inset is symmetric, so this is the left margin; when the
+    /// gutter pulls it in, the right margin is kept at the setting through the
+    /// paragraph style instead (`trailingTextInsetExtra`).
+    var horizontalTextInset: CGFloat {
+        if isZenMode { return Layout.zenTextPadding }
+        return isGutterVisible ? Self.gutterTextGap : preferences.padding.inset
+    }
+
+    /// What the editor is typing with, for the tests.
+    var editorParagraphStyle: NSParagraphStyle? { textView.defaultParagraphStyle }
+
+    /// How much further in the right margin sits than the left.
+    var trailingTextInsetExtra: CGFloat {
+        isGutterVisible ? max(0, preferences.padding.inset - Self.gutterTextGap) : 0
     }
 
     private func applyEditorInsets() {
@@ -1027,8 +1055,9 @@ extension MainWindowController {
 
         if enabled, !searchField.isHidden { endSearchAllNotes() }
 
-        applyLineNumberVisibility()
-        applyTextAttributes()
+        // The gutter comes and goes with zen, and the margins with it — every
+        // tab's paragraph style carries the right margin, so restyle them all.
+        preferencesChanged()
 
         if enabled {
             sidebarItem?.animator().isCollapsed = true

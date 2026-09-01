@@ -1059,6 +1059,41 @@ final class JotTests: XCTestCase {
 
     // MARK: - Gutter separator
 
+    func testTextSitsCloserToTheGutterWhileTheRightMarginKeepsTheSetting() throws {
+        _ = NSApplication.shared
+        let previousNumbers = Preferences.shared.showsLineNumbers
+        let previousPadding = Preferences.shared.padding
+        defer {
+            Preferences.shared.showsLineNumbers = previousNumbers
+            Preferences.shared.padding = previousPadding
+        }
+        Preferences.shared.padding = .normal
+        Preferences.shared.showsLineNumbers = true
+
+        let directory = try makeTemporaryDirectory()
+        let controller = MainWindowController(store: SessionStore(directory: directory))
+        _ = controller.window
+
+        // Gutter on: 8pt off the numbers on the left, the setting on the right.
+        XCTAssertTrue(controller.isGutterVisible)
+        XCTAssertEqual(controller.horizontalTextInset, MainWindowController.gutterTextGap)
+        XCTAssertEqual(
+            controller.trailingTextInsetExtra,
+            EditorPaddingOption.normal.inset - MainWindowController.gutterTextGap
+        )
+        XCTAssertEqual(
+            controller.editorParagraphStyle?.tailIndent,
+            -(EditorPaddingOption.normal.inset - MainWindowController.gutterTextGap)
+        )
+
+        // Gutter off: the plain symmetric padding, and no tail indent at all.
+        Preferences.shared.showsLineNumbers = false
+        XCTAssertFalse(controller.isGutterVisible)
+        XCTAssertEqual(controller.horizontalTextInset, EditorPaddingOption.normal.inset)
+        XCTAssertEqual(controller.trailingTextInsetExtra, 0)
+        XCTAssertEqual(controller.editorParagraphStyle?.tailIndent, 0)
+    }
+
     func testGutterSeparatorPreferenceRoundTrips() throws {
         let suite = "JotTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
