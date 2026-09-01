@@ -1,5 +1,49 @@
 import AppKit
 
+/// Everything that takes a motion, a text object or a doubled key and then
+/// acts on the range it names.
+enum VimOperator: Equatable {
+    case delete, change, yank
+    case indent, dedent, reindent
+    case toggleCase, lowercase, uppercase
+
+    /// The key that doubles the operator into its whole-line form: `dd`,
+    /// `>>`, `guu`, `g~~`.
+    var doubledKey: Character {
+        switch self {
+        case .delete: "d"
+        case .change: "c"
+        case .yank: "y"
+        case .indent: ">"
+        case .dedent: "<"
+        case .reindent: "="
+        case .toggleCase: "~"
+        case .lowercase: "u"
+        case .uppercase: "U"
+        }
+    }
+
+    /// What showcmd puts beside the badge while the operator waits.
+    var keys: String {
+        switch self {
+        case .delete: "d"
+        case .change: "c"
+        case .yank: "y"
+        case .indent: ">"
+        case .dedent: "<"
+        case .reindent: "="
+        case .toggleCase: "g~"
+        case .lowercase: "gu"
+        case .uppercase: "gU"
+        }
+    }
+
+    /// `>`, `<` and `=` take whole lines whatever motion named the range.
+    var isAlwaysLinewise: Bool {
+        self == .indent || self == .dedent || self == .reindent
+    }
+}
+
 /// The edits themselves, and the handful of commands that need to know what
 /// is on screen.
 ///
@@ -11,12 +55,22 @@ extension VimEngine {
 
     enum ScreenPosition { case top, centre, bottom }
 
+    /// How case is bent: `g~`, `gu`, `gU` and their visual-mode twins.
+    enum CaseChange { case toggle, lower, upper }
+
     // MARK: - Yank and put
 
     /// Writes a range to the unnamed register — that is, the system
-    /// pasteboard — without disturbing where the caret was.
-    func yank(range: NSRange, linewise: Bool) {
+    /// pasteboard — without disturbing where the caret was, and to whichever
+    /// named register the command asked for.
+    ///
+    /// Vim fills the unnamed register even when a register was named, so the
+    /// pasteboard is written either way; only the black hole `"_` stops it.
+    func yank(
+        range: NSRange, linewise: Bool, register: Character? = nil, isDelete: Bool = false
+    ) {
         guard let textView, range.length > 0 else { return }
+        guard register != VimRegisters.blackHole else { return }
         let previous = textView.selectedRange()
         textView.setSelectedRange(range)
 
@@ -26,16 +80,36 @@ extension VimEngine {
         board.declareTypes(types, owner: nil)
         for type in types { _ = textView.writeSelection(to: board, type: type) }
 
-        registers.noteUnnamedWrite(
-            text: board.string(forType: .jotNote) ?? "", isLinewise: linewise
-        )
+        let plain = board.string(forType: .jotNote) ?? text.substring(with: range)
+        registers.noteUnnamedWrite(text: plain, isLinewise: linewise)
+
+        let entry = VimRegisters.Entry(text: plain, isLinewise: linewise)
+        let stored = VimRegisters.isPasteboard(register ?? " ") ? nil : register
+        if isDelete {
+            // A delete of less than a line is "small" and goes to `"-`;
+            // anything bigger shifts the `"1`–`"9` ring along.
+            registers.recordDelete(entry, register: stored, small: !linewise && !plain.contains("\n"))
+        } else {
+            registers.recordYank(entry, register: stored)
+        }
         textView.setSelectedRange(previous)
     }
 
     /// `p` and `P`. Whether the register is linewise decides everything about
     /// where the text lands.
-    func put(after: Bool, count: Int) {
+    ///
+    /// With no register named — and with `"+` or `"*`, which are the same
+    /// place — the text comes back through the text view's own paste path, so
+    /// an image put from the pasteboard is still an image. A named register
+    /// holds plain text and is inserted directly.
+    func put(after: Bool, count: Int, register: Character? = nil) {
         guard textView != nil else { return }
+        if let register, !VimRegisters.isPasteboard(register) {
+            guard let entry = registers.read(register), !entry.text.isEmpty else { return }
+            edit { putEntry(entry, after: after, count: count) }
+            clampCaret()
+            return
+        }
         let linewise = registers.isUnnamedLinewise(
             current: pasteboard.string(forType: .jotNote)
         )
@@ -47,6 +121,36 @@ extension VimEngine {
             }
         }
         clampCaret()
+    }
+
+    /// A named register's plain text, put the way its linewise flag asks.
+    private func putEntry(_ entry: VimRegisters.Entry, after: Bool, count: Int) {
+        let repeated = String(repeating: entry.text, count: max(1, count))
+        if entry.isLinewise {
+            var body = repeated
+            if !body.hasSuffix("\n") { body += "\n" }
+            var insertion: Int
+            if after {
+                let end = VimMotions.lineEnd(text, at: caret)
+                if end < text.length {
+                    insertion = end + 1
+                } else {
+                    replace(range: NSRange(location: text.length, length: 0), with: "\n")
+                    insertion = text.length
+                }
+            } else {
+                insertion = VimMotions.lineStart(text, at: caret)
+            }
+            replace(range: NSRange(location: insertion, length: 0), with: body)
+            moveCaret(to: VimMotions.firstNonBlank(text, at: insertion))
+        } else {
+            let insertion = after
+                ? VimMotions.nextIndexOnLine(text, from: caret)
+                : caret
+            replace(range: NSRange(location: insertion, length: 0), with: repeated)
+            let end = insertion + (repeated as NSString).length
+            moveCaret(to: VimMotions.previousIndexOnLine(text, from: end))
+        }
     }
 
     private func putCharwise(after: Bool, count: Int) {
@@ -105,7 +209,7 @@ extension VimEngine {
     // MARK: - Deleting characters
 
     /// `x` and `X`.
-    func deleteCharacters(count: Int, forward: Bool) {
+    func deleteCharacters(count: Int, forward: Bool, register: Character? = nil) {
         let start = caret
         if forward {
             let lineEnd = VimMotions.lineEnd(text, at: start)
@@ -115,7 +219,7 @@ extension VimEngine {
             }
             guard end > start else { return }
             let range = NSRange(location: start, length: end - start)
-            yank(range: range, linewise: false)
+            yank(range: range, linewise: false, register: register, isDelete: true)
             edit { replace(range: range, with: "") }
         } else {
             let lineStart = VimMotions.lineStart(text, at: start)
@@ -125,7 +229,7 @@ extension VimEngine {
             }
             guard begin < start else { return }
             let range = NSRange(location: begin, length: start - begin)
-            yank(range: range, linewise: false)
+            yank(range: range, linewise: false, register: register, isDelete: true)
             edit { replace(range: range, with: "") }
             moveCaret(to: begin)
         }
@@ -207,6 +311,138 @@ extension VimEngine {
 
     private func currentIndentWidth(at lineStart: Int) -> Int {
         indentRange(at: lineStart).length
+    }
+
+    // MARK: - Indenting whole lines
+
+    /// `>`, `<`, `>>`, `<<`. Vim indents by whole lines whatever the motion
+    /// was, and leaves the caret on the first non-blank of the first one.
+    func shiftLines(in range: NSRange, by direction: Int) {
+        let span = lineSpan(from: range.location, to: max(range.location, NSMaxRange(range) - 1))
+        edit {
+            forEachLine(in: span) { start in
+                let existing = indentRange(at: start)
+                // A blank line has no indent to give or take.
+                guard VimMotions.lineEnd(text, at: start) > start else { return }
+                let target = max(0, existing.length + direction * shiftWidth)
+                replace(range: existing, with: String(repeating: " ", count: target))
+            }
+        }
+        moveCaret(to: VimMotions.firstNonBlank(text, at: span.location))
+    }
+
+    /// `=`, `==`.
+    ///
+    /// A note is prose, not code, so there is no language to indent by. What
+    /// `=` does here is the one useful thing left: every line in the range
+    /// takes the indent of the last non-blank line above the range, which is
+    /// what "line this back up with what it belongs under" means in a plain
+    /// text file. With nothing above it, the lines go to column zero.
+    func reindentLines(in range: NSRange) {
+        let span = lineSpan(from: range.location, to: max(range.location, NSMaxRange(range) - 1))
+        let indent = indentWidthAboveLine(at: span.location)
+        edit {
+            forEachLine(in: span) { start in
+                guard VimMotions.lineEnd(text, at: start) > start else { return }
+                replace(range: indentRange(at: start), with: String(repeating: " ", count: indent))
+            }
+        }
+        moveCaret(to: VimMotions.firstNonBlank(text, at: span.location))
+    }
+
+    /// The indent of the nearest non-blank line above one, or zero.
+    private func indentWidthAboveLine(at location: Int) -> Int {
+        var start = VimMotions.lineStart(text, at: location)
+        while start > 0 {
+            start = VimMotions.lineStart(text, at: start - 1)
+            guard VimMotions.lineEnd(text, at: start) > start else { continue }
+            return indentRange(at: start).length
+        }
+        return 0
+    }
+
+    /// Walks the line starts of a span from the bottom up, so replacing one
+    /// line's indent never moves the next one out from under the walk.
+    private func forEachLine(in span: NSRange, _ body: (Int) -> Void) {
+        var starts: [Int] = []
+        var index = VimMotions.lineStart(text, at: span.location)
+        let limit = max(span.location, NSMaxRange(span) - 1)
+        while index <= limit {
+            starts.append(index)
+            let end = VimMotions.lineEnd(text, at: index)
+            guard end < text.length else { break }
+            index = end + 1
+        }
+        for start in starts.reversed() { body(start) }
+    }
+
+    // MARK: - Case
+
+    /// The body of `g~`, `gu`, `gU` and their visual forms.
+    func transformCase(in range: NSRange, using op: VimOperator) {
+        guard range.length > 0 else { return }
+        let original = text.substring(with: range)
+        let changed: String
+        switch op {
+        case .lowercase: changed = original.lowercased()
+        case .uppercase: changed = original.uppercased()
+        default:
+            changed = String(original.map { character in
+                character.isUppercase
+                    ? Character(character.lowercased())
+                    : (character.isLowercase ? Character(character.uppercased()) : character)
+            })
+        }
+        guard changed != original else { return }
+        edit { replace(range: range, with: changed) }
+    }
+
+    /// `~` on its own: flip the character under the caret and step over it.
+    func toggleCaseUnderCaret(count: Int) {
+        let start = caret
+        let lineEnd = VimMotions.lineEnd(text, at: start)
+        var end = start
+        for _ in 0..<count where end < lineEnd {
+            end = VimMotions.nextIndex(text, after: end)
+        }
+        guard end > start else { return }
+        let range = NSRange(location: start, length: end - start)
+        transformCase(in: range, using: .toggleCase)
+        moveCaret(to: min(end, VimMotions.lineEnd(text, at: start)))
+        clampCaret()
+    }
+
+    // MARK: - Joining
+
+    /// `J`: `count` lines become one, with a single space where each break
+    /// was — none at all when the next line starts with `)`, and none added
+    /// when the line already ends in a space.
+    func joinLines(count: Int) {
+        let joins = max(1, count - 1)
+        var caretAfter = caret
+        edit {
+            for _ in 0..<joins {
+                let end = VimMotions.lineEnd(text, at: caretAfter)
+                guard end < text.length else { break }
+                var start = end
+                while start > VimMotions.lineStart(text, at: end),
+                      VimMotions.isBlank(text.character(at: start - 1)) {
+                    start -= 1
+                }
+                var next = end + 1
+                let nextEnd = VimMotions.lineEnd(text, at: next)
+                while next < nextEnd, VimMotions.isBlank(text.character(at: next)) { next += 1 }
+
+                let separator = (next < text.length && text.character(at: next) == 0x29)
+                    || start == VimMotions.lineStart(text, at: end)
+                    ? "" : " "
+                replace(range: NSRange(location: start, length: next - start), with: separator)
+                caretAfter = start + (separator as NSString).length - (separator.isEmpty ? 0 : 1)
+                caretAfter = max(VimMotions.lineStart(text, at: start), caretAfter)
+            }
+        }
+        moveCaret(to: caretAfter)
+        clampCaret()
     }
 
     // MARK: - Undo

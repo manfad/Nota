@@ -32,6 +32,7 @@ final class VimEngine {
             if isEnabled {
                 enterNormalMode()
             } else {
+                visual = nil
                 mode = .insert          // the caret goes back to a bar
                 resetPending()
                 applyCursorStyle()
@@ -48,8 +49,9 @@ final class VimEngine {
     }
 
     let registers = VimRegisters()
+    var marks = VimMarks()
 
-    /// How far `>>`, `⌃T` and `⌃D` shift. The vimrc can change it.
+    /// How far `>>`, `<<`, `⌃T` and `⌃D` shift. The vimrc can change it.
     var shiftWidth = 4
 
     /// The unnamed register. The general pasteboard in the app; the tests
@@ -62,45 +64,93 @@ final class VimEngine {
 
     // MARK: - Pending state
 
-    private var pendingCount: Int?
-    private var pendingOperator: Character?
-    private var operatorCount: Int?
+    var pendingCount: Int?
+    var pendingOperator: VimOperator?
+    var operatorCount: Int?
+    /// `"a` in front of a command.
+    var pendingRegister: Character?
     /// `g` and `z` wait for a second key.
-    private var pendingPrefix: Character?
-    /// `f`, `F`, `t`, `T` and `r` wait for a character.
-    private var awaitingCharacter: AwaitingCharacter?
-    private var lastFind: (character: Character, forward: Bool, till: Bool)?
+    var pendingPrefix: Character?
+    /// `f`, `r`, `m`, `"`, `q`, `@`, `i`/`a` … all wait for a character.
+    var awaitingCharacter: AwaitingCharacter?
+    var lastFind: (character: Character, forward: Bool, till: Bool)?
     /// The column `j` and `k` aim for, kept across a run of them.
-    private var desiredColumn = 0
+    var desiredColumn = 0
 
-    private enum AwaitingCharacter: Equatable {
+    /// The visual selection, when there is one. While it exists it — not the
+    /// text view — says where the caret is.
+    var visual: VisualState?
+    /// What `gv` reselects.
+    var lastVisual: VisualState?
+
+    // MARK: - Recording state
+
+    /// The keys of the command being typed, and which of them were counts —
+    /// everything `.` needs to do it again, and `3.` needs to do it three
+    /// times.
+    var commandKeys: [VimKey] = []
+    var countKeyIndices: Set<Int> = []
+    var commandChangedText = false
+    /// A change made from visual mode. `.` cannot replay one — the keys that
+    /// made the selection have already been forgotten — so it is left alone.
+    var commandWasVisual = false
+    var lastChange: ChangeRecord?
+    var insertSession: InsertSession?
+    /// True while `.` is replaying, so a replay never records itself.
+    var isReplaying = false
+
+    /// `qa` … `q`.
+    var recordingRegister: Character?
+    var recordedKeys: [VimKey] = []
+    var lastPlayedRegister: Character?
+    /// Guards a macro that plays itself.
+    var macroDepth = 0
+
+    enum AwaitingCharacter: Equatable {
         case find(forward: Bool, till: Bool)
         case replaceCharacter
+        case register
+        case textObject(inner: Bool)
+        case markSet
+        case markJump(exact: Bool)
+        case macroRecord
+        case macroPlay
     }
 
-    private func resetPending() {
+    func resetPending() {
         pendingCount = nil
         pendingOperator = nil
         operatorCount = nil
+        pendingRegister = nil
         pendingPrefix = nil
         awaitingCharacter = nil
         publishPendingKeys()
     }
 
-    /// What the footer shows beside the badge.
-    private func publishPendingKeys() {
+    /// What the footer shows beside the badge — showcmd, and the macro being
+    /// recorded, in the same quiet type as everything else down there.
+    func publishPendingKeys() {
         var keys = ""
         if let operatorCount { keys += "\(operatorCount)" }
-        if let pendingOperator { keys.append(pendingOperator) }
+        if let pendingRegister { keys += "\"\(pendingRegister)" }
+        if let pendingOperator { keys += pendingOperator.keys }
         if let pendingCount { keys += "\(pendingCount)" }
         if let pendingPrefix { keys.append(pendingPrefix) }
         switch awaitingCharacter {
         case .find(let forward, let till):
             keys.append(forward ? (till ? "t" : "f") : (till ? "T" : "F"))
-        case .replaceCharacter:
-            keys.append("r")
-        case nil:
-            break
+        case .replaceCharacter: keys.append("r")
+        case .register: keys.append("\"")
+        case .textObject(let inner): keys.append(inner ? "i" : "a")
+        case .markSet: keys.append("m")
+        case .markJump(let exact): keys.append(exact ? "`" : "'")
+        case .macroRecord: keys.append("q")
+        case .macroPlay: keys.append("@")
+        case nil: break
+        }
+        if let recordingRegister {
+            if !keys.isEmpty { keys += " " }
+            keys += "recording @\(recordingRegister)"
         }
         onPendingKeysChange?(keys)
     }
@@ -108,6 +158,7 @@ final class VimEngine {
     // MARK: - Modes
 
     func enterNormalMode() {
+        visual = nil
         resetPending()
         mode = .normal
         clampCaret()
@@ -115,9 +166,19 @@ final class VimEngine {
     }
 
     func enterInsertMode() {
+        // Insert mode has no selection to extend, so anything that reaches it
+        // from visual mode leaves visual mode properly on the way — marks and
+        // all — rather than stranding a selection behind the caret.
+        if visual != nil { finishVisual(caretAt: caret) }
         resetPending()
+        beginInsertSession()
         mode = .insert
     }
+
+    /// The one way the mode is set from outside this file — visual mode
+    /// lives in `VimVisual`, and `mode` stays `private(set)` so nothing else
+    /// can reach in.
+    func setMode(_ newMode: VimMode) { mode = newMode }
 
     private func applyCursorStyle() {
         textView?.vimCursorStyle = cursorStyle
@@ -144,19 +205,33 @@ final class VimEngine {
     @discardableResult
     func handle(_ key: VimKey) -> Bool {
         guard isEnabled else { return false }
+        let wasRecording = recordingRegister
+        let handled = dispatch(key)
+        noteRecordedKey(key, wasRecording: wasRecording)
+        return handled
+    }
+
+    /// The key without the macro recorder listening — what `.` and `@a` use
+    /// to play keys back without writing them down again.
+    @discardableResult
+    func dispatch(_ key: VimKey) -> Bool {
         switch mode {
         case .insert:
             return handleInsert(key)
         case .replace:
             return handleReplace(key)
+        case .visual, .visualLine:
+            commandKeys.append(key)
+            return handleVisual(key)
         default:
+            commandKeys.append(key)
             return handleNormal(key)
         }
     }
 
     // MARK: - Insert mode
 
-    private var isEscape: (VimKey) -> Bool {
+    var isEscape: (VimKey) -> Bool {
         { key in
             key.base == .escape
                 || (key.control && (key.character == "c" || key.character == "["))
@@ -165,6 +240,7 @@ final class VimEngine {
 
     private func handleInsert(_ key: VimKey) -> Bool {
         if isEscape(key) {
+            endInsertSession()
             // Vim steps the caret back off the character it just typed past.
             moveCaret(to: VimMotions.previousIndexOnLine(text, from: caret))
             enterNormalMode()
@@ -201,34 +277,17 @@ final class VimEngine {
 
     // MARK: - Normal mode
 
-    private func handleNormal(_ key: VimKey) -> Bool {
+    func handleNormal(_ key: VimKey) -> Bool {
         if isEscape(key) {
             resetPending()
+            discardCommandKeys()
             clampCaret()
             return true
         }
 
         // A character argument outranks everything else.
         if let awaiting = awaitingCharacter {
-            awaitingCharacter = nil
-            guard let character = key.plainCharacter else {
-                resetPending()
-                return true
-            }
-            switch awaiting {
-            case .find(let forward, let till):
-                lastFind = (character, forward, till)
-                applyMotion(
-                    VimMotions.find(
-                        text, from: caret, count: takeCount(),
-                        character: character, forward: forward, till: till
-                    )
-                )
-            case .replaceCharacter:
-                replaceCharacters(with: character, count: takeCount())
-            }
-            finishCommand()
-            return true
+            return handleAwaited(awaiting, key)
         }
 
         if let prefix = pendingPrefix {
@@ -241,6 +300,7 @@ final class VimEngine {
            !(digit == "0" && pendingCount == nil) {
             let value = Int(String(digit)) ?? 0
             pendingCount = (pendingCount ?? 0) * 10 + value
+            countKeyIndices.insert(commandKeys.count - 1)
             publishPendingKeys()
             return true
         }
@@ -265,10 +325,56 @@ final class VimEngine {
         return handleCommand(character)
     }
 
+    /// The second half of `fx`, `ra`, `"a`, `diw`, `ma`, `` `a ``, `qa`, `@a`.
+    private func handleAwaited(_ awaiting: AwaitingCharacter, _ key: VimKey) -> Bool {
+        awaitingCharacter = nil
+        guard let character = key.plainCharacter else {
+            resetPending()
+            discardCommandKeys()
+            return true
+        }
+        switch awaiting {
+        case .find(let forward, let till):
+            lastFind = (character, forward, till)
+            applyMotion(
+                VimMotions.find(
+                    text, from: caret, count: takeCount(),
+                    character: character, forward: forward, till: till
+                )
+            )
+        case .replaceCharacter:
+            if visual != nil {
+                replaceVisual(with: character)
+            } else {
+                replaceCharacters(with: character, count: takeCount())
+            }
+        case .register:
+            // The register waits for the command it belongs to, so nothing
+            // finishes here.
+            pendingRegister = character
+            publishPendingKeys()
+            return true
+        case .textObject(let inner):
+            applyTextObject(character, inner: inner)
+        case .markSet:
+            guard !VimMarks.automatic.contains(character) else { break }
+            marks.set(character, to: caret)
+        case .markJump(let exact):
+            jumpToMark(character, exact: exact)
+        case .macroRecord:
+            startRecording(into: character)
+        case .macroPlay:
+            playMacro(register: character, count: takeCount())
+        }
+        finishCommand()
+        return true
+    }
+
     /// `g…` and `z…`.
     private func handlePrefixed(_ prefix: Character, _ key: VimKey) -> Bool {
         guard let character = key.plainCharacter else {
             resetPending()
+            discardCommandKeys()
             return true
         }
         switch (prefix, character) {
@@ -284,6 +390,16 @@ final class VimEngine {
             host?.vimSelectTab(offset: takeCount())
         case ("g", "T"):
             host?.vimSelectTab(offset: -takeCount())
+        case ("g", "v"):
+            reselectLastVisual()
+        case ("g", "~"), ("g", "u"), ("g", "U"):
+            let op: VimOperator = character == "~" ? .toggleCase
+                : (character == "u" ? .lowercase : .uppercase)
+            if visual != nil {
+                applyVisualOperator(op)
+                return true
+            }
+            return beginOperator(op)
         case ("z", "z"): scrollCaretLine(to: .centre)
         case ("z", "t"): scrollCaretLine(to: .top)
         case ("z", "b"): scrollCaretLine(to: .bottom)
@@ -313,6 +429,14 @@ final class VimEngine {
 
     // swiftlint:disable:next cyclomatic_complexity
     private func handleCommand(_ character: Character) -> Bool {
+        // A doubled operator takes whole lines: `dd`, `>>`, `guu`, `g~~`.
+        if let pending = pendingOperator, character == pending.doubledKey {
+            let count = (operatorCount ?? 1) * (pendingCount ?? 1)
+            applyOperator(pending, to: lineRange(from: caret, count: count), kind: .linewise)
+            finishCommand()
+            return true
+        }
+
         switch character {
         // Motions
         case "h": applyMotion(VimMotions.left(text, from: caret, count: takeCount()))
@@ -359,28 +483,81 @@ final class VimEngine {
                 )
             )
 
+        // Marks
+        case "m":
+            awaitingCharacter = .markSet
+            publishPendingKeys()
+            return true
+        case "`", "'":
+            awaitingCharacter = .markJump(exact: character == "`")
+            publishPendingKeys()
+            return true
+
+        // Registers and macros
+        case "\"":
+            awaitingCharacter = .register
+            publishPendingKeys()
+            return true
+        case "q":
+            if recordingRegister != nil {
+                stopRecording()
+                break
+            }
+            awaitingCharacter = .macroRecord
+            publishPendingKeys()
+            return true
+        case "@":
+            awaitingCharacter = .macroPlay
+            publishPendingKeys()
+            return true
+
         // Prefixes and operators
         case "g", "z":
             pendingPrefix = character
             publishPendingKeys()
             return true
-        case "d", "c", "y":
-            return beginOperator(character)
+        case "d": return beginOperator(.delete)
+        case "c": return beginOperator(.change)
+        case "y": return beginOperator(.yank)
+        case ">": return beginOperator(.indent)
+        case "<": return beginOperator(.dedent)
+        case "=": return beginOperator(.reindent)
+
+        // `i` and `a` name a text object once an operator is waiting, and
+        // enter insert mode when nothing is.
+        case "i", "a":
+            if pendingOperator != nil {
+                awaitingCharacter = .textObject(inner: character == "i")
+                publishPendingKeys()
+                return true
+            }
+            enterInsert(at: character == "i"
+                ? caret
+                : VimMotions.nextIndexOnLine(text, from: caret))
 
         // Edits
-        case "x": deleteCharacters(count: takeCount(), forward: true)
-        case "X": deleteCharacters(count: takeCount(), forward: false)
-        case "p": put(after: true, count: takeCount())
-        case "P": put(after: false, count: takeCount())
+        case "x": deleteCharacters(count: takeCount(), forward: true, register: pendingRegister)
+        case "X": deleteCharacters(count: takeCount(), forward: false, register: pendingRegister)
+        case "p": put(after: true, count: takeCount(), register: pendingRegister)
+        case "P": put(after: false, count: takeCount(), register: pendingRegister)
+        case "~": toggleCaseUnderCaret(count: takeCount())
+        case "J": joinLines(count: max(2, pendingCount ?? 2))
         case "r":
             awaitingCharacter = .replaceCharacter
             publishPendingKeys()
             return true
         case "u": undo()
+        case ".":
+            // The count belongs to the repeat, not to the keys it replays.
+            let count = pendingCount
+            pendingCount = nil
+            repeatLastChange(count: count)
+
+        // Visual
+        case "v": enterVisual(linewise: false)
+        case "V": enterVisual(linewise: true)
 
         // Entering insert
-        case "i": enterInsert(at: caret)
-        case "a": enterInsert(at: VimMotions.nextIndexOnLine(text, from: caret))
         case "I": enterInsert(at: VimMotions.firstNonBlank(text, at: caret))
         case "A": enterInsert(at: VimMotions.lineEnd(text, at: caret))
         case "o": openLine(below: true)
@@ -399,19 +576,14 @@ final class VimEngine {
 
     // MARK: - Operators
 
-    private func beginOperator(_ character: Character) -> Bool {
-        if let pending = pendingOperator {
-            // `dd`, `yy`, `cc` — the doubled form takes whole lines.
-            if pending == character {
-                let count = (operatorCount ?? 1) * (pendingCount ?? 1)
-                applyOperator(pending, to: lineRange(from: caret, count: count), kind: .linewise)
-                finishCommand()
-                return true
-            }
+    func beginOperator(_ op: VimOperator) -> Bool {
+        if pendingOperator != nil {
+            // A second, different operator abandons the first.
             resetPending()
+            discardCommandKeys()
             return true
         }
-        pendingOperator = character
+        pendingOperator = op
         operatorCount = pendingCount
         pendingCount = nil
         mode = .operatorPending
@@ -421,41 +593,80 @@ final class VimEngine {
 
     /// Turns a motion into either a caret move or, with an operator waiting,
     /// the range that operator acts on.
-    private func applyMotion(_ result: VimMotionResult) {
+    func applyMotion(_ result: VimMotionResult) {
         guard let pending = pendingOperator else {
             moveCaret(to: result.location, keepingColumn: result.keepsColumn)
             return
         }
         guard result.moved else {
             resetPending()
+            discardCommandKeys()
             return
         }
 
         let start = min(caret, result.location)
         let end = max(caret, result.location)
         var range = NSRange(location: start, length: end - start)
-        if result.kind == .inclusive {
+        var kind = result.kind
+        if kind == .inclusive {
             range.length = VimMotions.nextIndex(text, after: end) - start
         }
-        if result.kind == .linewise {
+        if kind == .linewise || pending.isAlwaysLinewise {
             range = lineSpan(from: caret, to: result.location)
+            kind = .linewise
         }
-        applyOperator(pending, to: range, kind: result.kind)
+        applyOperator(pending, to: range, kind: kind)
     }
 
-    private func applyOperator(_ character: Character, to range: NSRange, kind: VimMotionKind) {
+    /// The second half of `diw`, `ca(`, `>ip` — and of `viw`, where the
+    /// object becomes the selection rather than an operator's range.
+    private func applyTextObject(_ object: Character, inner: Bool) {
+        guard let result = VimTextObject.range(
+            text, at: caret, object: object, inner: inner, count: takeCount()
+        ), result.range.length > 0 else {
+            resetPending()
+            discardCommandKeys()
+            return
+        }
+        if visual != nil {
+            let linewise = visual?.isLinewise == true || result.isLinewise
+            visual = VisualState(
+                anchor: result.range.location,
+                head: max(result.range.location, NSMaxRange(result.range) - 1),
+                isLinewise: linewise
+            )
+            setMode(linewise ? .visualLine : .visual)
+            syncVisualSelection()
+            return
+        }
+        guard let pending = pendingOperator else {
+            resetPending()
+            discardCommandKeys()
+            return
+        }
+        var range = result.range
+        var kind: VimMotionKind = result.isLinewise ? .linewise : .exclusive
+        if pending.isAlwaysLinewise, !result.isLinewise {
+            range = lineSpan(from: range.location, to: max(range.location, NSMaxRange(range) - 1))
+            kind = .linewise
+        }
+        applyOperator(pending, to: range, kind: kind)
+    }
+
+    func applyOperator(_ op: VimOperator, to range: NSRange, kind: VimMotionKind) {
         let linewise = kind == .linewise
-        switch character {
-        case "d":
-            yank(range: range, linewise: linewise)
+        let register = pendingRegister
+        switch op {
+        case .delete:
+            yank(range: range, linewise: linewise, register: register, isDelete: true)
             let target = linewise ? linewiseDeletionRange(range) : range
             edit { replace(range: target, with: "") }
             moveCaret(to: linewise
                 ? VimMotions.firstNonBlank(text, at: min(range.location, text.length))
                 : range.location)
             clampCaret()
-        case "c":
-            yank(range: range, linewise: linewise)
+        case .change:
+            yank(range: range, linewise: linewise, register: register, isDelete: true)
             if linewise {
                 // `cc` keeps the line itself and puts you on it, empty.
                 let trimmed = rangeWithoutTrailingNewline(range)
@@ -466,42 +677,60 @@ final class VimEngine {
                 moveCaret(to: range.location)
             }
             enterInsertMode()
-        case "y":
-            yank(range: range, linewise: linewise)
+        case .yank:
+            yank(range: range, linewise: linewise, register: register, isDelete: false)
             moveCaret(to: range.location)
-        default:
-            break
+        case .indent, .dedent:
+            shiftLines(in: range, by: op == .indent ? 1 : -1)
+        case .reindent:
+            reindentLines(in: range)
+        case .toggleCase, .lowercase, .uppercase:
+            let target = linewise ? rangeWithoutTrailingNewline(range) : range
+            transformCase(in: target, using: op)
+            moveCaret(to: target.location)
         }
     }
 
     // MARK: - Counts and finishing
 
-    private func takeCount() -> Int {
+    func takeCount() -> Int {
         let count = max(1, (pendingCount ?? 1) * (operatorCount ?? 1))
         pendingCount = nil
         return count
     }
 
-    private func finishCommand() {
+    func finishCommand() {
         pendingOperator = nil
         pendingCount = nil
         operatorCount = nil
         pendingPrefix = nil
+        pendingRegister = nil
         if mode == .operatorPending { mode = .normal }
         if mode == .normal { clampCaret() }
         publishPendingKeys()
+        concludeCommand()
     }
 
     // MARK: - The text
 
     var text: NSString { (textView?.string ?? "") as NSString }
 
-    var caret: Int { textView?.selectedRange().location ?? 0 }
+    /// While a visual selection is up it is the selection's head, not the
+    /// text view, that says where vim's caret is.
+    var caret: Int {
+        if let visual { return min(visual.head, text.length) }
+        return textView?.selectedRange().location ?? 0
+    }
 
     func moveCaret(to location: Int, keepingColumn: Bool = false) {
         guard let textView else { return }
         let clamped = min(max(0, location), text.length)
-        textView.setSelectedRange(NSRange(location: clamped, length: 0))
+        if visual != nil {
+            visual?.head = clamped
+            syncVisualSelection()
+        } else {
+            textView.setSelectedRange(NSRange(location: clamped, length: 0))
+        }
         if !keepingColumn { desiredColumn = VimMotions.column(text, at: clamped) }
         textView.scrollRangeToVisible(textView.selectedRange())
     }
@@ -548,6 +777,12 @@ final class VimEngine {
             )
         }
         textView.didChangeText()
+        marks.adjust(
+            at: clamped.location, removed: clamped.length,
+            inserted: (string as NSString).length
+        )
+        marks.set(".", to: clamped.location)
+        commandChangedText = true
         return true
     }
 

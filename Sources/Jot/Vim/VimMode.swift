@@ -23,7 +23,7 @@ enum VimMode: Equatable {
         case .normal, .operatorPending: "Normal"
         case .insert: "Insert"
         case .visual: "Visual"
-        case .visualLine: "Visual Line"
+        case .visualLine: "Visual line"
         case .replace: "Replace"
         case .commandLine: "Command"
         }

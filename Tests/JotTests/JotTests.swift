@@ -739,7 +739,7 @@ final class JotTests: XCTestCase {
         XCTAssertEqual(VimMode.operatorPending.badgeTitle, "Normal")
         XCTAssertEqual(VimMode.insert.badgeTitle, "Insert")
         XCTAssertEqual(VimMode.visual.badgeTitle, "Visual")
-        XCTAssertEqual(VimMode.visualLine.badgeTitle, "Visual Line")
+        XCTAssertEqual(VimMode.visualLine.badgeTitle, "Visual line")
         XCTAssertEqual(VimMode.replace.badgeTitle, "Replace")
         XCTAssertFalse(VimMode.insert.showsCapsule)
         for mode in [VimMode.normal, .operatorPending, .visual, .visualLine,
