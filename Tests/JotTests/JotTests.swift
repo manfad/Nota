@@ -161,7 +161,7 @@ final class JotTests: XCTestCase {
 
         // Four label/control rows, laid out in one grid.
         let grid = window?.contentView?.subviews.compactMap { $0 as? NSGridView }.first
-        XCTAssertEqual(grid?.numberOfRows, 9)
+        XCTAssertEqual(grid?.numberOfRows, 10)
         XCTAssertEqual(grid?.numberOfColumns, 2)
 
         // Font popup offers the four designs plus "Other…".
@@ -172,13 +172,13 @@ final class JotTests: XCTestCase {
         )
 
         // Row labels, right-aligned in the first column.
-        let labels = (0..<8).compactMap {
+        let labels = (0..<9).compactMap {
             (grid?.cell(atColumnIndex: 0, rowIndex: $0).contentView as? NSTextField)?.stringValue
         }
         XCTAssertEqual(
             labels,
-            ["Font", "Size", "Line spacing", "Padding", "Gutter", "Image sidebar",
-             "Vim mode", "Summon"]
+            ["Font", "Size", "Line spacing", "Padding", "Gutter", "Status bar",
+             "Image sidebar", "Vim mode", "Summon"]
         )
     }
 
@@ -571,18 +571,56 @@ final class JotTests: XCTestCase {
 
     // MARK: - Footer
 
-    func testFooterCountsIncludeImagesAndLines() {
+    func testFooterCountVariantsShedSegmentsFromTheRight() {
+        let all = TextStats.Segment.allCases
+
+        // Longest first: everything enabled, then a segment given up at a
+        // time from the right, then the bare numbers.
         XCTAssertEqual(
-            TextStats.counts("", images: 0, lines: 1),
-            "0 words · 0 characters · 0 images · 1 line"
+            TextStats.countVariants(
+                words: 2, characters: 7, images: 3, lines: 12, segments: all
+            ),
+            [
+                "2 words · 7 characters · 3 images · 12 lines",
+                "2 words · 7 characters · 3 images",
+                "2 words · 7 characters",
+                "2 words",
+                "2 · 7 · 3 · 12",
+            ]
         )
+
+        // Singulars, and an empty note.
         XCTAssertEqual(
-            TextStats.counts("a", images: 1, lines: 1),
+            TextStats.countVariants(
+                words: 1, characters: 1, images: 1, lines: 1, segments: all
+            ).first,
             "1 word · 1 character · 1 image · 1 line"
         )
         XCTAssertEqual(
-            TextStats.counts("one two", images: 3, lines: 12),
-            "2 words · 7 characters · 3 images · 12 lines"
+            TextStats.countVariants(
+                words: 0, characters: 0, images: 0, lines: 1, segments: all
+            ).first,
+            "0 words · 0 characters · 0 images · 1 line"
+        )
+
+        // Only the enabled segments appear.
+        XCTAssertEqual(
+            TextStats.countVariants(
+                words: 2, characters: 7, images: 3, lines: 12, segments: [.words, .characters]
+            ),
+            ["2 words · 7 characters", "2 words", "2 · 7"]
+        )
+        XCTAssertEqual(
+            TextStats.countVariants(
+                words: 2, characters: 7, images: 3, lines: 12, segments: [.lines]
+            ),
+            ["12 lines", "12"]
+        )
+        // Nothing enabled means nothing to show, which is what hides the label.
+        XCTAssertTrue(
+            TextStats.countVariants(
+                words: 2, characters: 7, images: 3, lines: 12, segments: []
+            ).isEmpty
         )
 
         // Hard lines: one per newline plus the last, empty note included.
@@ -592,6 +630,49 @@ final class JotTests: XCTestCase {
         // A trailing newline opens a line of its own, as the gutter shows it.
         XCTAssertEqual(TextStats.lineCount("one\n"), 2)
         XCTAssertEqual(TextStats.lineCount("\n\n"), 3)
+    }
+
+    func testFooterPicksTheLongestCountsThatFit() {
+        let variants = TextStats.countVariants(
+            words: 2, characters: 7, images: 3, lines: 12,
+            segments: TextStats.Segment.allCases
+        )
+        // A stand-in for the type: every character is 10pt wide.
+        func fitting(_ width: CGFloat) -> String {
+            TextStats.variantFitting(variants, within: width) { candidate in
+                CGFloat(candidate.count) * 10
+            }
+        }
+
+        // Room for everything.
+        XCTAssertEqual(fitting(10_000), "2 words · 7 characters · 3 images · 12 lines")
+        // 44 characters in the full form, 33 in the next one down.
+        XCTAssertEqual(fitting(440), "2 words · 7 characters · 3 images · 12 lines")
+        XCTAssertEqual(fitting(439), "2 words · 7 characters · 3 images")
+        XCTAssertEqual(fitting(330), "2 words · 7 characters · 3 images")
+        XCTAssertEqual(fitting(329), "2 words · 7 characters")
+        XCTAssertEqual(fitting(219), "2 words")
+        XCTAssertEqual(fitting(70), "2 words")
+        // Below one whole segment there is nothing left but the bare
+        // numbers, which are kept even when they do not fit either — a
+        // clipped number beats a phrase cut off mid-word.
+        XCTAssertEqual(fitting(69), "2 · 7 · 3 · 12")
+        XCTAssertEqual(fitting(0), "2 · 7 · 3 · 12")
+
+        // With the default two segments the numbers really are the shortest
+        // form, so they take over before anything is given up entirely.
+        let two = TextStats.countVariants(
+            words: 2, characters: 7, images: 3, lines: 12, segments: [.words, .characters]
+        )
+        func fittingTwo(_ width: CGFloat) -> String {
+            TextStats.variantFitting(two, within: width) { CGFloat($0.count) * 10 }
+        }
+        XCTAssertEqual(fittingTwo(220), "2 words · 7 characters")
+        XCTAssertEqual(fittingTwo(219), "2 words")
+        XCTAssertEqual(fittingTwo(69), "2 · 7")
+
+        // Nothing enabled has nothing to fit.
+        XCTAssertEqual(TextStats.variantFitting([], within: 100) { _ in 0 }, "")
     }
 
     func testCursorPositionIsOneBasedAndCountsAnImageAsOneColumn() throws {
@@ -635,6 +716,17 @@ final class JotTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = Preferences(defaults: defaults)
 
+        // The footer counts words and characters until told otherwise.
+        XCTAssertEqual(preferences.footerSegments, [.words, .characters])
+        XCTAssertTrue(preferences.footerShowsWords)
+        XCTAssertTrue(preferences.footerShowsCharacters)
+        XCTAssertFalse(preferences.footerShowsImages)
+        XCTAssertFalse(preferences.footerShowsLines)
+        preferences.footerShowsLines = true
+        preferences.footerShowsWords = false
+        XCTAssertEqual(preferences.footerSegments, [.characters, .lines])
+        XCTAssertEqual(Preferences(defaults: defaults).footerSegments, [.characters, .lines])
+
         XCTAssertFalse(preferences.vimMode)
         preferences.vimMode = true
         XCTAssertTrue(Preferences(defaults: defaults).vimMode)
@@ -676,8 +768,7 @@ final class JotTests: XCTestCase {
         XCTAssertTrue(footer.pendingKeys.isHidden)
 
         // An empty note: no words, no images, one line, caret at the top.
-        XCTAssertEqual(footer.counts.stringValue,
-                       "0 words · 0 characters · 0 images · 1 line")
+        XCTAssertEqual(footer.counts.stringValue, "0 words · 0 characters")
         XCTAssertEqual(footer.cursor.stringValue, "1:1")
 
         // Left, centre, right — in that order, with real gaps between them.
@@ -716,6 +807,78 @@ final class JotTests: XCTestCase {
         window.layoutIfNeeded()
         XCTAssertTrue(footer.badge.isHidden)
         XCTAssertFalse(footer.counts.isHidden)
+        XCTAssertFalse(footer.cursor.isHidden)
+
+        // Turning every segment on and squeezing the window sheds segments
+        // instead of truncating one, and never runs into the caret.
+        let previousImages = Preferences.shared.footerShowsImages
+        let previousLines = Preferences.shared.footerShowsLines
+        defer {
+            Preferences.shared.footerShowsImages = previousImages
+            Preferences.shared.footerShowsLines = previousLines
+        }
+        Preferences.shared.footerShowsImages = true
+        Preferences.shared.footerShowsLines = true
+        window.layoutIfNeeded()
+        XCTAssertEqual(footer.counts.stringValue,
+                       "0 words · 0 characters · 0 images · 1 line")
+
+        let variants = TextStats.countVariants(
+            words: 0, characters: 0, images: 0, lines: 1,
+            segments: TextStats.Segment.allCases
+        )
+
+        // Which variant gets picked for a given width is covered on its own
+        // in `testFooterPicksTheLongestCountsThatFit`; what matters here is
+        // that whatever the footer ends up showing is a whole variant, laid
+        // out at its full width — never a phrase cut off mid-word.
+        for (width, pending) in [(820.0, ""), (600.0, "recording @a"), (900.0, "\"a2d")] {
+            Preferences.shared.vimMode = !pending.isEmpty
+            controller.setVimPendingKeys(pending)
+            window.setContentSize(NSSize(width: width, height: 560))
+            // Twice: choosing the text inside a layout pass invalidates the
+            // label's intrinsic size, which the next pass acts on.
+            window.layoutIfNeeded()
+            window.layoutIfNeeded()
+
+            let shown = footer.counts.stringValue
+            XCTAssertTrue(variants.contains(shown),
+                          "\(width)pt showed \(shown), which is not a whole variant")
+            let font = try XCTUnwrap(footer.counts.font)
+            let textWidth = (shown as NSString).size(withAttributes: [.font: font]).width
+            XCTAssertEqual(footer.counts.frame.width, footer.counts.fittingSize.width,
+                           accuracy: 1,
+                           "the label must be laid out at its full width, not squeezed")
+            XCTAssertGreaterThanOrEqual(footer.counts.frame.width, textWidth)
+            XCTAssertLessThanOrEqual(footer.counts.frame.maxX, footer.cursor.frame.minX)
+            if !pending.isEmpty {
+                XCTAssertGreaterThanOrEqual(
+                    footer.counts.frame.minX, footer.pendingKeys.frame.maxX
+                )
+            }
+        }
+
+        controller.setVimPendingKeys("")
+        Preferences.shared.vimMode = false
+        window.setContentSize(NSSize(width: 820, height: 560))
+        window.layoutIfNeeded()
+        XCTAssertEqual(footer.counts.stringValue, variants[0])
+
+        // Nothing counted at all hides the middle label outright.
+        let previousWords = Preferences.shared.footerShowsWords
+        let previousCharacters = Preferences.shared.footerShowsCharacters
+        defer {
+            Preferences.shared.footerShowsWords = previousWords
+            Preferences.shared.footerShowsCharacters = previousCharacters
+        }
+        Preferences.shared.footerShowsWords = false
+        Preferences.shared.footerShowsCharacters = false
+        Preferences.shared.footerShowsImages = false
+        Preferences.shared.footerShowsLines = false
+        window.layoutIfNeeded()
+        XCTAssertTrue(footer.counts.isHidden)
+        XCTAssertEqual(footer.counts.stringValue, "")
+        // The caret position is not part of the deal — it stays.
         XCTAssertFalse(footer.cursor.isHidden)
     }
 

@@ -21,13 +21,65 @@ enum TextStats {
             + "\(characters) \(characters == 1 ? "character" : "characters")"
     }
 
-    /// `"12 words · 34 characters · 2 images · 5 lines"` — the middle of the
-    /// footer. `text` is the note with its image tokens already stripped, so
-    /// a picture counts as an image and as nothing else.
-    static func counts(_ text: String, images: Int, lines: Int) -> String {
-        counts(text)
-            + " · \(images) \(images == 1 ? "image" : "images")"
-            + " · \(lines) \(lines == 1 ? "line" : "lines")"
+    /// One piece of the middle of the footer. The case order is the order the
+    /// segments are shown in, and the order they are given up in when the
+    /// footer runs short of room — from the right.
+    enum Segment: CaseIterable {
+        case words, characters, images, lines
+
+        var singular: String {
+            switch self {
+            case .words: "word"
+            case .characters: "character"
+            case .images: "image"
+            case .lines: "line"
+            }
+        }
+
+        var plural: String { singular + "s" }
+    }
+
+    static let separator = " · "
+
+    static func phrase(_ segment: Segment, _ count: Int) -> String {
+        "\(count) \(count == 1 ? segment.singular : segment.plural)"
+    }
+
+    /// Every way the counts can be written, longest first: all the enabled
+    /// segments, then the same with segments dropped from the right one at a
+    /// time, and last of all the bare numbers (`"38 · 152"`). Empty when
+    /// nothing is enabled, which is what hides the label.
+    static func countVariants(
+        words: Int, characters: Int, images: Int, lines: Int, segments: [Segment]
+    ) -> [String] {
+        guard !segments.isEmpty else { return [] }
+
+        func value(_ segment: Segment) -> Int {
+            switch segment {
+            case .words: words
+            case .characters: characters
+            case .images: images
+            case .lines: lines
+            }
+        }
+
+        var variants = (1...segments.count).reversed().map { length in
+            segments.prefix(length)
+                .map { phrase($0, value($0)) }
+                .joined(separator: separator)
+        }
+        variants.append(segments.map { "\(value($0))" }.joined(separator: separator))
+        return variants
+    }
+
+    /// The first variant that fits the width on offer — so the footer sheds
+    /// words rather than truncating one mid-phrase. Falls back to the
+    /// shortest when even that is too wide.
+    static func variantFitting(
+        _ variants: [String], within width: CGFloat, measuring: (String) -> CGFloat
+    ) -> String {
+        guard let shortest = variants.last else { return "" }
+        return variants.first { measuring($0) <= width } ?? shortest
     }
 
     /// Hard lines: one per newline, plus the last line. An empty note is one

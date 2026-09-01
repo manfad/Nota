@@ -23,6 +23,12 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let lineNumbersCheckbox = NSButton(checkboxWithTitle: "Line numbers", target: nil, action: nil)
     private let sidebarSidePopUp = NSPopUpButton()
     private let vimModeCheckbox = NSButton(checkboxWithTitle: "Vim mode", target: nil, action: nil)
+    private let footerCheckboxes: [(TextStats.Segment, NSButton)] = [
+        (.words, NSButton(checkboxWithTitle: "Words", target: nil, action: nil)),
+        (.characters, NSButton(checkboxWithTitle: "Characters", target: nil, action: nil)),
+        (.images, NSButton(checkboxWithTitle: "Images", target: nil, action: nil)),
+        (.lines, NSButton(checkboxWithTitle: "Lines", target: nil, action: nil)),
+    ]
     private let hotKeyField = ShortcutRecorderField()
     private let hotKeyWarning = NSTextField(labelWithString: "")
     private var hasCentered = false
@@ -108,6 +114,20 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         vimModeCheckbox.target = self
         vimModeCheckbox.action = #selector(vimModeChanged)
 
+        for (_, checkbox) in footerCheckboxes {
+            checkbox.target = self
+            checkbox.action = #selector(footerSegmentsChanged)
+        }
+        // Two by two rather than one long row, so the window keeps its width.
+        let footerGrid = NSGridView(views: [
+            [footerCheckboxes[0].1, footerCheckboxes[1].1],
+            [footerCheckboxes[2].1, footerCheckboxes[3].1],
+        ])
+        footerGrid.rowSpacing = 2
+        footerGrid.columnSpacing = 10
+        footerGrid.column(at: 0).xPlacement = .leading
+        footerGrid.column(at: 1).xPlacement = .leading
+
         hotKeyField.onRecord = { [weak self] shortcut in
             self?.preferences.hotKey = shortcut
         }
@@ -129,6 +149,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             [label("Line spacing"), spacingPopUp],
             [label("Padding"), paddingPopUp],
             [label("Gutter"), lineNumbersCheckbox],
+            [label("Status bar"), footerGrid],
             [label("Image sidebar"), sidebarSidePopUp],
             [label("Vim mode"), vimModeCheckbox],
             [label("Summon"), hotKeyRow],
@@ -194,6 +215,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         select(paddingPopUp, raw: preferences.padding.rawValue)
         select(sidebarSidePopUp, raw: preferences.sidebarSide.rawValue)
         lineNumbersCheckbox.state = preferences.showsLineNumbers ? .on : .off
+        let enabled = Set(preferences.footerSegments)
+        for (segment, checkbox) in footerCheckboxes {
+            checkbox.state = enabled.contains(segment) ? .on : .off
+        }
         vimModeCheckbox.state = preferences.vimMode ? .on : .off
         hotKeyField.shortcut = preferences.hotKey
 
@@ -283,6 +308,18 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     @objc private func lineNumbersChanged(_ sender: NSButton) {
         preferences.showsLineNumbers = sender.state == .on
+    }
+
+    @objc private func footerSegmentsChanged(_ sender: NSButton) {
+        for (segment, checkbox) in footerCheckboxes where checkbox === sender {
+            let isOn = checkbox.state == .on
+            switch segment {
+            case .words: preferences.footerShowsWords = isOn
+            case .characters: preferences.footerShowsCharacters = isOn
+            case .images: preferences.footerShowsImages = isOn
+            case .lines: preferences.footerShowsLines = isOn
+            }
+        }
     }
 
     @objc private func vimModeChanged(_ sender: NSButton) {

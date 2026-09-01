@@ -78,6 +78,12 @@ final class MainWindowController: NSWindowController {
     private var countsLeadingToVim: NSLayoutConstraint?
     private var countsLeadingToEdge: NSLayoutConstraint?
     private var vimMode: VimMode = .normal
+    /// The four numbers behind the middle label, kept so a relayout can
+    /// re-fit the text without walking the note again.
+    private var counts = (words: 0, characters: 0, images: 0, lines: 1)
+    /// Never shown: a stand-in used to measure a candidate string exactly as
+    /// the real label would lay it out.
+    private let countsRuler = NSTextField(labelWithString: "")
 
     /// Keeps the storage currently shown by the text view alive even before
     /// any note is installed.
@@ -117,7 +123,8 @@ final class MainWindowController: NSWindowController {
         window.center()
         window.setFrameAutosaveName("JotMainWindow")
 
-        editorPane.view = NSView()
+        let pane = PaneView()
+        editorPane.view = pane
         sidebarPane.view = NSView()
         // Keeps the thumbnails clear of the traffic lights when on the left.
         sidebarPane.view.additionalSafeAreaInsets = NSEdgeInsets(
@@ -126,6 +133,9 @@ final class MainWindowController: NSWindowController {
         window.contentViewController = splitViewController
 
         buildUI()
+        // The counts are re-fitted once the two side regions have their
+        // frames, which is the only moment their real widths are known.
+        pane.onLayout = { [weak self] in self?.updateCountsLabel() }
         buildSidebarPane()
         rebuildSplitItems()
         restoreSession()
@@ -191,9 +201,12 @@ final class MainWindowController: NSWindowController {
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.alignment = .center
         statusLabel.lineBreakMode = .byTruncatingTail
-        // The centre gives way to the two fixed regions rather than pushing
-        // into them, so a narrow window truncates the counts instead.
-        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // The label takes exactly the width of its text — the text having
+        // already been chosen to fit — so it never sits narrower than what it
+        // is showing and quietly truncates. The two side gaps are required
+        // constraints and still win, which is the last-resort safety net.
+        statusLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        statusLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
         content.addSubview(statusLabel)
 
         modeBadge.translatesAutoresizingMaskIntoConstraints = false
@@ -559,12 +572,54 @@ final class MainWindowController: NSWindowController {
 
     private func updateStatus() {
         let plain = currentNote?.text ?? ""
-        statusLabel.stringValue = TextStats.counts(
-            NoteText.strippingTokens(plain),
+        let stripped = NoteText.strippingTokens(plain)
+        counts = (
+            words: TextStats.wordCount(stripped),
+            characters: TextStats.characterCount(stripped),
             images: NoteText.assetIDs(in: plain).count,
             lines: TextStats.lineCount(currentNote?.storage.string ?? "")
         )
+        updateCountsLabel()
         updateCursorPosition()
+    }
+
+    /// Writes the longest form of the counts that fits between the two side
+    /// regions, so the middle sheds a whole segment — and finally its words —
+    /// rather than truncating a phrase mid-way.
+    private func updateCountsLabel() {
+        let variants = TextStats.countVariants(
+            words: counts.words, characters: counts.characters,
+            images: counts.images, lines: counts.lines,
+            segments: preferences.footerSegments
+        )
+        // Measured through a label of its own rather than off the string: a
+        // text field lays out a few points wider than the type it holds, and
+        // those points are the difference between fitting and being squeezed.
+        countsRuler.font = statusLabel.font
+        countsRuler.alignment = statusLabel.alignment
+        countsRuler.lineBreakMode = statusLabel.lineBreakMode
+        let width = availableCountsWidth
+        let text = TextStats.variantFitting(variants, within: width) { candidate in
+            countsRuler.stringValue = candidate
+            return countsRuler.fittingSize.width
+        }
+        // Only on a real change: setting it invalidates the intrinsic size
+        // and asks for another layout pass.
+        if statusLabel.stringValue != text { statusLabel.stringValue = text }
+    }
+
+    /// The gap between the left region and the caret position, with the 12pt
+    /// breathing space at each end already taken off.
+    private var availableCountsWidth: CGFloat {
+        // Before the first layout pass there are no frames to measure, so
+        // nothing is ruled out yet.
+        guard cursorLabel.frame.maxX > 0 else { return .greatestFiniteMagnitude }
+        // Mirrors the two leading constraints exactly: 12pt clear of the
+        // pending keys with vim mode on, the status inset without it.
+        let leading = preferences.vimMode
+            ? pendingKeysLabel.frame.maxX + 12
+            : Layout.statusInset
+        return max(0, cursorLabel.frame.minX - 12 - leading)
     }
 
     /// The caret's 1-based line and column, at the right of the footer.
@@ -609,6 +664,8 @@ final class MainWindowController: NSWindowController {
         pendingKeysLabel.isHidden =
             isZenMode || !isVim || pendingKeysLabel.stringValue.isEmpty
         cursorLabel.isHidden = isZenMode
+        // Nothing to count means no label at all, rather than an empty gap.
+        statusLabel.isHidden = isZenMode || preferences.footerSegments.isEmpty
     }
 
     func selectTab(at index: Int) {
@@ -909,6 +966,18 @@ extension MainWindowController {
                 for view in chrome { view.isHidden = true }
             }
         })
+    }
+}
+
+/// The editor pane's own view. Identical to a plain `NSView` but for the
+/// callback after each layout pass, which is when the footer's side regions
+/// have the frames the middle label has to fit between.
+private final class PaneView: NSView {
+    var onLayout: (() -> Void)?
+
+    override func layout() {
+        super.layout()
+        onLayout?()
     }
 }
 

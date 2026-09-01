@@ -102,6 +102,10 @@ final class Preferences {
         static let lineNumbers = "showsLineNumbers"
         static let sidebarSide = "sidebarSide"
         static let vimMode = "vimMode"
+        static let footerWords = "footerShowsWords"
+        static let footerCharacters = "footerShowsCharacters"
+        static let footerImages = "footerShowsImages"
+        static let footerLines = "footerShowsLines"
         static let hotKeyCode = "hotKeyCode"
         static let hotKeyModifiers = "hotKeyModifiers"
         static let hotKeyDisabled = "hotKeyDisabled"
@@ -189,6 +193,51 @@ final class Preferences {
             guard newValue != sidebarSide else { return }
             defaults.set(newValue.rawValue, forKey: Key.sidebarSide)
             announce()
+        }
+    }
+
+    /// What the middle of the footer counts. Words and characters are the
+    /// ones worth having open by default; images and lines are there for
+    /// people who want them.
+    var footerShowsWords: Bool {
+        get { defaults.object(forKey: Key.footerWords) as? Bool ?? true }
+        set { setFooterSegment(newValue, current: footerShowsWords, key: Key.footerWords) }
+    }
+
+    var footerShowsCharacters: Bool {
+        get { defaults.object(forKey: Key.footerCharacters) as? Bool ?? true }
+        set {
+            setFooterSegment(
+                newValue, current: footerShowsCharacters, key: Key.footerCharacters
+            )
+        }
+    }
+
+    var footerShowsImages: Bool {
+        get { defaults.object(forKey: Key.footerImages) as? Bool ?? false }
+        set { setFooterSegment(newValue, current: footerShowsImages, key: Key.footerImages) }
+    }
+
+    var footerShowsLines: Bool {
+        get { defaults.object(forKey: Key.footerLines) as? Bool ?? false }
+        set { setFooterSegment(newValue, current: footerShowsLines, key: Key.footerLines) }
+    }
+
+    private func setFooterSegment(_ newValue: Bool, current: Bool, key: String) {
+        guard newValue != current else { return }
+        defaults.set(newValue, forKey: key)
+        announce()
+    }
+
+    /// The enabled segments, in the order the footer shows them.
+    var footerSegments: [TextStats.Segment] {
+        TextStats.Segment.allCases.filter { segment in
+            switch segment {
+            case .words: footerShowsWords
+            case .characters: footerShowsCharacters
+            case .images: footerShowsImages
+            case .lines: footerShowsLines
+            }
         }
     }
 
