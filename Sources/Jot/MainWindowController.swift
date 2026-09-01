@@ -414,7 +414,10 @@ final class MainWindowController: NSWindowController {
         preview.minimumThickness = 240
         preview.preferredThicknessFraction = 0.5
         preview.canCollapse = true
-        preview.collapseBehavior = .preferResizingSplitViewWithFixedSiblings
+        // The window keeps its size and the editor gives up half its width —
+        // the other way round, toggling the pane on and off after a zoom
+        // leaves the window narrower than it started.
+        preview.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
         preview.isCollapsed = !previewIsVisible
 
         let side = preferences.sidebarSide

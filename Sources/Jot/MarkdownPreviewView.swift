@@ -135,6 +135,12 @@ final class MarkdownPreviewView: NSView {
 
     var headerTitle: String { header.title }
 
+    /// One rectangle per fenced code block, in the text view's coordinates.
+    var codeBoxRects: [NSRect] { textView.codeBoxRects }
+
+    /// The lit block's band, if one is lit.
+    var highlightedBandRect: NSRect? { textView.bandRect }
+
     /// Swaps in a fresh render. The pane is re-rendered on every keystroke
     /// once typing stops, so it stays where the reader left it rather than
     /// jumping back to the top each time.
@@ -315,24 +321,96 @@ private final class PreviewTextView: NSTextView {
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
+
+        // The wash under a fenced block is one box behind the whole thing,
+        // drawn to the pane's own margins rather than around each line's
+        // glyphs — code is a slab, and ragged lines should not show as one.
+        let boxes = codeBoxRects
+        if !boxes.isEmpty {
+            NSColor.labelColor.withAlphaComponent(0.05).setFill()
+            for box in boxes {
+                NSBezierPath(
+                    roundedRect: box,
+                    xRadius: MarkdownRenderer.codeBoxCornerRadius,
+                    yRadius: MarkdownRenderer.codeBoxCornerRadius
+                ).fill()
+            }
+        }
+
+        // Over the top of them, so a lit code block darkens evenly instead of
+        // showing two shapes competing.
         guard let band = bandRect else { return }
         NSColor.labelColor.withAlphaComponent(0.06).setFill()
         band.fill()
     }
 
+    /// A box for each fenced block: its lines' used rects run out to the
+    /// pane's margins and given air on every side.
+    var codeBoxRects: [NSRect] {
+        guard let storage = textStorage, let layoutManager, let textContainer,
+              storage.length > 0
+        else { return [] }
+
+        // A block below the laid-out region has no fragments to measure yet.
+        layoutManager.ensureLayout(for: textContainer)
+        let origin = textContainerOrigin
+        var boxes: [NSRect] = []
+        storage.enumerateAttribute(
+            .jotCodeBlock, in: NSRange(location: 0, length: storage.length)
+        ) { value, range, _ in
+            guard value != nil, range.length > 0 else { return }
+            let glyphs = layoutManager.glyphRange(
+                forCharacterRange: range, actualCharacterRange: nil
+            )
+            guard glyphs.length > 0 else { return }
+
+            var used = NSRect.null
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { _, usedRect, _, _, _ in
+                used = used.union(usedRect)
+            }
+            guard !used.isNull else { return }
+
+            // A fenced block inside a list is indented with it; everything
+            // else starts at the margin.
+            let paragraph = storage.attribute(
+                .paragraphStyle, at: range.location, effectiveRange: nil
+            ) as? NSParagraphStyle
+            let outerIndent = max(0, (paragraph?.headIndent ?? 0) - MarkdownRenderer.codeBoxInset)
+            let left = origin.x + outerIndent
+            let right = bounds.width - origin.x
+            boxes.append(NSRect(
+                x: left,
+                y: used.minY + origin.y - MarkdownRenderer.codeBoxPadding,
+                width: max(0, right - left),
+                height: used.height + MarkdownRenderer.codeBoxPadding * 2
+            ))
+        }
+        return boxes
+    }
+
+    private static let bandPadding: CGFloat = 2
+
     /// The lit block's line fragments, run out to both edges of the pane: the
     /// band marks a place in the document, not a piece of text.
-    private var bandRect: NSRect? {
+    var bandRect: NSRect? {
         guard let range = highlightedRange, range.length > 0,
-              let layoutManager, let textContainer,
-              NSMaxRange(range) <= (textStorage?.length ?? 0)
+              let storage = textStorage, let layoutManager, let textContainer,
+              NSMaxRange(range) <= storage.length
         else { return nil }
         let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
         guard glyphs.length > 0 else { return nil }
         var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
         rect.origin.y += textContainerOrigin.y
+
+        // A lit fenced block takes the box's own air, so the two shapes land
+        // on each other and it darkens as one rather than showing an edge.
+        let isCodeBlock = storage.attribute(
+            .jotCodeBlock, at: range.location, effectiveRange: nil
+        ) != nil
+        let padding = isCodeBlock ? MarkdownRenderer.codeBoxPadding : Self.bandPadding
         return NSRect(
-            x: 0, y: rect.minY - 2, width: bounds.width, height: rect.height + 4
+            x: 0, y: rect.minY - padding,
+            width: bounds.width, height: rect.height + padding * 2
         )
     }
 }

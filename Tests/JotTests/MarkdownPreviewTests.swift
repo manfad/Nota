@@ -181,20 +181,69 @@ final class MarkdownPreviewTests: XCTestCase {
         )
     }
 
-    func testAFencedBlockIsMonospacedOnAWashWithItsWhitespaceKept() throws {
+    func testAFencedBlockIsMonospacedWithItsWhitespaceKept() throws {
         let rendered = render("```swift\nlet x = 1\n    indented\n```")
         XCTAssertEqual(rendered.string, "let x = 1\n    indented")
         let code = try attributes(rendered, at: "let x")
         let codeFont = try XCTUnwrap(code[.font] as? NSFont)
         XCTAssertTrue(codeFont.isFixedPitch, "fenced code is monospaced")
         XCTAssertEqual(codeFont.pointSize, 13, "at the editor's size")
-        XCTAssertEqual(
-            code[.backgroundColor] as? NSColor,
-            NSColor.labelColor.withAlphaComponent(0.05)
-        )
     }
 
-    func testInlineCodeIsStyledLikeAFencedBlock() throws {
+    /// The wash under a fenced block is a box the pane draws, not a colour on
+    /// the characters — that hugged each line and came out as a stack of
+    /// loose rectangles.
+    func testAFencedBlockIsMarkedRatherThanColouredCharacterByCharacter() throws {
+        let rendered = render("```\nlet x = 1\n    indented\nlast\n```")
+        let whole = NSRange(location: 0, length: rendered.length)
+
+        rendered.enumerateAttribute(.backgroundColor, in: whole) { value, range, _ in
+            XCTAssertNil(
+                value,
+                "no per-character wash at \(range): the box is drawn behind the block"
+            )
+        }
+
+        var marked = NSRange(location: NSNotFound, length: 0)
+        rendered.enumerateAttribute(.jotCodeBlock, in: whole) { value, range, _ in
+            guard value != nil else { return }
+            marked = marked.location == NSNotFound ? range : NSUnionRange(marked, range)
+        }
+        XCTAssertEqual(marked, whole, "the mark covers the whole block, in one run")
+    }
+
+    /// Only the outer lines carry spacing; between them the code stays a
+    /// block rather than a column of spaced-out paragraphs.
+    func testAFencedBlocksAirSitsOnItsOuterLinesOnly() throws {
+        let rendered = render("```\nfirst\nmiddle\nlast\n```")
+        let first = try paragraphStyle(rendered, at: "first")
+        let middle = try paragraphStyle(rendered, at: "middle")
+        let last = try paragraphStyle(rendered, at: "last")
+
+        XCTAssertEqual(first.paragraphSpacingBefore, MarkdownRenderer.codeBoxPadding)
+        XCTAssertEqual(middle.paragraphSpacingBefore, 0)
+        XCTAssertEqual(middle.paragraphSpacing, 0)
+        XCTAssertGreaterThanOrEqual(last.paragraphSpacing, MarkdownRenderer.codeBoxPadding)
+
+        // And the code is held off the box's left and right edges.
+        for style in [first, middle, last] {
+            XCTAssertEqual(style.headIndent, MarkdownRenderer.codeBoxInset)
+            XCTAssertEqual(style.tailIndent, -MarkdownRenderer.codeBoxInset)
+        }
+    }
+
+    func testInlineCodeKeepsItsOwnBackground() throws {
+        // A span inside a sentence is exactly the case a per-character wash
+        // is right for.
+        let rendered = render("Call `render()` first.")
+        XCTAssertEqual(
+            try attributes(rendered, at: "render()")[.backgroundColor] as? NSColor,
+            NSColor.labelColor.withAlphaComponent(0.05)
+        )
+        XCTAssertNil(try attributes(rendered, at: "render()")[.jotCodeBlock])
+    }
+
+    func testInlineCodeIsMonospacedOnAWash() throws {
         let rendered = render("Call `render()` first.")
         let code = try attributes(rendered, at: "render()")
         XCTAssertTrue(try XCTUnwrap(code[.font] as? NSFont).isFixedPitch)
@@ -593,6 +642,67 @@ final class MarkdownPreviewTests: XCTestCase {
         }
     }
 
+    /// Toggling the pane must never resize the window. It used to: the pane
+    /// asked the split view to grow for it, so opening it widened the window
+    /// and closing it took that width off the editor — a zoomed window came
+    /// back narrower than it went in.
+    ///
+    /// The guard is on the collapse behaviour itself rather than on the panes'
+    /// widths, because AppKit does not arrange a split view in a window that
+    /// was never on screen: under test the panes keep their pre-layout frames
+    /// and measure identically whichever behaviour is set, so a width
+    /// assertion would pass for the wrong reason. The window's frame is
+    /// checked too — that much the controller does own.
+    @MainActor
+    func testTheEditorGivesUpTheRoomForThePaneRatherThanTheWindow() throws {
+        _ = NSApplication.shared
+        try withPreviewPreference(false) {
+            let controller = try makeController()
+            let window = try XCTUnwrap(controller.window)
+            let item = try XCTUnwrap(previewItem(of: controller))
+
+            XCTAssertEqual(
+                item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView,
+                "the split view keeps its size; its siblings share the room out"
+            )
+            XCTAssertEqual(item.preferredThicknessFraction, 0.5, "half the width on opening")
+
+            let frame = NSRect(x: 120, y: 140, width: 1100, height: 620)
+            window.setFrame(frame, display: false)
+            window.layoutIfNeeded()
+
+            controller.toggleMarkdownPreview()
+            window.layoutIfNeeded()
+            XCTAssertEqual(window.frame, frame, "opening the pane neither moves nor resizes it")
+
+            controller.toggleMarkdownPreview()
+            window.layoutIfNeeded()
+            XCTAssertEqual(window.frame, frame, "and closing it leaves the frame exactly as it was")
+        }
+    }
+
+    /// The items are rebuilt when the sidebar changes sides, so the behaviour
+    /// has to be set there too rather than only on the first build.
+    @MainActor
+    func testThePaneKeepsItsCollapseBehaviourWhenTheSidebarChangesSides() throws {
+        _ = NSApplication.shared
+        let previousSide = Preferences.shared.sidebarSide
+        defer { Preferences.shared.sidebarSide = previousSide }
+
+        try withPreviewPreference(true) {
+            for side in [SidebarSide.right, .left] {
+                Preferences.shared.sidebarSide = side
+                let controller = try makeController()
+                let item = try XCTUnwrap(previewItem(of: controller))
+                XCTAssertEqual(
+                    item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView,
+                    "on the \(side.title)"
+                )
+                XCTAssertEqual(item.preferredThicknessFraction, 0.5)
+            }
+        }
+    }
+
     @MainActor
     func testThePaneSitsBetweenTheEditorAndTheImageSidebar() throws {
         _ = NSApplication.shared
@@ -758,6 +868,111 @@ final class MarkdownPreviewTests: XCTestCase {
             XCTAssertEqual(preview.headerTitle, "Markdown Preview")
             XCTAssertGreaterThanOrEqual(preview.bounds.height, TabBarView.height)
         }
+    }
+
+    // MARK: - Code boxes
+
+    @MainActor
+    func testThePaneDrawsOneBoxPerCodeBlockAcrossItsFullWidth() throws {
+        _ = NSApplication.shared
+        let preview = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        preview.layoutSubtreeIfNeeded()
+        preview.show(result("""
+        Before.
+
+        ```
+        one
+        two
+        three
+        ```
+
+        Between.
+
+        ```
+        second block
+        ```
+
+        After.
+        """, width: preview.contentWidth))
+
+        let boxes = preview.codeBoxRects
+        XCTAssertEqual(boxes.count, 2, "one box per fenced block, not one per line")
+
+        let textView = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+        let inset = textView.textContainerOrigin.x
+        for box in boxes {
+            XCTAssertEqual(box.minX, inset, accuracy: 0.5, "boxes start at the pane's margin")
+            XCTAssertEqual(
+                box.width, textView.bounds.width - inset * 2, accuracy: 0.5,
+                "and run the content width, not the width of the code in them"
+            )
+        }
+
+        // The three-line block is the taller of the two, and neither is a
+        // sliver hugging one line.
+        XCTAssertGreaterThan(boxes[0].height, boxes[1].height)
+        XCTAssertGreaterThan(boxes[1].height, MarkdownRenderer.codeBoxPadding * 2)
+    }
+
+    @MainActor
+    func testACodeBoxCoversEveryLineOfItsBlockWithAirAround() throws {
+        _ = NSApplication.shared
+        let preview = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        preview.layoutSubtreeIfNeeded()
+        preview.show(result("```\nfirst\nsecond\nthird\n```", width: preview.contentWidth))
+
+        let box = try XCTUnwrap(preview.codeBoxRects.first)
+        let textView = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+        let layoutManager = try XCTUnwrap(textView.layoutManager)
+        let container = try XCTUnwrap(textView.textContainer)
+
+        // Every line of the block sits inside the one box, with the padding
+        // clear above the first and below the last.
+        for line in ["first", "second", "third"] {
+            let range = (textView.string as NSString).range(of: line)
+            let glyphs = layoutManager.glyphRange(
+                forCharacterRange: range, actualCharacterRange: nil
+            )
+            var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+            rect.origin.y += textView.textContainerOrigin.y
+            XCTAssertTrue(box.contains(NSPoint(x: box.midX, y: rect.midY)), "\(line) is in the box")
+            XCTAssertLessThanOrEqual(box.minY, rect.minY - MarkdownRenderer.codeBoxPadding + 0.5)
+            XCTAssertGreaterThanOrEqual(
+                box.maxY, rect.maxY + MarkdownRenderer.codeBoxPadding - 0.5
+            )
+        }
+    }
+
+    /// The band goes on over the box, and takes its air, so a lit fenced
+    /// block darkens as one shape rather than showing the box's edge.
+    @MainActor
+    func testALitCodeBlocksBandCoversItsBox() throws {
+        _ = NSApplication.shared
+        let preview = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        preview.layoutSubtreeIfNeeded()
+        let markdown = "Before.\n\n```\none\ntwo\n```"
+        let rendered = result(markdown, width: preview.contentWidth)
+        preview.show(rendered)
+
+        let code = try XCTUnwrap(rendered.blocks.last)
+        preview.highlightBlock(containingSource: code.source.location)
+        XCTAssertEqual(preview.highlightedSourceRange, code.source)
+
+        let box = try XCTUnwrap(preview.codeBoxRects.first)
+        let textView = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+        let band = try XCTUnwrap(preview.highlightedBandRect)
+        XCTAssertLessThanOrEqual(band.minY, box.minY + 0.5)
+        XCTAssertGreaterThanOrEqual(band.maxY, box.maxY - 0.5)
+        XCTAssertEqual(band.width, textView.bounds.width, accuracy: 0.5)
+    }
+
+    @MainActor
+    func testANoteWithoutFencedCodeDrawsNoBoxes() {
+        _ = NSApplication.shared
+        let preview = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 360, height: 400))
+        preview.layoutSubtreeIfNeeded()
+        preview.show(result("# Title\n\nJust prose with `inline code` in it."))
+        XCTAssertTrue(preview.codeBoxRects.isEmpty, "an inline span is not a block")
     }
 
     // MARK: - Block sync

@@ -55,6 +55,12 @@ extension NSAttributedString.Key {
     /// on every character of that block. It is what a click in the preview
     /// turns back into a place in the editor.
     static let jotSourceRange = NSAttributedString.Key("jotSourceRange")
+
+    /// Laid on every character of a fenced code block. The wash under one is
+    /// a single box drawn behind the whole block, not a colour on the
+    /// characters — a background attribute hugs each line's glyphs and comes
+    /// out as a stack of loose rectangles.
+    static let jotCodeBlock = NSAttributedString.Key("jotCodeBlock")
 }
 
 /// Markdown as an attributed string, for the preview pane.
@@ -83,6 +89,13 @@ enum MarkdownRenderer {
 
     /// H1 down to H6, as multiples of the editor's size.
     static let headingScales: [CGFloat] = [1.6, 1.4, 1.25, 1.15, 1.05, 1.0]
+
+    /// The air inside a fenced block's box. The paragraph style holds the
+    /// code this far off the edges; the pane draws the box that far out
+    /// around it. The two halves have to agree, so they are stated once.
+    static let codeBoxInset: CGFloat = 8
+    static let codeBoxPadding: CGFloat = 6
+    static let codeBoxCornerRadius: CGFloat = 6
 
     /// One step of list or quote indentation.
     private static func indentUnit(for font: NSFont) -> CGFloat {
@@ -303,7 +316,8 @@ enum MarkdownRenderer {
         case .codeBlock:
             isCodeBlock = true
             blockFont = .monospacedSystemFont(ofSize: font.pointSize, weight: .regular)
-            style.paragraphSpacing = (font.pointSize * 0.6).rounded()
+            // Spacing goes on the block's outer lines only (see `padEnds`):
+            // on every line it would space the code itself out.
         case .thematicBreak:
             style.paragraphSpacingBefore = (font.pointSize * 0.6).rounded()
             style.paragraphSpacing = (font.pointSize * 0.6).rounded()
@@ -335,8 +349,11 @@ enum MarkdownRenderer {
             }
         }
         if isCodeBlock {
-            style.headIndent += unit / 2
-            style.firstLineHeadIndent += unit / 2
+            style.headIndent += Self.codeBoxInset
+            style.firstLineHeadIndent += Self.codeBoxInset
+            // Negative is measured from the trailing edge: the code clears
+            // the box on the right the same way it does on the left.
+            style.tailIndent = -Self.codeBoxInset
         }
 
         for _ in 0 ..< quoteDepth {
@@ -360,7 +377,7 @@ enum MarkdownRenderer {
             result.append(NSAttributedString(string: code, attributes: [
                 .font: blockFont,
                 .foregroundColor: NSColor.labelColor,
-                .backgroundColor: NSColor.labelColor.withAlphaComponent(0.05),
+                .jotCodeBlock: true,
             ]))
         } else {
             for piece in block.pieces {
@@ -369,8 +386,41 @@ enum MarkdownRenderer {
             }
         }
 
-        result.addAttribute(.paragraphStyle, value: style,
-                            range: NSRange(location: start, length: result.length - start))
+        let blockRange = NSRange(location: start, length: result.length - start)
+        result.addAttribute(.paragraphStyle, value: style, range: blockRange)
+        if isCodeBlock {
+            padEnds(of: blockRange, in: result, style: style,
+                    gap: (font.pointSize * 0.6).rounded())
+        }
+    }
+
+    /// Reserves the box's top and bottom air on the code block's outer lines,
+    /// so the drawn box clears the blocks above and below it. Every line
+    /// between them keeps the plain style — code reads as code, not as a
+    /// column of spaced-out paragraphs.
+    private static func padEnds(
+        of range: NSRange, in result: NSMutableAttributedString,
+        style: NSParagraphStyle, gap: CGFloat
+    ) {
+        guard range.length > 0 else { return }
+        let text = result.string as NSString
+        let opening = NSIntersectionRange(
+            text.lineRange(for: NSRange(location: range.location, length: 0)), range
+        )
+        let closing = NSIntersectionRange(
+            text.lineRange(for: NSRange(location: NSMaxRange(range) - 1, length: 0)), range
+        )
+        let isOneLine = opening == closing
+
+        if let top = style.mutableCopy() as? NSMutableParagraphStyle {
+            top.paragraphSpacingBefore += codeBoxPadding
+            if isOneLine { top.paragraphSpacing += codeBoxPadding + gap }
+            result.addAttribute(.paragraphStyle, value: top, range: opening)
+        }
+        if !isOneLine, let bottom = style.mutableCopy() as? NSMutableParagraphStyle {
+            bottom.paragraphSpacing += codeBoxPadding + gap
+            result.addAttribute(.paragraphStyle, value: bottom, range: closing)
+        }
     }
 
     // MARK: - Styling one run
