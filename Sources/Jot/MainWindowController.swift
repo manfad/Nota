@@ -427,7 +427,10 @@ final class MainWindowController: NSWindowController {
         item.minimumThickness = 130
         item.maximumThickness = 240
         item.canCollapse = true
-        item.collapseBehavior = .preferResizingSplitViewWithFixedSiblings
+        // Like the preview: the editor makes room, the window stays put — the
+        // sidebar shows itself whenever a note gains a picture, and a window
+        // that changes width on a paste is not something anyone asked for.
+        item.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
         item.isCollapsed = wasCollapsed
 
         // The images stay outermost whichever edge they are on; the preview

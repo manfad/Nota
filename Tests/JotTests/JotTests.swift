@@ -1080,6 +1080,21 @@ final class JotTests: XCTestCase {
 
     // MARK: - Gutter separator
 
+    func testTheSidebarNeverResizesTheWindow() throws {
+        _ = NSApplication.shared
+        let directory = try makeTemporaryDirectory()
+        let controller = MainWindowController(store: SessionStore(directory: directory))
+        let window = try XCTUnwrap(controller.window)
+        let split = try XCTUnwrap(window.contentViewController as? NSSplitViewController)
+        // Every pane that can collapse — sidebar and preview — makes the
+        // editor give up room rather than the window change its frame.
+        let collapsible = split.splitViewItems.filter(\.canCollapse)
+        XCTAssertEqual(collapsible.count, 2)
+        for item in collapsible {
+            XCTAssertEqual(item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView)
+        }
+    }
+
     func testTextSitsCloserToTheGutterWhileTheRightMarginKeepsTheSetting() throws {
         _ = NSApplication.shared
         let previousNumbers = Preferences.shared.showsLineNumbers
