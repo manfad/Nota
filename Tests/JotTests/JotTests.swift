@@ -600,14 +600,19 @@ final class JotTests: XCTestCase {
         preferences.vimMode = false
         XCTAssertFalse(Preferences(defaults: defaults).vimMode)
 
-        // Every mode names itself; only the command line borrows its colour.
-        XCTAssertEqual(VimMode.normal.badgeTitle, "NORMAL")
-        XCTAssertEqual(VimMode.operatorPending.badgeTitle, "NORMAL")
-        XCTAssertEqual(VimMode.visualLine.badgeTitle, "V-LINE")
-        XCTAssertEqual(VimMode.insert.badgeColor, .systemGreen)
-        XCTAssertEqual(VimMode.visual.badgeColor, VimMode.visualLine.badgeColor)
-        XCTAssertEqual(VimMode.replace.badgeColor, .systemRed)
-        XCTAssertNil(VimMode.commandLine.badgeColor)
+        // The badge is monochrome and typographic: sentence-case names, and
+        // one capsule everywhere but insert, which shows the bare word.
+        XCTAssertEqual(VimMode.normal.badgeTitle, "Normal")
+        XCTAssertEqual(VimMode.operatorPending.badgeTitle, "Normal")
+        XCTAssertEqual(VimMode.insert.badgeTitle, "Insert")
+        XCTAssertEqual(VimMode.visual.badgeTitle, "Visual")
+        XCTAssertEqual(VimMode.visualLine.badgeTitle, "Visual Line")
+        XCTAssertEqual(VimMode.replace.badgeTitle, "Replace")
+        XCTAssertFalse(VimMode.insert.showsCapsule)
+        for mode in [VimMode.normal, .operatorPending, .visual, .visualLine,
+                     .replace, .commandLine] {
+            XCTAssertTrue(mode.showsCapsule, "\(mode) should wear the capsule")
+        }
     }
 
     @MainActor

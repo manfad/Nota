@@ -194,15 +194,20 @@ final class MainWindowController: NSWindowController {
         content.addSubview(statusLabel)
 
         modeBadge.translatesAutoresizingMaskIntoConstraints = false
-        modeBadge.setMode(vimMode)
+        modeBadge.setMode(vimMode, animated: false)
         content.addSubview(modeBadge)
 
-        for label in [pendingKeysLabel, cursorLabel] {
-            label.translatesAutoresizingMaskIntoConstraints = false
-            label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-            label.textColor = .secondaryLabelColor
-            content.addSubview(label)
-        }
+        // The pending keys are the badge's quiet companion, so they follow the
+        // badge's type rather than the counts'.
+        pendingKeysLabel.translatesAutoresizingMaskIntoConstraints = false
+        pendingKeysLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        pendingKeysLabel.textColor = .tertiaryLabelColor
+        content.addSubview(pendingKeysLabel)
+
+        cursorLabel.translatesAutoresizingMaskIntoConstraints = false
+        cursorLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        cursorLabel.textColor = .secondaryLabelColor
+        content.addSubview(cursorLabel)
 
         zenDragRegion.translatesAutoresizingMaskIntoConstraints = false
         zenDragRegion.isHidden = true
@@ -910,24 +915,25 @@ private final class DragRegionView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
 }
 
-/// The vim mode chip at the left of the footer: a filled rounded rect with
-/// the mode's name in it, coloured per mode the way a lualine bar is.
+/// The vim mode chip at the left of the footer.
+///
+/// Monochrome on purpose: one quiet capsule, the mode's name in it, and no
+/// colour anywhere. Insert — where you spend most of your time — drops the
+/// capsule and shows the bare word.
 private final class VimModeBadge: NSView {
     private static let height: CGFloat = 18
     private static let horizontalPadding: CGFloat = 8
+    private static let fadeDuration: TimeInterval = 0.12
 
     private let label = NSTextField(labelWithString: "")
-    /// The command line keeps whatever colour it was opened from, so the fill
-    /// is held here rather than derived from the mode on every draw.
-    private var fillColor: NSColor = .controlAccentColor
+    private var mode: VimMode = .normal
 
     init() {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 4
 
-        label.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .bold)
-        label.textColor = .white
+        label.font = .systemFont(ofSize: 11, weight: .medium)
+        label.textColor = .secondaryLabelColor
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
@@ -947,25 +953,51 @@ private final class VimModeBadge: NSView {
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
             heightAnchor.constraint(equalToConstant: Self.height),
         ])
+        applyMode()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    func setMode(_ mode: VimMode) {
-        label.stringValue = mode.badgeTitle.uppercased()
-        if let color = mode.badgeColor {
-            fillColor = color
-            needsDisplay = true
+    /// The word swaps under a short cross-fade; the capsule goes with it.
+    /// Nothing else in the footer moves.
+    func setMode(_ newMode: VimMode, animated: Bool = true) {
+        guard newMode != mode else { return }
+        mode = newMode
+        guard animated else {
+            applyMode()
+            return
         }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = Self.fadeDuration / 2
+            label.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            // Reads the mode again rather than closing over it, so a burst of
+            // changes still lands on the one the editor is actually in.
+            self.applyMode()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Self.fadeDuration / 2
+                self.label.animator().alphaValue = 1
+            }
+        })
+    }
+
+    private func applyMode() {
+        label.stringValue = mode.badgeTitle
+        label.alphaValue = 1
+        needsDisplay = true
     }
 
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        // Accent and system colours are appearance-dependent; resolving them
-        // under the view's own appearance is what keeps dark mode right.
+        // `labelColor` is appearance-dependent; resolving it under the view's
+        // own appearance is what keeps dark mode right.
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = fillColor.cgColor
+            layer?.cornerRadius = Self.height / 2
+            layer?.backgroundColor = mode.showsCapsule
+                ? NSColor.labelColor.withAlphaComponent(0.06).cgColor
+                : NSColor.clear.cgColor
         }
     }
 
