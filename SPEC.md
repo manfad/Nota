@@ -22,6 +22,19 @@
 - Settings (⌘,): font family, size, line spacing, editor padding, vim mode, hotkey.
 - Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` · `N pt` beside gear.
 
+## Markdown preview (⇧⌘P, View menu, checkmark; remembered across relaunch)
+- A read-only rendered pane beside the editor (trailing side, resizable split, 50% default, min 240pt); the image sidebar
+  stays outermost. Works for any note. Hidden in zen (it is chrome); back when zen ends. Focus stays in the editor.
+- Native: Foundation's Markdown parser (`AttributedString(markdown:)`, full interpretation) + Jot's own block styling.
+  No WebView, no dependencies, no theming. Same font family/size as the editor; headings scale from it (H1 ×1.6 … H6 ×1.0,
+  semibold); lists indented with `•` / `1.`; block quotes with a leading hairline bar in secondaryLabelColor; code spans
+  and fenced blocks in the monospaced system font on labelColor @ 5%; thematic break = hairline; tables as aligned
+  monospaced rows (best effort); links underlined in labelColor (monochrome), clickable; emphasis/strong/strike.
+- `Image N` chips render as the actual pictures from the asset store, scaled to the pane width; remote images are not
+  fetched (the alt text shows instead).
+- Live: re-rendered ~150 ms after typing stops; the pane keeps its relative scroll position and follows the editor's
+  scroll proportionally.
+
 ## Zen mode
 - ⌥⌘Z toggles: tab strip, traffic lights, status bar, line-number gutter, and image sidebar all hide; only the text remains
   (same font/width, padding grows to 40pt). ⌘ shortcuts still work (⌘T, ⌘W, ⌘P, ⌘B forces the sidebar back for that note).
