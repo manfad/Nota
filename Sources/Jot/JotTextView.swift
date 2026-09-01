@@ -67,30 +67,54 @@ final class JotTextView: NSTextView {
             return
         }
         guard flag else {
-            // Erasing means redrawing the text the block was covering.
-            setNeedsDisplay(blockRect(for: rect), avoidAdditionalLayout: false)
+            // Erasing means redrawing the text the last block was covering —
+            // the block that was drawn, not one measured at wherever the
+            // caret is now.
+            super.setNeedsDisplay(drawnBlockRect, avoidAdditionalLayout: true)
             return
         }
+        let block = blockRect(for: rect)
+        drawnBlockRect = block
         VimCursorDrawing.fillColor.setFill()
-        blockRect(for: rect).fill()
+        block.fill()
     }
 
-    /// AppKit invalidates a caret-shaped sliver; a block is wider than that,
-    /// so the rect has to grow or the tail of the old block is left behind.
+    /// AppKit invalidates a caret-shaped sliver, and it does so for the old
+    /// caret after the selection has already moved. A block is wider than
+    /// that sliver, and the old character may be wider than the new one, so
+    /// the invalidation has to cover the block that was actually drawn.
     override func setNeedsDisplay(_ invalidRect: NSRect, avoidAdditionalLayout flag: Bool) {
         var rect = invalidRect
-        // Measuring asks the layout manager for a glyph's bounds, which can
-        // lay text out and ask for another redraw; the flag keeps that from
-        // turning into a loop.
-        if vimCursorStyle != .bar, !isMeasuringCaret {
-            isMeasuringCaret = true
-            rect.size.width = max(rect.width, caretCharacterWidth + 1)
-            isMeasuringCaret = false
+        if vimCursorStyle != .bar {
+            if !drawnBlockRect.isEmpty, rect.intersects(drawnBlockRect) {
+                rect = rect.union(drawnBlockRect)
+            } else if !isMeasuringCaret {
+                // Measuring asks the layout manager for a glyph's bounds,
+                // which can lay text out and ask for another redraw; the
+                // flag keeps that from turning into a loop.
+                isMeasuringCaret = true
+                rect.size.width = max(rect.width, caretCharacterWidth + 1)
+                isMeasuringCaret = false
+            }
         }
         super.setNeedsDisplay(rect, avoidAdditionalLayout: flag)
     }
 
+    /// Whatever else AppKit chooses to invalidate, a moved caret always
+    /// repaints the block it left behind.
+    override func setSelectedRanges(
+        _ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool
+    ) {
+        let previous = drawnBlockRect
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        if vimCursorStyle != .bar, !previous.isEmpty {
+            super.setNeedsDisplay(previous, avoidAdditionalLayout: true)
+        }
+    }
+
     private var isMeasuringCaret = false
+    /// The block most recently painted, in view coordinates.
+    private var drawnBlockRect: NSRect = .zero
 
     private func blockRect(for rect: NSRect) -> NSRect {
         VimCursorDrawing.rect(
