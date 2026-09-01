@@ -101,15 +101,45 @@ final class JotTextView: NSTextView {
     }
 
     /// Whatever else AppKit chooses to invalidate, a moved caret always
-    /// repaints the block it left behind.
+    /// repaints the block it left behind — and a moved visual selection
+    /// repaints every line it touched, edge to edge. A linewise selection
+    /// highlights its newline out to the container's edge, and AppKit's own
+    /// invalidation of that is a hair short once line spacing is involved,
+    /// which leaves a one-point sliver behind on every `j` and `k`.
     override func setSelectedRanges(
         _ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool
     ) {
-        let previous = drawnBlockRect
+        let previousBlock = drawnBlockRect
+        let previousSelection = selectedRange()
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
-        if vimCursorStyle != .bar, !previous.isEmpty {
-            super.setNeedsDisplay(previous, avoidAdditionalLayout: true)
+        guard vimCursorStyle != .bar else { return }
+        if !previousBlock.isEmpty {
+            super.setNeedsDisplay(previousBlock, avoidAdditionalLayout: true)
         }
+        for range in [previousSelection, selectedRange()] where range.length > 0 {
+            super.setNeedsDisplay(lineBand(for: range), avoidAdditionalLayout: false)
+        }
+    }
+
+    /// The full-width band of the lines a range sits on, one line further
+    /// down than the range itself so a highlight that spills into the line
+    /// spacing below is covered too.
+    private func lineBand(for range: NSRange) -> NSRect {
+        guard let layoutManager else { return bounds }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let glyphCount = layoutManager.numberOfGlyphs
+        guard glyphCount > 0, glyphRange.location < glyphCount else { return bounds }
+
+        var band = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+        let last = min(NSMaxRange(glyphRange), glyphCount - 1)
+        band = band.union(layoutManager.lineFragmentRect(forGlyphAt: last, effectiveRange: nil))
+        if NSMaxRange(glyphRange) >= glyphCount {
+            band = band.union(layoutManager.extraLineFragmentRect)
+        }
+        band.origin.x = 0
+        band.size.width = bounds.width
+        band.origin.y += textContainerOrigin.y
+        return band.insetBy(dx: 0, dy: -2)
     }
 
     private var isMeasuringCaret = false
