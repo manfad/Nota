@@ -32,8 +32,14 @@
   monospaced rows (best effort); links underlined in labelColor (monochrome), clickable; emphasis/strong/strike.
 - `Image N` chips render as the actual pictures from the asset store, scaled to the pane width; remote images are not
   fetched (the alt text shows instead).
-- Live: re-rendered ~150 ms after typing stops; the pane keeps its relative scroll position and follows the editor's
-  scroll proportionally.
+- Header: the pane's top band (same height/background/hairline as the tab strip beside it) carries the title
+  "Markdown Preview" — SF 11pt medium, secondaryLabelColor, leading inset = editor padding — so the band is never empty.
+- Live: re-rendered ~150 ms after typing stops; the pane keeps its relative scroll position.
+- Block sync (both ways). Every rendered block (heading, paragraph, list item, quote, code block, table, rule, image)
+  knows its source range. Clicking a block selects it — a quiet band, labelColor @ 6%, full pane width — scrolls the
+  editor so that source is visible and puts the caret at the block's first character (vim: normal mode, block caret on
+  it). Moving the caret in the editor lights the block it is in and scrolls the preview to keep it visible. One block
+  lit at a time; the band clears when the text changes under it. No proportional scroll following any more.
 
 ## Zen mode
 - ⌥⌘Z toggles: tab strip, traffic lights, status bar, line-number gutter, and image sidebar all hide; only the text remains
