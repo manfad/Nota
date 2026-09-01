@@ -22,6 +22,17 @@ final class JotTextView: NSTextView {
     /// A chip was clicked; the character index of the attachment.
     var onChipClick: ((Int) -> Void)?
 
+    /// Vim's first refusal on a key press. Returning true swallows it.
+    var vimKeyHandler: ((NSEvent) -> Bool)?
+
+    /// The caret's shape. `.bar` is AppKit's own, and what plain Jot uses.
+    var vimCursorStyle: VimCursorStyle = .bar {
+        didSet {
+            guard oldValue != vimCursorStyle else { return }
+            needsDisplay = true
+        }
+    }
+
     /// Read order. The first type the pasteboard also carries wins, so a copy
     /// from Jot never degrades to RTF or bare text.
     private static let readPriority: [NSPasteboard.PasteboardType] = [
@@ -34,6 +45,79 @@ final class JotTextView: NSTextView {
 
     private var attributes: [NSAttributedString.Key: Any] {
         attributesProvider?() ?? [.font: NSFont.systemFont(ofSize: 13)]
+    }
+
+    // MARK: - Keys
+
+    /// Vim gets first refusal, and only ever on events without ⌘ — which is
+    /// what keeps every menu shortcut working in every mode. `performKey`
+    /// `Equivalent` is deliberately left alone for the same reason.
+    override func keyDown(with event: NSEvent) {
+        if vimKeyHandler?(event) == true { return }
+        super.keyDown(with: event)
+    }
+
+    // MARK: - The caret
+
+    /// Normal and visual modes draw a block over the character under the
+    /// caret; replace draws half of one. Insert keeps AppKit's bar.
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        guard vimCursorStyle != .bar else {
+            super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+            return
+        }
+        guard flag else {
+            // Erasing means redrawing the text the block was covering.
+            setNeedsDisplay(blockRect(for: rect), avoidAdditionalLayout: false)
+            return
+        }
+        VimCursorDrawing.fillColor.setFill()
+        blockRect(for: rect).fill()
+    }
+
+    /// AppKit invalidates a caret-shaped sliver; a block is wider than that,
+    /// so the rect has to grow or the tail of the old block is left behind.
+    override func setNeedsDisplay(_ invalidRect: NSRect, avoidAdditionalLayout flag: Bool) {
+        var rect = invalidRect
+        // Measuring asks the layout manager for a glyph's bounds, which can
+        // lay text out and ask for another redraw; the flag keeps that from
+        // turning into a loop.
+        if vimCursorStyle != .bar, !isMeasuringCaret {
+            isMeasuringCaret = true
+            rect.size.width = max(rect.width, caretCharacterWidth + 1)
+            isMeasuringCaret = false
+        }
+        super.setNeedsDisplay(rect, avoidAdditionalLayout: flag)
+    }
+
+    private var isMeasuringCaret = false
+
+    private func blockRect(for rect: NSRect) -> NSRect {
+        VimCursorDrawing.rect(
+            insertionPoint: rect, characterWidth: caretCharacterWidth, style: vimCursorStyle
+        )
+    }
+
+    /// The width of the character the caret is sitting on — the width of a
+    /// space at the end of a line, where there is nothing to sit on.
+    private var caretCharacterWidth: CGFloat {
+        let font = self.font ?? .systemFont(ofSize: 13)
+        let spaceWidth = (" " as NSString).size(withAttributes: [.font: font]).width
+
+        guard let layoutManager, let container = textContainer, let storage = textStorage
+        else { return spaceWidth }
+
+        let location = selectedRange().location
+        guard location < storage.length else { return spaceWidth }
+        let string = storage.string as NSString
+        guard string.character(at: location) != 0x0A else { return spaceWidth }
+
+        let characterRange = string.rangeOfComposedCharacterSequence(at: location)
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: characterRange, actualCharacterRange: nil
+        )
+        let bounds = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
+        return bounds.width > 0 ? bounds.width : spaceWidth
     }
 
     // MARK: - Chip clicks

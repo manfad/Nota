@@ -85,6 +85,11 @@ final class MainWindowController: NSWindowController {
     /// the real label would lay it out.
     private let countsRuler = NSTextField(labelWithString: "")
 
+    /// Vim's state machine. One per window: the mode is global, so switching
+    /// tabs lands you in normal mode rather than wherever the last tab was.
+    private lazy var vimEngine = VimEngine(textView: textView)
+    private var footerMessageWorkItem: DispatchWorkItem?
+
     /// Keeps the storage currently shown by the text view alive even before
     /// any note is installed.
     private var installedStorage: NSTextStorage
@@ -138,6 +143,7 @@ final class MainWindowController: NSWindowController {
         pane.onLayout = { [weak self] in self?.updateCountsLabel() }
         buildSidebarPane()
         rebuildSplitItems()
+        configureVim()
         restoreSession()
 
         NotificationCenter.default.addObserver(
@@ -466,6 +472,7 @@ final class MainWindowController: NSWindowController {
             rebuildSplitItems()
         }
         refreshImages(force: true)
+        vimEngine.isEnabled = preferences.vimMode
         applyFooterVisibility()
         updateStatus()
         scheduleSave()
@@ -647,6 +654,34 @@ final class MainWindowController: NSWindowController {
         applyFooterVisibility()
     }
 
+    /// Hands the engine the text view and the footer, and puts it in the
+    /// state the setting asks for.
+    private func configureVim() {
+        vimEngine.host = self
+        vimEngine.onModeChange = { [weak self] mode in self?.setVimMode(mode) }
+        vimEngine.onPendingKeysChange = { [weak self] keys in self?.setVimPendingKeys(keys) }
+        textView.vimKeyHandler = { [weak self] event in
+            self?.vimEngine.handle(event) ?? false
+        }
+        vimEngine.isEnabled = preferences.vimMode
+    }
+
+    /// A word in the middle of the footer for a few seconds, then back to the
+    /// counts — where "Not an editor command" and vimrc errors land.
+    func showFooterMessage(_ message: String) {
+        footerMessageWorkItem?.cancel()
+        statusLabel.stringValue = message
+        let item = DispatchWorkItem { [weak self] in self?.updateStatus() }
+        footerMessageWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: item)
+    }
+
+    /// The engine, for the tests to type at.
+    var vim: VimEngine { vimEngine }
+
+    /// Which tab is showing — for the tests that drive `gt` and `gT`.
+    var selectedTabIndex: Int { selectedIndex }
+
     /// The footer's three regions, for the layout tests: the vim badge, the
     /// centred counts, and the caret position.
     var footerRegions: (badge: NSView, pendingKeys: NSTextField,
@@ -674,6 +709,7 @@ final class MainWindowController: NSWindowController {
         flushAll()
         selectedIndex = index
         installCurrentNote()
+        if preferences.vimMode { vimEngine.enterNormalMode() }
         refreshTabs()
         updateStatus()
         refreshImages(force: true)
@@ -1341,6 +1377,22 @@ extension MainWindowController: NSSearchFieldDelegate {
 }
 
 // MARK: - Delegates
+
+// MARK: - Vim's window
+
+extension MainWindowController: VimEngineHost {
+    /// `gt` / `gT`, wrapping the way ⌃Tab does.
+    func vimSelectTab(offset: Int) {
+        guard notes.count > 1, offset != 0 else { return }
+        let count = notes.count
+        let target = ((selectedIndex + offset) % count + count) % count
+        selectTab(at: target)
+    }
+
+    func vimShow(message: String) {
+        showFooterMessage(message)
+    }
+}
 
 extension MainWindowController: TabBarViewDelegate {
     func tabBar(_ bar: TabBarView, didSelect index: Int) {

@@ -26,7 +26,7 @@
 - Inline: always a text chip `Image N`, numbered in document order, renumbered live.
 - Sidebar (native split pane, 150pt, side per Settings): 104pt thumbnails with `Image N` captions. Auto-shows when the note has ≥1 image,
   hides when none; ⌘B toggles it manually for the session. Settings: sidebar side Left / Right (default Right). Click → select chip; double-click → open in Preview.
-  Context menu: Copy Image / Save Image As… / Reveal in Finder.
+  Context menu: Copy Image / Save Image As… / Reveal in Finder. Bottom-pinned utility row with a Settings gear (leading edge).
 - ⌘A ⌘C carries images (RTFD) to other apps; Jot→Jot paste re-links without duplicating assets.
 - Orphan assets are never auto-deleted.
 
