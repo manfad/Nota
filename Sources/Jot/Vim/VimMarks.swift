@@ -38,6 +38,16 @@ struct VimMarks {
 
     mutating func clear() { marks.removeAll() }
 
+    /// What `:marks` lists: the last jump first, then the letters, then the
+    /// ones vim keeps for you.
+    func listing() -> [(name: Character, location: Int)] {
+        let ordered = ["'"] + "abcdefghijklmnopqrstuvwxyz".map(String.init) + [".", "^", "<", ">"]
+        return ordered.compactMap { name in
+            guard let character = name.first, let location = marks[character] else { return nil }
+            return (character, location)
+        }
+    }
+
     /// `removed` characters at `location` became `inserted` characters.
     mutating func adjust(at location: Int, removed: Int, inserted: Int) {
         guard removed != 0 || inserted != 0 else { return }

@@ -129,7 +129,9 @@ extension VimEngine {
         if entry.isLinewise {
             var body = repeated
             if !body.hasSuffix("\n") { body += "\n" }
+            let endedWithNewline = endsWithNewline
             var insertion: Int
+            var appendedNewline = false
             if after {
                 let end = VimMotions.lineEnd(text, at: caret)
                 if end < text.length {
@@ -137,11 +139,13 @@ extension VimEngine {
                 } else {
                     replace(range: NSRange(location: text.length, length: 0), with: "\n")
                     insertion = text.length
+                    appendedNewline = true
                 }
             } else {
                 insertion = VimMotions.lineStart(text, at: caret)
             }
             replace(range: NSRange(location: insertion, length: 0), with: body)
+            if appendedNewline, !endedWithNewline { dropTrailingNewline() }
             moveCaret(to: VimMotions.firstNonBlank(text, at: insertion))
         } else {
             let insertion = after
@@ -165,7 +169,9 @@ extension VimEngine {
 
     private func putLinewise(after: Bool, count: Int) {
         guard let textView else { return }
+        let endedWithNewline = endsWithNewline
         var insertion: Int
+        var appendedNewline = false
         if after {
             let end = VimMotions.lineEnd(text, at: caret)
             if end < text.length {
@@ -175,6 +181,7 @@ extension VimEngine {
                 // can go below it.
                 replace(range: NSRange(location: text.length, length: 0), with: "\n")
                 insertion = text.length
+                appendedNewline = true
             }
         } else {
             insertion = VimMotions.lineStart(text, at: caret)
@@ -193,7 +200,20 @@ extension VimEngine {
                 textView.setSelectedRange(NSRange(location: end + 1, length: 0))
             }
         }
+        if appendedNewline, !endedWithNewline { dropTrailingNewline() }
         moveCaret(to: VimMotions.firstNonBlank(text, at: insertion))
+    }
+
+    private var endsWithNewline: Bool {
+        text.length > 0 && text.character(at: text.length - 1) == 0x0A
+    }
+
+    /// Putting whole lines below the last one has to give that line a newline
+    /// first, and vim does not leave it behind: a note that ended without one
+    /// still ends without one afterwards.
+    private func dropTrailingNewline() {
+        guard endsWithNewline else { return }
+        replace(range: NSRange(location: text.length - 1, length: 1), with: "")
     }
 
     /// The same route `paste(nil)` takes — preferred flavour first, so a
@@ -210,6 +230,10 @@ extension VimEngine {
 
     /// `x` and `X`.
     func deleteCharacters(count: Int, forward: Bool, register: Character? = nil) {
+        guard isModifiable else {
+            refuseChange()
+            return
+        }
         let start = caret
         if forward {
             let lineEnd = VimMotions.lineEnd(text, at: start)

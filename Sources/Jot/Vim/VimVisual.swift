@@ -127,6 +127,14 @@ extension VimEngine {
             finishVisual(caretAt: caret)
             return handleNormal(key)
 
+        case ":":
+            // Vim leaves visual mode on `:` and writes the selection's range
+            // into the line for you. `finishVisual` is what sets `'<` and
+            // `'>`, so the range it names is already there to be read.
+            finishVisual(caretAt: visualRange().range.location)
+            beginCommandLine(initialText: "'<,'>")
+            return true
+
         case "i", "a":
             awaitingCharacter = .textObject(inner: character == "i")
             publishPendingKeys()

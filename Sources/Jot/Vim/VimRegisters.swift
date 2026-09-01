@@ -105,6 +105,17 @@ final class VimRegisters {
         return storage[Character(name.lowercased())]
     }
 
+    /// What `:reg` lists: everything with something in it, in vim's order —
+    /// the yank register, the delete ring, the small delete, then `a`–`z`.
+    /// The unnamed register is the pasteboard and is not kept here, so it is
+    /// not in the list.
+    func listing() -> [(name: Character, entry: Entry)] {
+        let ordered = Array("0123456789-") + Array("abcdefghijklmnopqrstuvwxyz")
+        return ordered.compactMap { name in
+            storage[name].map { (name, $0) }
+        }
+    }
+
     func clear() {
         storage.removeAll()
         stamp = nil

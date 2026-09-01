@@ -607,9 +607,10 @@ final class VimStage2Tests: XCTestCase {
         let harness = try makeHarness("abc")
         harness.type("yy")
         harness.type("p")
-        XCTAssertEqual(harness.string, "abc\nabc\n")
+        // Vim leaves no trailing newline behind a put below the last line.
+        XCTAssertEqual(harness.string, "abc\nabc")
         harness.type(".")
-        XCTAssertEqual(harness.string, "abc\nabc\nabc\n")
+        XCTAssertEqual(harness.string, "abc\nabc\nabc")
     }
 
     func testACountOnDotReplacesTheOriginalCount() throws {
@@ -657,7 +658,7 @@ final class VimStage2Tests: XCTestCase {
         XCTAssertEqual(harness.engine.registers.read("a")?.text, "one\ntwo\n")
 
         harness.type("G\"ap")
-        XCTAssertEqual(harness.string, "one\ntwo\nthree\none\ntwo\n")
+        XCTAssertEqual(harness.string, "one\ntwo\nthree\none\ntwo")
     }
 
     func testCharacterwiseAndLinewiseRegistersStaySeparate() throws {
@@ -680,7 +681,7 @@ final class VimStage2Tests: XCTestCase {
         XCTAssertEqual(harness.string, "keep\nrest")
         XCTAssertEqual(harness.engine.registers.read("0")?.text, "keep\n")
         harness.type("\"0p")
-        XCTAssertEqual(harness.string, "keep\nrest\nkeep\n")
+        XCTAssertEqual(harness.string, "keep\nrest\nkeep")
     }
 
     func testDeletesShiftAlongTheNumberedRegisters() throws {
@@ -707,14 +708,14 @@ final class VimStage2Tests: XCTestCase {
         XCTAssertEqual(harness.string, "keep\nrest")
         XCTAssertNil(harness.engine.registers.read("_"))
         harness.type("p")
-        XCTAssertEqual(harness.string, "keep\nrest\nkeep\n", "the yank is still there")
+        XCTAssertEqual(harness.string, "keep\nrest\nkeep", "the yank is still there")
     }
 
     func testThePlusRegisterIsThePasteboard() throws {
         let harness = try makeHarness("abc\ndef")
         harness.type("\"+yy")
         harness.type("j\"+p")
-        XCTAssertEqual(harness.string, "abc\ndef\nabc\n")
+        XCTAssertEqual(harness.string, "abc\ndef\nabc")
     }
 
     // MARK: - Marks
@@ -784,12 +785,8 @@ final class VimStage2Tests: XCTestCase {
 
     func testAnUnsetMarkSaysSoRatherThanMoving() throws {
         let harness = try makeHarness("one\ntwo")
-        final class Host: VimEngineHost {
-            var messages: [String] = []
-            func vimSelectTab(offset: Int) {}
-            func vimShow(message: String) { messages.append(message) }
-        }
-        let host = Host()
+        // The spy the stage-three tests use; the message is all this one wants.
+        let host = VimHostSpy()
         harness.engine.host = host
 
         harness.type("j`z")

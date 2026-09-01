@@ -89,6 +89,9 @@ final class MainWindowController: NSWindowController {
     /// tabs lands you in normal mode rather than wherever the last tab was.
     private lazy var vimEngine = VimEngine(textView: textView)
     private var footerMessageWorkItem: DispatchWorkItem?
+    /// True while a `:` line is being typed, which is the one time showcmd
+    /// does not own the footer's left slot.
+    private var isCommandLineOpen = false
 
     /// Keeps the storage currently shown by the text view alive even before
     /// any note is installed.
@@ -562,6 +565,10 @@ final class MainWindowController: NSWindowController {
         textView.breakUndoCoalescing()
         layoutManager.replaceTextStorage(note.storage)
         installedStorage = note.storage
+        // A scratch tab is vim's `'nomodifiable'`: the motions still work, the
+        // keyboard does not.
+        textView.isEditable = !note.isScratch
+        vimEngine.isModifiable = !note.isScratch
         applyTextAttributes()
         let location = max(0, min(note.selectionLocation, note.storage.length))
         textView.setSelectedRange(NSRange(location: location, length: 0))
@@ -649,7 +656,10 @@ final class MainWindowController: NSWindowController {
 
     /// "showcmd": the count, operator and register typed so far, or the macro
     /// being recorded. Empty hides the label.
+    ///
+    /// The `:` line borrows the same slot, and while it is up it keeps it.
     func setVimPendingKeys(_ keys: String) {
+        guard !isCommandLineOpen else { return }
         pendingKeysLabel.stringValue = keys
         applyFooterVisibility()
     }
@@ -797,7 +807,13 @@ final class MainWindowController: NSWindowController {
             destination = chosen
         }
         guard let destination else { return false }
+        return write(note: note, to: destination)
+    }
 
+    /// The write itself, once somewhere to put it has been settled — by the
+    /// panel, or by the name `:w` was given.
+    @discardableResult
+    private func write(note: Note, to destination: URL) -> Bool {
         do {
             try Data(note.text.utf8).write(to: destination, options: .atomic)
         } catch {
@@ -807,6 +823,7 @@ final class MainWindowController: NSWindowController {
 
         note.fileURL = destination
         note.isDirty = false
+        preferences.lastSaveDirectory = destination.deletingLastPathComponent()
         refreshTabs()
         flushAll()
         return true
@@ -881,7 +898,7 @@ final class MainWindowController: NSWindowController {
         saveWorkItem = nil
         if let note = currentNote {
             note.selectionLocation = textView.selectedRange().location
-            store.writeText(note.text, for: note.id)
+            if !note.isScratch { store.writeText(note.text, for: note.id) }
         }
         writeSessionFile()
     }
@@ -891,14 +908,17 @@ final class MainWindowController: NSWindowController {
         saveWorkItem?.cancel()
         saveWorkItem = nil
         currentNote?.selectionLocation = textView.selectedRange().location
-        for note in notes { store.writeText(note.text, for: note.id) }
+        for note in notes where !note.isScratch { store.writeText(note.text, for: note.id) }
         writeSessionFile()
     }
 
+    /// Scratch tabs are left out of both the session file and the cache, so
+    /// `:help` is gone by the next launch rather than restored as a note.
     private func writeSessionFile() {
+        let saved = notes.filter { !$0.isScratch }
         store.save(SessionState(
-            tabs: notes.map { $0.sessionTab() },
-            selectedTabID: currentNote?.id,
+            tabs: saved.map { $0.sessionTab() },
+            selectedTabID: (currentNote?.isScratch == true ? saved.first : currentNote)?.id,
             fontSize: Double(fontSize)
         ))
     }
@@ -1391,6 +1411,101 @@ extension MainWindowController: VimEngineHost {
 
     func vimShow(message: String) {
         showFooterMessage(message)
+    }
+
+    /// The `:` line lives where showcmd does, with a bar caret drawn after it
+    /// — the text view never gives up first responder, so the note's own
+    /// caret and scroll position stay exactly where they were.
+    func vimCommandLineChanged(_ text: String?) {
+        isCommandLineOpen = text != nil
+        pendingKeysLabel.stringValue = text.map { $0 + "\u{258F}" } ?? ""
+        applyFooterVisibility()
+    }
+
+    /// `:w` alone is ⌘S. `:w name` writes that name into the folder the last
+    /// save used, with no panel — a path with a slash in it is taken as it is.
+    func vimSave(name: String?) -> Bool {
+        guard let note = currentNote else { return false }
+        guard let name, !name.isEmpty else { return save(note: note, forcePanel: false) }
+        return write(note: note, to: resolvedURL(for: name, near: note))
+    }
+
+    func vimClose(force: Bool) {
+        guard let note = currentNote else { return }
+        if force { note.isDirty = false }
+        closeTab(at: selectedIndex)
+    }
+
+    func vimOpen(path: String) {
+        let url = resolvedURL(for: path, near: currentNote)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            showFooterMessage("E484: Can’t open file \(path)")
+            return
+        }
+        open(url: url)
+    }
+
+    func vimNewTab() {
+        addTab()
+    }
+
+    /// `:help`, `:reg`, `:marks`. A second `:help` comes back to the tab that
+    /// is already open rather than stacking another one beside it.
+    func vimOpenScratchTab(title: String, text: String) {
+        if let index = notes.firstIndex(where: { $0.isScratch && $0.title == title }) {
+            let note = notes[index]
+            note.storage.setAttributedString(
+                NSAttributedString(string: text, attributes: defaultAttributes)
+            )
+            note.selectionLocation = 0
+            if index == selectedIndex {
+                textView.setSelectedRange(NSRange(location: 0, length: 0))
+                updateStatus()
+            } else {
+                selectTab(at: index)
+            }
+            return
+        }
+
+        let note = Note(
+            id: UUID(), fileURL: nil, untitledName: title, text: text,
+            attributes: defaultAttributes, assets: store.assets
+        )
+        note.isScratch = true
+        notes.insert(note, at: min(selectedIndex + 1, notes.count))
+        selectedIndex = notes.firstIndex { $0 === note } ?? notes.count - 1
+        installCurrentNote()
+        refreshTabs()
+        updateStatus()
+        refreshImages(force: true)
+        flush()
+    }
+
+    /// `/` `?` `n` `N` `*` `#` and `:noh` all end up here: the native find bar
+    /// does the searching, driven the same way the Find menu drives it.
+    func vimFind(_ action: VimFindAction) {
+        let finderAction: NSTextFinder.Action
+        switch action {
+        case .showInterface: finderAction = .showFindInterface
+        case .next: finderAction = .nextMatch
+        case .previous: finderAction = .previousMatch
+        case .hide: finderAction = .hideFindInterface
+        }
+        let sender = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        sender.tag = finderAction.rawValue
+        textView.performTextFinderAction(sender)
+    }
+
+    /// A name from `:w` or `:e`: `~` and an absolute path mean what they say,
+    /// and anything else lands in the folder the last save used.
+    private func resolvedURL(for name: String, near note: Note?) -> URL {
+        let expanded = (name as NSString).expandingTildeInPath
+        guard !expanded.hasPrefix("/") else { return URL(fileURLWithPath: expanded) }
+        let folder = preferences.lastSaveDirectory
+            ?? note?.fileURL?.deletingLastPathComponent()
+            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+        return folder.appendingPathComponent(expanded)
     }
 }
 

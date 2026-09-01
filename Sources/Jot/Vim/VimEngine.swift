@@ -1,12 +1,32 @@
 import AppKit
 
 /// What the engine needs from the app around it — the parts that are not the
-/// text: tabs, and the footer's message line.
+/// text: tabs, files, the find bar, and the footer's message line.
 protocol VimEngineHost: AnyObject {
-    /// `gt` / `gT`, and later `:tabn` / `:tabp`.
+    /// `gt` / `gT`, `:tabn` / `:tabp`, `:bn` / `:bp`.
     func vimSelectTab(offset: Int)
     /// A message for the middle of the footer.
     func vimShow(message: String)
+    /// The `:` line as it is being typed, and `nil` when it closes. It shows
+    /// where showcmd does, so the text view never gives up first responder.
+    func vimCommandLineChanged(_ text: String?)
+    /// `:w` with no name is ⌘S; a name is a save-as into the last-used
+    /// folder. True when the note reached the disk, which is what `:wq`
+    /// waits for before closing.
+    func vimSave(name: String?) -> Bool
+    /// `:q` and `:q!`. Without the bang a dirty tab prompts, exactly as ⌘W
+    /// does — the window, not the engine, decides that.
+    func vimClose(force: Bool)
+    /// `:e path`.
+    func vimOpen(path: String)
+    /// `:tabnew`.
+    func vimNewTab()
+    /// `:help`, `:reg`, `:marks`: a read-only tab, reused when one of that
+    /// name is already open.
+    func vimOpenScratchTab(title: String, text: String)
+    /// `/`, `?`, `n`, `N`, `*`, `#` and `:noh` — the native find bar does the
+    /// searching, so all the engine does is drive it.
+    func vimFind(_ action: VimFindAction)
 }
 
 /// Vim's normal-mode state machine, driving a real `NSTextView`.
@@ -33,10 +53,15 @@ final class VimEngine {
                 enterNormalMode()
             } else {
                 visual = nil
+                commandLine = nil
+                host?.vimCommandLineChanged(nil)
                 mode = .insert          // the caret goes back to a bar
                 resetPending()
                 applyCursorStyle()
             }
+            // The band is vim's, so it goes when vim does and comes back with
+            // it if it was on.
+            textView?.showsCursorLine = isEnabled && cursorLine
         }
     }
 
@@ -53,6 +78,19 @@ final class VimEngine {
 
     /// How far `>>`, `<<`, `⌃T` and `⌃D` shift. The vimrc can change it.
     var shiftWidth = 4
+
+    /// `set cursorline`: the caret's line wears a quiet band. Off by default;
+    /// the text view draws it.
+    var cursorLine = false {
+        didSet {
+            guard cursorLine != oldValue else { return }
+            textView?.showsCursorLine = cursorLine
+        }
+    }
+
+    /// False on a scratch tab — `:help`, `:reg`, `:marks`. Motions still
+    /// work; anything that would change the text says so instead.
+    var isModifiable = true
 
     /// The unnamed register. The general pasteboard in the app; the tests
     /// pass a private one so running them never disturbs a real clipboard.
@@ -82,6 +120,26 @@ final class VimEngine {
     var visual: VisualState?
     /// What `gv` reselects.
     var lastVisual: VisualState?
+
+    // MARK: - Command line and search
+
+    /// The `:` line being typed, and where the history walk has got to.
+    var commandLine: String?
+    var commandHistory: [String] = []
+    var historyIndex: Int?
+    /// What was typed before the history walk started, so ↓ can come back.
+    var historyDraft: String?
+
+    /// Which way `n` goes: `/` sets it forward, `?` backward.
+    var searchIsForward = true
+    /// The last thing `*`, `#` or `:s` looked for — what an empty `:s//new/`
+    /// pattern falls back to.
+    var lastSearchPattern: String?
+    /// What a bare `:s` runs again.
+    var lastSubstitution: VimSubstitution?
+    /// Where `*` and `#` hand the word to the find bar. The tests swap in a
+    /// private board so a run never disturbs the real one.
+    var findPasteboard: NSPasteboard = .init(name: .find)
 
     // MARK: - Recording state
 
@@ -130,6 +188,8 @@ final class VimEngine {
     /// What the footer shows beside the badge — showcmd, and the macro being
     /// recorded, in the same quiet type as everything else down there.
     func publishPendingKeys() {
+        // The `:` line borrows that same slot, and while it is up it owns it.
+        guard commandLine == nil else { return }
         var keys = ""
         if let operatorCount { keys += "\(operatorCount)" }
         if let pendingRegister { keys += "\"\(pendingRegister)" }
@@ -170,6 +230,10 @@ final class VimEngine {
         // from visual mode leaves visual mode properly on the way — marks and
         // all — rather than stranding a selection behind the caret.
         if visual != nil { finishVisual(caretAt: caret) }
+        guard isModifiable else {
+            refuseChange()
+            return
+        }
         resetPending()
         beginInsertSession()
         mode = .insert
@@ -205,6 +269,7 @@ final class VimEngine {
     @discardableResult
     func handle(_ key: VimKey) -> Bool {
         guard isEnabled else { return false }
+        collapseFoundSelection(before: key)
         let wasRecording = recordingRegister
         let handled = dispatch(key)
         noteRecordedKey(key, wasRecording: wasRecording)
@@ -220,6 +285,8 @@ final class VimEngine {
             return handleInsert(key)
         case .replace:
             return handleReplace(key)
+        case .commandLine:
+            return handleCommandLine(key)
         case .visual, .visualLine:
             commandKeys.append(key)
             return handleVisual(key)
@@ -553,6 +620,15 @@ final class VimEngine {
             pendingCount = nil
             repeatLastChange(count: count)
 
+        // The command line, and the searching the find bar does
+        case ":":
+            beginCommandLine()
+            return true
+        case "/", "?": beginSearch(forward: character == "/")
+        case "n": repeatSearch(reversed: false)
+        case "N": repeatSearch(reversed: true)
+        case "*", "#": searchWordUnderCaret(forward: character == "*")
+
         // Visual
         case "v": enterVisual(linewise: false)
         case "V": enterVisual(linewise: true)
@@ -654,6 +730,12 @@ final class VimEngine {
     }
 
     func applyOperator(_ op: VimOperator, to range: NSRange, kind: VimMotionKind) {
+        // A yank changes nothing, so it is the one operator a scratch tab
+        // still allows; the rest stop before the register is written.
+        guard op == .yank || isModifiable else {
+            refuseChange()
+            return
+        }
         let linewise = kind == .linewise
         let register = pendingRegister
         switch op {
@@ -750,8 +832,23 @@ final class VimEngine {
         }
     }
 
+    /// What a scratch tab says when something tries to change it. Vim's own
+    /// words, since it is vim's own rule.
+    static let notModifiableMessage = "E21: Cannot make changes, 'modifiable' is off"
+
+    /// Once per command, not once per edit inside it.
+    func refuseChange() {
+        host?.vimShow(message: Self.notModifiableMessage)
+        resetPending()
+        discardCommandKeys()
+    }
+
     /// One undo group per command, so `u` after `3dd` restores all three.
     func edit(_ body: () -> Void) {
+        guard isModifiable else {
+            refuseChange()
+            return
+        }
         guard let textView else { return }
         textView.breakUndoCoalescing()
         let manager = textView.undoManager

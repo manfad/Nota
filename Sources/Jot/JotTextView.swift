@@ -33,6 +33,14 @@ final class JotTextView: NSTextView {
         }
     }
 
+    /// `set cursorline`: a quiet full-width band under the caret's line.
+    var showsCursorLine = false {
+        didSet {
+            guard oldValue != showsCursorLine else { return }
+            needsDisplay = true
+        }
+    }
+
     /// Read order. The first type the pasteboard also carries wins, so a copy
     /// from Jot never degrades to RTF or bare text.
     private static let readPriority: [NSPasteboard.PasteboardType] = [
@@ -79,6 +87,21 @@ final class JotTextView: NSTextView {
         block.fill()
     }
 
+    /// The cursorline band, under everything: `drawBackground` runs before the
+    /// glyphs and before the selection highlight, so the text reads through it
+    /// and a selection still draws over the top.
+    ///
+    /// `labelColor` at 4% rather than a colour of its own — the same
+    /// monochrome rule the mode badge keeps.
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard showsCursorLine else { return }
+        let band = lineBand(for: NSRange(location: selectedRange().location, length: 0), padding: 0)
+        guard band.intersects(rect) else { return }
+        NSColor.labelColor.withAlphaComponent(0.04).setFill()
+        band.fill()
+    }
+
     /// AppKit invalidates a caret-shaped sliver, and it does so for the old
     /// caret after the selection has already moved. A block is wider than
     /// that sliver, and the old character may be wider than the new one, so
@@ -112,6 +135,16 @@ final class JotTextView: NSTextView {
         let previousBlock = drawnBlockRect
         let previousSelection = selectedRange()
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        // The band moves with the caret, so both lines it was and is on have
+        // to be repainted whatever shape the caret is.
+        if showsCursorLine {
+            for range in [previousSelection, selectedRange()] {
+                super.setNeedsDisplay(
+                    lineBand(for: NSRange(location: range.location, length: 0)),
+                    avoidAdditionalLayout: false
+                )
+            }
+        }
         guard vimCursorStyle != .bar else { return }
         if !previousBlock.isEmpty {
             super.setNeedsDisplay(previousBlock, avoidAdditionalLayout: true)
@@ -121,10 +154,10 @@ final class JotTextView: NSTextView {
         }
     }
 
-    /// The full-width band of the lines a range sits on, one line further
-    /// down than the range itself so a highlight that spills into the line
-    /// spacing below is covered too.
-    private func lineBand(for range: NSRange) -> NSRect {
+    /// The full-width band of the lines a range sits on. Invalidating takes a
+    /// couple of points of padding — a highlight spills into the line spacing
+    /// below — where drawing takes the band exactly as it is laid out.
+    private func lineBand(for range: NSRange, padding: CGFloat = 2) -> NSRect {
         guard let layoutManager else { return bounds }
         let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
         let glyphCount = layoutManager.numberOfGlyphs
@@ -139,7 +172,7 @@ final class JotTextView: NSTextView {
         band.origin.x = 0
         band.size.width = bounds.width
         band.origin.y += textContainerOrigin.y
-        return band.insetBy(dx: 0, dy: -2)
+        return band.insetBy(dx: 0, dy: -padding)
     }
 
     private var isMeasuringCaret = false

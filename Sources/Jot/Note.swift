@@ -13,6 +13,10 @@ final class Note {
     var untitledName: String?
     /// True when the cache holds edits that are not in the file yet.
     var isDirty: Bool = false
+    /// A `:help`, `:reg` or `:marks` tab: read-only, and never written to the
+    /// cache or brought back on relaunch. It is a view of something, not a
+    /// note, so nothing about it is worth keeping.
+    var isScratch: Bool = false
     var selectionLocation: Int = 0
 
     let storage: NSTextStorage
