@@ -39,9 +39,12 @@
 
 ## Vim mode (Settings checkbox, off by default)
 - Opens in normal mode. Esc alternatives: ⌃[ and ⌃C only (no jk).
-- Near-full: motions (h j k l w b e W B E 0 ^ $ gg G { } f t F T ; , % counts), operators d c y with motions,
-  dd cc yy, x X p P, u ⌃r, `.`, text objects (iw aw ip i" a" i( i[ i{ and pairs), visual v V,
-  o O a A I, J, >> <<, r, ~, named registers, q macros, marks (m ' `).
+- Near-full: motions (h j k l w b e W B E 0 ^ $ gg G { } f t F T ; , % counts), operators d c y < > = ~ g~ gu gU
+  with motions, doubled forms (dd cc yy >> << == guu gUU g~~), x X p P, u ⌃r, `.` (incl. the typed text of an insert
+  session; `3.` overrides the count), text objects (iw aw iW aW is as ip ap, i" a" i' a' i` a`, i( i[ i{ i< and pairs, it at),
+  visual v V (real NSTextView selection; o swaps ends; gv), o O a A I, J, r, ~, registers ("a–"z, "A–"Z append,
+  "0 yank, "1–"9 deletes, "- small delete, "_ black hole, "+ "* = pasteboard), q macros (@a @@), marks (m ' ` '' '. '^ '< '>).
+  `=` re-indents to the nearest non-blank line above (prose, not code). Visual changes are not recorded for `.`.
 - Clipboard shared (unnamedplus): y/d write, p reads the system pasteboard (images survive).
 - Ex commands: :w [name], :q (closes the tab), :q!, :wq, :x, :N, :s / :%s with g i flags, :noh,
   :tabnew, :tabn, :tabp, :e path. Unknown → "Not an editor command" in the status bar.
