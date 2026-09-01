@@ -236,7 +236,33 @@ final class VimStage3Tests: XCTestCase {
         harness.type(":noh<CR>")
         harness.type(":set cursorline<CR>")
         harness.type(":noh<CR>")
-        XCTAssertEqual(harness.engine.commandHistory, ["set cursorline", "noh"])
+        XCTAssertEqual(harness.engine.history(for: ":"), ["set cursorline", "noh"])
+    }
+
+    /// Nothing opens a `/` prompt today — the find bar does the searching —
+    /// but the line itself knows nothing about the colon, so a search prompt
+    /// would be the same typing, the same history and the same footer slot.
+    func testThePromptIsTheSameWhicheverCharacterOpenedIt() throws {
+        let harness = try makeHarness("alpha")
+        harness.engine.beginPrompt("/")
+        harness.type("beta")
+        XCTAssertEqual(harness.engine.prompt, VimPrompt(prefix: "/", text: "beta"))
+        XCTAssertEqual(harness.host.commandLines.last, "/beta")
+
+        harness.type("<C-w>x<CR>")
+        XCTAssertNil(harness.engine.prompt)
+        XCTAssertEqual(harness.string, "alpha", "and nothing reaches the note")
+
+        // Each prompt keeps its own history, the way vim keeps `:` and `/`
+        // apart.
+        harness.run("noh")
+        XCTAssertEqual(harness.engine.history(for: "/"), ["x"])
+        XCTAssertEqual(harness.engine.history(for: ":"), ["noh"])
+
+        harness.engine.beginPrompt("/")
+        harness.type("<Up>")
+        XCTAssertEqual(harness.engine.commandLine, "x")
+        harness.type("<Esc>")
     }
 
     func testVisualColonPrefillsTheSelectionsRange() throws {

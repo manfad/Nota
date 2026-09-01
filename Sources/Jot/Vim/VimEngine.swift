@@ -53,7 +53,7 @@ final class VimEngine {
                 enterNormalMode()
             } else {
                 visual = nil
-                commandLine = nil
+                prompt = nil
                 host?.vimCommandLineChanged(nil)
                 mode = .insert          // the caret goes back to a bar
                 resetPending()
@@ -123,9 +123,14 @@ final class VimEngine {
 
     // MARK: - Command line and search
 
-    /// The `:` line being typed, and where the history walk has got to.
-    var commandLine: String?
-    var commandHistory: [String] = []
+    /// The footer prompt being typed. `:` is the only one that opens today;
+    /// the machinery is written in terms of the prompt's character so a `/`
+    /// search prompt would be the same typing, history and footer slot.
+    var prompt: VimPrompt?
+    /// One history per prompt character, which is how vim keeps `:` and `/`
+    /// apart.
+    var promptHistories: [Character: [String]] = [:]
+    /// Where the history walk has got to.
     var historyIndex: Int?
     /// What was typed before the history walk started, so ↓ can come back.
     var historyDraft: String?
@@ -189,7 +194,7 @@ final class VimEngine {
     /// recorded, in the same quiet type as everything else down there.
     func publishPendingKeys() {
         // The `:` line borrows that same slot, and while it is up it owns it.
-        guard commandLine == nil else { return }
+        guard prompt == nil else { return }
         var keys = ""
         if let operatorCount { keys += "\(operatorCount)" }
         if let pendingRegister { keys += "\"\(pendingRegister)" }
@@ -286,7 +291,7 @@ final class VimEngine {
         case .replace:
             return handleReplace(key)
         case .commandLine:
-            return handleCommandLine(key)
+            return handlePrompt(key)
         case .visual, .visualLine:
             commandKeys.append(key)
             return handleVisual(key)
@@ -622,7 +627,7 @@ final class VimEngine {
 
         // The command line, and the searching the find bar does
         case ":":
-            beginCommandLine()
+            beginPrompt()
             return true
         case "/", "?": beginSearch(forward: character == "/")
         case "n": repeatSearch(reversed: false)

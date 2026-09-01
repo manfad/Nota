@@ -1,5 +1,17 @@
 import AppKit
 
+/// One line being typed in the footer: the character that opened it, and what
+/// has been typed since.
+///
+/// `:` is the only prompt that opens today. It is a value with a prefix rather
+/// than a bare string so that a `/` search prompt — if searching ever comes off
+/// the native find bar — is the same editing keys, the same history and the
+/// same footer slot, with only what Return does at the end of it to write.
+struct VimPrompt: Equatable {
+    var prefix: Character
+    var text: String
+}
+
 /// The `:` line.
 ///
 /// It is engine state and a string handed to the window, not a text field:
@@ -11,27 +23,30 @@ import AppKit
 /// working while a command is half typed.
 extension VimEngine {
 
+    /// The open prompt's text, without its prefix.
+    var commandLine: String? { prompt?.text }
+
     // MARK: - Opening and closing
 
     /// `:` in normal mode; from visual mode the selection's range comes with
     /// it, exactly as vim prefills `'<,'>`.
-    func beginCommandLine(initialText: String = "") {
+    func beginPrompt(_ prefix: Character = ":", initialText: String = "") {
         resetPending()
         discardCommandKeys()
-        commandLine = initialText
+        prompt = VimPrompt(prefix: prefix, text: initialText)
         historyIndex = nil
         historyDraft = nil
         setMode(.commandLine)
-        publishCommandLine()
+        publishPrompt()
     }
 
     /// Escape, ⌃C, ⌃[, or a Backspace that runs out of text.
-    func cancelCommandLine() {
-        closeCommandLine()
+    func cancelPrompt() {
+        closePrompt()
     }
 
-    private func closeCommandLine() {
-        commandLine = nil
+    private func closePrompt() {
+        prompt = nil
         historyIndex = nil
         historyDraft = nil
         host?.vimCommandLineChanged(nil)
@@ -40,41 +55,43 @@ extension VimEngine {
         publishPendingKeys()
     }
 
-    private func publishCommandLine() {
-        host?.vimCommandLineChanged(":" + (commandLine ?? ""))
+    /// The footer shows the prompt's character in front of the text, the way
+    /// vim's command line does.
+    private func publishPrompt() {
+        guard let prompt else { return }
+        host?.vimCommandLineChanged(String(prompt.prefix) + prompt.text)
     }
 
     // MARK: - Keys
 
     /// Everything the line understands. Anything else is ignored rather than
     /// swallowed silently into the note.
-    func handleCommandLine(_ key: VimKey) -> Bool {
-        guard var line = commandLine else {
+    func handlePrompt(_ key: VimKey) -> Bool {
+        guard var open = prompt else {
             // The mode without the line is nothing anyone can type into.
             setMode(.normal)
             return false
         }
 
         if isEscape(key) {
-            cancelCommandLine()
+            cancelPrompt()
             return true
         }
 
         switch key.base {
         case .enter:
-            let typed = line
-            closeCommandLine()
-            run(typed)
+            closePrompt()
+            submit(open)
             return true
         case .backspace:
             // An empty line and one more Backspace is the same as Escape,
             // which is how vim leaves a command line you have unwritten.
-            guard !line.isEmpty else {
-                cancelCommandLine()
+            guard !open.text.isEmpty else {
+                cancelPrompt()
                 return true
             }
-            line.removeLast()
-            set(line)
+            open.text.removeLast()
+            set(open.text)
             return true
         case .up:
             walkHistory(back: true)
@@ -89,7 +106,7 @@ extension VimEngine {
         if key.control {
             switch key.character {
             case "w":
-                set(Self.droppingLastWord(line))
+                set(Self.droppingLastWord(open.text))
             case "u":
                 set("")
             default:
@@ -99,14 +116,14 @@ extension VimEngine {
         }
 
         guard let character = key.plainCharacter else { return true }
-        line.append(character)
-        set(line)
+        open.text.append(character)
+        set(open.text)
         return true
     }
 
-    private func set(_ line: String) {
-        commandLine = line
-        publishCommandLine()
+    private func set(_ text: String) {
+        prompt?.text = text
+        publishPrompt()
     }
 
     /// ⌃W: the trailing run of spaces and then the word before them.
@@ -119,20 +136,37 @@ extension VimEngine {
 
     // MARK: - History
 
-    /// ↑ and ↓ walk the commands run since the app started. Stepping past the
-    /// newest one comes back to whatever was being typed when the walk began.
+    /// What ↑ and ↓ walk: everything run at that prompt since the app started.
+    func history(for prefix: Character) -> [String] {
+        promptHistories[prefix] ?? []
+    }
+
+    /// Vim keeps one copy of a repeated command, at the end.
+    func remember(_ line: String, for prefix: Character) {
+        guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        var entries = history(for: prefix)
+        entries.removeAll { $0 == line }
+        entries.append(line)
+        promptHistories[prefix] = entries
+    }
+
+    /// Stepping past the newest entry comes back to whatever was being typed
+    /// when the walk began.
     private func walkHistory(back: Bool) {
-        guard !commandHistory.isEmpty else { return }
+        guard let prefix = prompt?.prefix else { return }
+        let entries = history(for: prefix)
+        guard !entries.isEmpty else { return }
+
         if back {
             if historyIndex == nil {
-                historyDraft = commandLine
-                historyIndex = commandHistory.count - 1
+                historyDraft = prompt?.text
+                historyIndex = entries.count - 1
             } else {
                 historyIndex = max(0, (historyIndex ?? 0) - 1)
             }
         } else {
             guard let index = historyIndex else { return }
-            if index + 1 < commandHistory.count {
+            if index + 1 < entries.count {
                 historyIndex = index + 1
             } else {
                 historyIndex = nil
@@ -140,22 +174,25 @@ extension VimEngine {
                 return
             }
         }
-        set(commandHistory[historyIndex ?? 0])
-    }
-
-    /// Vim keeps one copy of a repeated command, at the end.
-    func rememberCommand(_ line: String) {
-        guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        commandHistory.removeAll { $0 == line }
-        commandHistory.append(line)
+        set(entries[historyIndex ?? 0])
     }
 
     // MARK: - Running
 
+    /// What Return does. Only `:` has anywhere to go so far; another prompt
+    /// keeps its history and does nothing else until there is something for it
+    /// to run.
+    private func submit(_ prompt: VimPrompt) {
+        switch prompt.prefix {
+        case ":": run(prompt.text)
+        default: remember(prompt.text, for: prompt.prefix)
+        }
+    }
+
     /// The whole of `:` in one call, so a macro or a test can run a command
     /// without typing it a key at a time.
     func run(_ line: String) {
-        rememberCommand(line)
+        remember(line, for: ":")
         guard let command = VimEx.parse(line) else { return }
         execute(command)
         clampCaret()
