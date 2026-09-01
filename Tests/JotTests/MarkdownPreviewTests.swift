@@ -19,9 +19,22 @@ final class MarkdownPreviewTests: XCTestCase {
         _ markdown: String, font: NSFont? = nil,
         assets: AssetStore? = nil, width: CGFloat = 400
     ) -> NSAttributedString {
+        result(markdown, font: font, assets: assets, width: width).text
+    }
+
+    private func result(
+        _ markdown: String, font: NSFont? = nil,
+        assets: AssetStore? = nil, width: CGFloat = 400
+    ) -> MarkdownRenderer.Result {
         MarkdownRenderer.render(
             markdown, font: font ?? editorFont, assets: assets, width: width
         )
+    }
+
+    /// The source text each rendered block came from, in order.
+    private func sources(_ markdown: String) -> [String] {
+        let source = markdown as NSString
+        return result(markdown).blocks.map { source.substring(with: $0.source) }
     }
 
     /// The attributes on the first character of a piece of the render.
@@ -50,6 +63,7 @@ final class MarkdownPreviewTests: XCTestCase {
     func testEmptyMarkdownRendersNothing() {
         XCTAssertEqual(render("").length, 0)
         XCTAssertEqual(render("").string, "")
+        XCTAssertTrue(result("").blocks.isEmpty)
     }
 
     func testHeadingsScaleFromTheEditorsSizeAndTurnSemibold() throws {
@@ -260,6 +274,169 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(rendered.string.contains("no end"), rendered.string.debugDescription)
     }
 
+    // MARK: - Source ranges
+
+    func testEveryBlockKnowsWhereItCameFrom() {
+        let markdown = """
+        # Title
+
+        A plain paragraph.
+
+        - one
+        - two
+        """
+        XCTAssertEqual(
+            sources(markdown),
+            ["# Title", "A plain paragraph.", "- one", "- two"]
+        )
+    }
+
+    func testAHeadingsSourceIsItsWholeLineTrailingHashesAndAll() {
+        XCTAssertEqual(sources("## Trailing hashes ##"), ["## Trailing hashes ##"])
+        XCTAssertEqual(sources("###### Deep\n\nafter"), ["###### Deep", "after"])
+    }
+
+    /// `**bold** start` renders as `bold start`, which is nowhere in the
+    /// source — the first word alone is what finds the line.
+    func testAParagraphOpeningWithMarkupIsStillFound() {
+        XCTAssertEqual(
+            sources("first\n\n**bold** start of another."),
+            ["first", "**bold** start of another."]
+        )
+        XCTAssertEqual(
+            sources("Read [the spec](https://example.com/spec)."),
+            ["Read [the spec](https://example.com/spec)."]
+        )
+    }
+
+    func testNestedListItemsMapToTheirOwnLines() {
+        XCTAssertEqual(
+            sources("- one\n- two\n  - nested\n"),
+            ["- one", "- two", "  - nested"]
+        )
+        XCTAssertEqual(sources("3. three\n4. four"), ["3. three", "4. four"])
+    }
+
+    func testABlockQuoteCoversEveryLineItWasWrittenOn() {
+        XCTAssertEqual(
+            sources("> quoted line\n> and more\n\nafter"),
+            ["> quoted line\n> and more", "after"]
+        )
+    }
+
+    /// The fence is followed to its close, which is also what keeps code that
+    /// happens to repeat later prose from stealing the next block's line.
+    func testAFencedBlockCoversBothFencesAndSwallowsWhatIsBetweenThem() {
+        let markdown = """
+        ```swift
+        let x = 1
+        after the fence
+        ```
+
+        after the fence
+        """
+        XCTAssertEqual(
+            sources(markdown),
+            ["```swift\nlet x = 1\nafter the fence\n```", "after the fence"]
+        )
+    }
+
+    func testAnUnclosedFenceRunsToTheEndOfTheNote() {
+        let markdown = "start\n\n```\nno end"
+        XCTAssertEqual(sources(markdown), ["start", "```\nno end"])
+    }
+
+    func testAThematicBreakMapsToItsRuleLine() {
+        XCTAssertEqual(sources("above\n\n---\n\nbelow"), ["above", "---", "below"])
+        XCTAssertEqual(sources("above\n\n***\n\nbelow")[1], "***")
+    }
+
+    func testAnImageWithNoAltTextIsFoundByItsToken() {
+        XCTAssertEqual(
+            sources("before\n\n![](jot://x.png)\n\nafter"),
+            ["before", "![](jot://x.png)", "after"]
+        )
+    }
+
+    func testATableCoversAllItsRows() {
+        let markdown = "| a | b |\n| - | - |\n| 1 | 2 |\n\nafter"
+        XCTAssertEqual(sources(markdown), ["| a | b |\n| - | - |\n| 1 | 2 |", "after"])
+    }
+
+    /// A paragraph the writer hard-wrapped renders as one line; its source is
+    /// still every line it was typed on.
+    func testAHardWrappedParagraphCoversEveryLineOfIt() {
+        XCTAssertEqual(
+            sources("hard\nwrapped paragraph\n\nafter"),
+            ["hard\nwrapped paragraph", "after"]
+        )
+    }
+
+    /// The search only ever runs forward, so the second copy of a line is
+    /// found where it is rather than where the first one was.
+    func testTheSameWordsTwiceMapToTheRightOneEachTime() {
+        let blocks = result("same words\n\nsame words").blocks
+        XCTAssertEqual(blocks.count, 2)
+        XCTAssertEqual(blocks[0].source, NSRange(location: 0, length: 10))
+        XCTAssertEqual(blocks[1].source, NSRange(location: 12, length: 10))
+    }
+
+    func testSourcesRunForwardsAndNeverOverlap() throws {
+        let markdown = """
+        # Title
+
+        One paragraph.
+
+        - a
+        - b
+
+        > quoted
+
+        ```
+        code
+        ```
+
+        ---
+
+        | x | y |
+        | - | - |
+
+        ![](jot://z.png)
+
+        Last one.
+        """
+        let blocks = result(markdown).blocks
+        XCTAssertEqual(blocks.count, 10, "a block each, in document order")
+        for (earlier, later) in zip(blocks, blocks.dropFirst()) {
+            XCTAssertLessThanOrEqual(
+                NSMaxRange(earlier.source), later.source.location,
+                "blocks come in document order and never share a character"
+            )
+            XCTAssertLessThan(earlier.range.location, later.range.location)
+        }
+        XCTAssertLessThanOrEqual(
+            NSMaxRange(try XCTUnwrap(blocks.last).source), (markdown as NSString).length
+        )
+    }
+
+    func testEveryBlockCarriesItsSourceRangeAsAnAttribute() throws {
+        let markdown = "# Title\n\nBody text."
+        let rendered = result(markdown)
+        let heading = (rendered.text.string as NSString).range(of: "Title")
+        let body = (rendered.text.string as NSString).range(of: "Body")
+
+        XCTAssertEqual(
+            (rendered.text.attribute(.jotSourceRange, at: heading.location, effectiveRange: nil)
+                as? NSValue)?.rangeValue,
+            NSRange(location: 0, length: 7)
+        )
+        XCTAssertEqual(
+            (rendered.text.attribute(.jotSourceRange, at: body.location, effectiveRange: nil)
+                as? NSValue)?.rangeValue,
+            NSRange(location: 9, length: 10)
+        )
+    }
+
     // MARK: - Images
 
     func testAJotTokenBecomesTheAssetsOwnPicture() throws {
@@ -324,22 +501,23 @@ final class MarkdownPreviewTests: XCTestCase {
     @MainActor
     func testThePaneKeepsItsPlaceAcrossARender() throws {
         _ = NSApplication.shared
-        let preview = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 300, height: 120))
+        let preview = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 300, height: 160))
         preview.layoutSubtreeIfNeeded()
 
         let long = (1 ... 200).map { "Line \($0)" }.joined(separator: "\n\n")
-        preview.show(render(long))
-        preview.follow(fraction: 0.5)
-        XCTAssertEqual(preview.scrollFraction, 0.5, accuracy: 0.05)
+        let rendered = result(long)
+        preview.show(rendered)
+        XCTAssertEqual(preview.scrollFraction, 0, accuracy: 0.01, "a fresh render opens at the top")
+
+        // Lighting a block far down the note scrolls the pane to it.
+        let late = try XCTUnwrap(rendered.blocks.last).source.location
+        preview.highlightBlock(containingSource: late)
+        let reached = preview.scrollFraction
+        XCTAssertGreaterThan(reached, 0.5)
 
         // Re-rendering the same note does not throw the reader back to the top.
-        preview.show(render(long))
-        XCTAssertEqual(preview.scrollFraction, 0.5, accuracy: 0.05)
-
-        preview.follow(fraction: 1)
-        XCTAssertEqual(preview.scrollFraction, 1, accuracy: 0.01)
-        preview.follow(fraction: 0)
-        XCTAssertEqual(preview.scrollFraction, 0, accuracy: 0.01)
+        preview.show(result(long))
+        XCTAssertEqual(preview.scrollFraction, reached, accuracy: 0.05)
     }
 
     @MainActor
@@ -541,6 +719,223 @@ final class MarkdownPreviewTests: XCTestCase {
         }
     }
 
+    // MARK: - The header
+
+    @MainActor
+    func testThePaneHasAHeaderBandMatchingTheTabStrip() throws {
+        _ = NSApplication.shared
+        let preview = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 320, height: 300))
+        preview.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(preview.headerTitle, "Markdown Preview")
+        // The band and the tab strip are opposite numbers across the divider.
+        let header = try XCTUnwrap(preview.subviews.first { !($0 is NSScrollView) })
+        XCTAssertEqual(header.frame.height, TabBarView.height)
+        XCTAssertEqual(header.frame.width, preview.bounds.width, "it runs the pane's full width")
+        XCTAssertEqual(header.frame.maxY, preview.bounds.maxY, "and sits at the very top")
+
+        // The rendered text scrolls beneath it, never under it.
+        let scrollView = try XCTUnwrap(descendant(of: preview, ofType: NSScrollView.self))
+        XCTAssertEqual(scrollView.frame.maxY, header.frame.minY, accuracy: 0.5)
+    }
+
+    /// The band is part of the pane, so it comes and goes with it rather than
+    /// leaving a titled strip over nothing.
+    @MainActor
+    func testTheHeaderComesAndGoesWithThePane() throws {
+        _ = NSApplication.shared
+        try withPreviewPreference(false) {
+            let controller = try makeController()
+            let content = try XCTUnwrap(controller.window?.contentView)
+            XCTAssertNil(
+                descendant(of: content, ofType: MarkdownPreviewView.self),
+                "a collapsed pane is not in the window at all"
+            )
+
+            controller.toggleMarkdownPreview()
+            controller.window?.layoutIfNeeded()
+            let preview = try previewView(of: controller)
+            XCTAssertEqual(preview.headerTitle, "Markdown Preview")
+            XCTAssertGreaterThanOrEqual(preview.bounds.height, TabBarView.height)
+        }
+    }
+
+    // MARK: - Block sync
+
+    @MainActor
+    func testClickingABlockPutsTheCaretOnItsSourceInTheEditor() throws {
+        _ = NSApplication.shared
+        try withPreviewPreference(true) {
+            let controller = try makeController()
+            let editor = try editorTextView(of: controller)
+            editor.insertText(
+                "# Title\n\nFirst paragraph.\n\nSecond paragraph.",
+                replacementRange: editor.selectedRange()
+            )
+            waitForDebounce()
+            XCTAssertEqual(
+                controller.previewState.renderedText,
+                "Title\nFirst paragraph.\nSecond paragraph."
+            )
+
+            try clickPreview(of: controller, on: "Second paragraph.")
+            // "Second paragraph." starts at 27 in the source.
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: 27, length: 0))
+
+            try clickPreview(of: controller, on: "Title")
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 0),
+                           "the caret lands on the block's first character")
+        }
+    }
+
+    @MainActor
+    func testClickingABlockLeavesFocusInTheEditor() throws {
+        _ = NSApplication.shared
+        try withPreviewPreference(true) {
+            let controller = try makeController()
+            let window = try XCTUnwrap(controller.window)
+            let editor = try editorTextView(of: controller)
+            editor.insertText("# Title\n\nBody.", replacementRange: editor.selectedRange())
+            waitForDebounce()
+            controller.focusEditor()
+
+            try clickPreview(of: controller, on: "Body.")
+            XCTAssertTrue(
+                window.firstResponder is JotTextView,
+                "a click in the pane is a jump, not a place to type"
+            )
+            let preview = try previewView(of: controller)
+            let previewText = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+            XCTAssertFalse(previewText.acceptsFirstResponder)
+        }
+    }
+
+    @MainActor
+    func testClickingABlockOffScreenScrollsTheEditorToIt() throws {
+        _ = NSApplication.shared
+        try withPreviewPreference(true) {
+            let controller = try makeController()
+            let editor = try editorTextView(of: controller)
+            let long = (1 ... 120).map { "Paragraph \($0) of the note." }
+                .joined(separator: "\n\n")
+            editor.insertText(long, replacementRange: editor.selectedRange())
+            editor.setSelectedRange(NSRange(location: 0, length: 0))
+            editor.scrollRangeToVisible(NSRange(location: 0, length: 0))
+            waitForDebounce()
+
+            let scrollView = try XCTUnwrap(editor.enclosingScrollView)
+            XCTAssertEqual(scrollView.contentView.bounds.origin.y, 0, accuracy: 1)
+
+            try clickPreview(of: controller, on: "Paragraph 100 of the note.")
+            XCTAssertGreaterThan(
+                scrollView.contentView.bounds.origin.y, 0,
+                "the editor comes to the block that was clicked"
+            )
+            let caret = editor.selectedRange().location
+            XCTAssertEqual(
+                (editor.string as NSString).substring(
+                    with: NSRange(location: caret, length: 13)
+                ),
+                "Paragraph 100"
+            )
+        }
+    }
+
+    @MainActor
+    func testClickingABlockInVimModeComesBackToNormalMode() throws {
+        _ = NSApplication.shared
+        let previousVim = Preferences.shared.vimMode
+        defer { Preferences.shared.vimMode = previousVim }
+
+        try withPreviewPreference(true) {
+            Preferences.shared.vimMode = true
+            let controller = try makeController()
+            let editor = try editorTextView(of: controller)
+            editor.insertText("# Title\n\nBody.", replacementRange: editor.selectedRange())
+            waitForDebounce()
+
+            controller.vim.enterInsertMode()
+            XCTAssertEqual(controller.vim.mode, .insert)
+            try clickPreview(of: controller, on: "Body.")
+            XCTAssertEqual(controller.vim.mode, .normal, "a jump is a move, not a typing session")
+        }
+    }
+
+    @MainActor
+    func testMovingTheCaretLightsTheBlockItIsIn() throws {
+        _ = NSApplication.shared
+        try withPreviewPreference(true) {
+            let controller = try makeController()
+            let editor = try editorTextView(of: controller)
+            editor.insertText(
+                "# Title\n\nFirst paragraph.\n\nSecond paragraph.",
+                replacementRange: editor.selectedRange()
+            )
+            waitForDebounce()
+            let preview = try previewView(of: controller)
+
+            editor.setSelectedRange(NSRange(location: 2, length: 0))
+            XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 0, length: 7))
+
+            editor.setSelectedRange(NSRange(location: 12, length: 0))
+            XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 9, length: 16))
+
+            editor.setSelectedRange(NSRange(location: 30, length: 0))
+            XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 27, length: 17))
+
+            // A caret on the blank line between two blocks belongs to the one
+            // above it rather than to nothing.
+            editor.setSelectedRange(NSRange(location: 26, length: 0))
+            XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 9, length: 16))
+        }
+    }
+
+    @MainActor
+    func testEditingPutsTheBandOutAndTheReRenderBringsItBack() throws {
+        _ = NSApplication.shared
+        try withPreviewPreference(true) {
+            let controller = try makeController()
+            let editor = try editorTextView(of: controller)
+            editor.insertText("# Title\n\nBody.", replacementRange: editor.selectedRange())
+            waitForDebounce()
+            let preview = try previewView(of: controller)
+
+            editor.setSelectedRange(NSRange(location: 2, length: 0))
+            XCTAssertNotNil(preview.highlightedSourceRange)
+
+            // The blocks have moved under the band; it means nothing until the
+            // pane is rendered again.
+            editor.insertText("x", replacementRange: NSRange(location: 0, length: 0))
+            XCTAssertNil(preview.highlightedSourceRange, "the band goes out on an edit")
+
+            waitForDebounce()
+            XCTAssertNotNil(
+                preview.highlightedSourceRange,
+                "and comes back for the caret once the render lands"
+            )
+        }
+    }
+
+    @MainActor
+    func testTheBandIsOnlyEverOnOneBlock() throws {
+        _ = NSApplication.shared
+        let preview = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 320, height: 400))
+        preview.layoutSubtreeIfNeeded()
+        preview.show(result("# One\n\nTwo\n\nThree"))
+
+        preview.highlightBlock(containingSource: 0)
+        XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 0, length: 5))
+        preview.highlightBlock(containingSource: 8)
+        XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 7, length: 3))
+
+        preview.invalidateBlocks()
+        XCTAssertNil(preview.highlightedSourceRange)
+        XCTAssertFalse(
+            preview.highlightBlock(containingSource: 0),
+            "nothing lights up while the blocks are stale"
+        )
+    }
+
     // MARK: - Helpers
 
     @MainActor
@@ -595,6 +990,45 @@ final class MarkdownPreviewTests: XCTestCase {
             if descendant(of: view, ofType: JotTextView.self) != nil { return "editor" }
             return "?"
         }
+    }
+
+    @MainActor
+    private func editorTextView(of controller: MainWindowController) throws -> JotTextView {
+        let content = try XCTUnwrap(controller.window?.contentView)
+        return try XCTUnwrap(descendant(of: content, ofType: JotTextView.self))
+    }
+
+    @MainActor
+    private func previewView(of controller: MainWindowController) throws -> MarkdownPreviewView {
+        let content = try XCTUnwrap(controller.window?.contentView)
+        return try XCTUnwrap(descendant(of: content, ofType: MarkdownPreviewView.self))
+    }
+
+    /// Clicks the pane where a piece of the rendered text is drawn, through a
+    /// real mouse event, so the click travels the path a reader's does.
+    @MainActor
+    private func clickPreview(of controller: MainWindowController, on text: String) throws {
+        let window = try XCTUnwrap(controller.window)
+        let preview = try previewView(of: controller)
+        let textView = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+        let layoutManager = try XCTUnwrap(textView.layoutManager)
+        let container = try XCTUnwrap(textView.textContainer)
+
+        let range = (textView.string as NSString).range(of: text)
+        try XCTSkipIf(range.location == NSNotFound, "\(text.debugDescription) is not in the pane")
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+        rect.origin.x += textView.textContainerOrigin.x
+        rect.origin.y += textView.textContainerOrigin.y
+
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: textView.convert(NSPoint(x: rect.minX + 2, y: rect.midY), to: nil),
+            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        textView.mouseDown(with: event)
     }
 
     @MainActor

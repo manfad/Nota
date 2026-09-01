@@ -50,6 +50,13 @@ final class MarkdownRuleAttachment: NSTextAttachment {
     required init?(coder: NSCoder) { fatalError("not used") }
 }
 
+extension NSAttributedString.Key {
+    /// The range in the note's own text that a rendered block came from, laid
+    /// on every character of that block. It is what a click in the preview
+    /// turns back into a place in the editor.
+    static let jotSourceRange = NSAttributedString.Key("jotSourceRange")
+}
+
 /// Markdown as an attributed string, for the preview pane.
 ///
 /// Foundation does the parsing — `AttributedString(markdown:)` with full
@@ -64,6 +71,16 @@ final class MarkdownRuleAttachment: NSTextAttachment {
 /// colours, so the pane matches the editor beside it in either appearance.
 enum MarkdownRenderer {
 
+    /// A render: the styled text, and where every block in it came from.
+    struct Result {
+        let text: NSAttributedString
+        /// In document order. `range` indexes `text`, `source` indexes the
+        /// note's own plain text.
+        let blocks: [(range: NSRange, source: NSRange)]
+
+        static let empty = Result(text: NSAttributedString(), blocks: [])
+    }
+
     /// H1 down to H6, as multiples of the editor's size.
     static let headingScales: [CGFloat] = [1.6, 1.4, 1.25, 1.15, 1.05, 1.0]
 
@@ -74,8 +91,8 @@ enum MarkdownRenderer {
 
     static func render(
         _ markdown: String, font: NSFont, assets: AssetStore?, width: CGFloat
-    ) -> NSAttributedString {
-        guard !markdown.isEmpty else { return NSAttributedString() }
+    ) -> Result {
+        guard !markdown.isEmpty else { return .empty }
 
         let options = AttributedString.MarkdownParsingOptions(
             allowsExtendedAttributes: true,
@@ -85,35 +102,54 @@ enum MarkdownRenderer {
         // Partial parsing already covers malformed input; this is the last
         // resort, where the note comes through as the plain text it is.
         guard let parsed = try? AttributedString(markdown: markdown, options: options) else {
-            return NSAttributedString(string: markdown, attributes: [
-                .font: font,
-                .foregroundColor: NSColor.labelColor,
-            ])
+            let whole = NSRange(location: 0, length: (markdown as NSString).length)
+            return Result(
+                text: NSAttributedString(string: markdown, attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor.labelColor,
+                    .jotSourceRange: NSValue(range: whole),
+                ]),
+                blocks: [(range: NSRange(location: 0, length: markdown.utf16.count),
+                          source: whole)]
+            )
         }
 
         let blocks = split(parsed)
         let result = NSMutableAttributedString()
+        var map = MarkdownSourceMap(markdown)
+        var sources: [(range: NSRange, source: NSRange)] = []
         // A list item's marker belongs to its first paragraph only; the rest
         // of the item lines up under it.
         var markedItems: Set<Int> = []
         var index = 0
 
         while index < blocks.count {
+            appendBreak(to: result)
+            let start = result.length
+            let source: NSRange
+
             if blocks[index].isTableCell {
                 let end = tableEnd(of: blocks, from: index)
-                appendBreak(to: result)
-                appendTable(Array(blocks[index ..< end]), to: result, font: font)
+                let cells = Array(blocks[index ..< end])
+                source = map.next(text: cells.first?.plainText ?? "", shape: .table)
+                appendTable(cells, to: result, font: font)
                 index = end
-                continue
+            } else {
+                let block = blocks[index]
+                let wantsMarker = block.listItemIdentity
+                    .map { markedItems.insert($0).inserted } ?? false
+                source = map.next(text: block.plainText, shape: block.shape)
+                append(block, to: result, font: font, assets: assets,
+                       width: width, wantsMarker: wantsMarker)
+                index += 1
             }
-            let block = blocks[index]
-            let wantsMarker = block.listItemIdentity.map { markedItems.insert($0).inserted } ?? false
-            appendBreak(to: result)
-            append(block, to: result, font: font, assets: assets,
-                   width: width, wantsMarker: wantsMarker)
-            index += 1
+
+            let range = NSRange(location: start, length: result.length - start)
+            guard range.length > 0 else { continue }
+            result.addAttribute(.jotSourceRange, value: NSValue(range: source), range: range)
+            sources.append((range: range, source: source))
         }
-        return result
+        return Result(text: result, blocks: sources)
     }
 
     // MARK: - Blocks
@@ -141,6 +177,20 @@ enum MarkdownRenderer {
         var isTableCell: Bool {
             if case .tableCell = kind { return true }
             return false
+        }
+
+        /// How this block is found again in the source. Most blocks are found
+        /// by their words; a fence, a rule and an image with no alt text have
+        /// none to be found by, so they are found by their punctuation.
+        var shape: MarkdownSourceMap.Shape {
+            switch kind {
+            case .codeBlock: return .codeFence
+            case .thematicBreak: return .thematicBreak
+            default: break
+            }
+            let hasImage = pieces.contains { $0.imageURL != nil }
+            let hasWords = plainText.contains { $0.isLetter || $0.isNumber }
+            return hasImage && !hasWords ? .image : .prose
         }
 
         /// The table this cell belongs to, so consecutive cells can be

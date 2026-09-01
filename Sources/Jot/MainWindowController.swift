@@ -382,6 +382,9 @@ final class MainWindowController: NSWindowController {
         markdownPreview.onWidthChange = { [weak self] in
             self?.scheduleMarkdownPreviewRender()
         }
+        markdownPreview.onBlockClick = { [weak self] source in
+            self?.goToSource(source)
+        }
         container.addSubview(markdownPreview)
         NSLayoutConstraint.activate([
             markdownPreview.topAnchor.constraint(equalTo: container.topAnchor),
@@ -389,15 +392,6 @@ final class MainWindowController: NSWindowController {
             markdownPreview.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             markdownPreview.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-
-        // The pane follows the editor rather than scrolling on its own, so it
-        // watches the editor's clip view move.
-        let clip = scrollView.contentView
-        clip.postsBoundsChangedNotifications = true
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(editorDidScroll),
-            name: NSView.boundsDidChangeNotification, object: clip
-        )
     }
 
     /// A real sidebar item on the left, an inspector item on the right — both
@@ -1445,18 +1439,60 @@ extension MainWindowController {
             assets: store.assets,
             width: markdownPreview.contentWidth
         ))
-        markdownPreview.follow(fraction: editorScrollFraction)
+        highlightPreviewBlock()
     }
 
-    /// Proportional rather than line-for-line: the rendered column is a
-    /// different height from the source, so the two are matched end to end.
-    @objc fileprivate func editorDidScroll() {
+    /// Lights the block the caret is in. Called on every selection change, so
+    /// walking the note in the editor walks the pane beside it.
+    fileprivate func highlightPreviewBlock() {
         guard previewIsVisible else { return }
-        markdownPreview.follow(fraction: editorScrollFraction)
+        markdownPreview.highlightBlock(containingSource: textView.selectedRange().location)
     }
 
-    private var editorScrollFraction: CGFloat {
-        MarkdownPreviewView.fraction(of: scrollView)
+    /// A block was clicked in the pane: put the caret on the first character
+    /// of the source it came from and show it.
+    private func goToSource(_ source: NSRange) {
+        guard let note = currentNote else { return }
+        let location = max(0, min(source.location, note.storage.length))
+        // A jump is a move, not a typing session: vim comes back to normal
+        // mode for it, the way `gg` or a mark would leave you.
+        if preferences.vimMode, vimEngine.mode != .normal { vimEngine.enterNormalMode() }
+        textView.setSelectedRange(NSRange(location: location, length: 0))
+        if preferences.vimMode { vimEngine.clampCaret() }
+        revealInEditor(textView.selectedRange())
+        // The pane is read, not typed in.
+        focusEditor()
+    }
+
+    /// Scrolls the editor to a place in the note. Somewhere already on screen
+    /// is left where it is; somewhere off it is brought to the middle, which
+    /// is where you want a block you have just jumped to.
+    private func revealInEditor(_ range: NSRange) {
+        let clip = scrollView.contentView
+        let wasVisible = editorRect(for: range).map { clip.bounds.intersects($0) } ?? true
+        textView.scrollRangeToVisible(range)
+        guard !wasVisible, let rect = editorRect(for: range) else { return }
+        let scrollable = max(0, textView.bounds.height - clip.bounds.height)
+        let y = min(max(0, rect.midY - clip.bounds.height / 2), scrollable)
+        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y.rounded()))
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    /// Where a piece of the note sits in the editor's document.
+    private func editorRect(for range: NSRange) -> NSRect? {
+        guard let layoutManager = textView.layoutManager,
+              let container = textView.textContainer,
+              let length = currentNote?.storage.length, length > 0
+        else { return nil }
+        // Nothing below the last laid-out line has a rectangle yet, and a
+        // jump is usually to somewhere that has never been on screen.
+        layoutManager.ensureLayout(for: container)
+        let character = min(max(0, range.location), length - 1)
+        let glyph = layoutManager.glyphIndexForCharacter(at: character)
+        var rect = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        rect.origin.y += textView.textContainerOrigin.y
+        rect.origin.x += textView.textContainerOrigin.x
+        return rect
     }
 }
 
@@ -1836,6 +1872,9 @@ extension MainWindowController: NSTextViewDelegate {
         // The matches have moved with the edit.
         vimEngine.refreshSearchHighlights()
         scheduleImageRefresh()
+        // The blocks have moved under the pane; nothing is lit again until it
+        // has been rendered afresh.
+        markdownPreview.invalidateBlocks()
         scheduleMarkdownPreviewRender()
         scheduleSave()
     }
@@ -1846,6 +1885,7 @@ extension MainWindowController: NSTextViewDelegate {
         // Moving the caret any other way retires the remembered click.
         clickedChipLocation = nil
         updateSidebarHighlight()
+        highlightPreviewBlock()
         scheduleSave()
     }
 
