@@ -8,11 +8,13 @@
 - Files are plain text. Editing a named file only updates the cache; disk changes on ⌘S only.
 - ⌘S default: `.md`, opens in the last-used folder.
 - Window close = hide (app stays alive). Quit never prompts; everything restores.
-- Search: ⌘F native find bar (in note); ⇧⌘F across all open tabs. Vim `/` `?` `n` `N` `*` `#` drive the native bar.
+- Search: ⌘F native find bar (in note); ⇧⌘F across all open tabs. In vim mode `/` `?` are vim's own search, typed in the
+  command pane (see Vim mode); `n` `N` `*` `#` repeat it; `:noh` clears highlights. ⌘F stays native in every mode.
 
 ## Editor
 - System font (SF Pro) 13pt default, full-width text, no line-width cap.
 - Line numbers in a left gutter (Settings toggle, default on). One number per hard line; wrapped continuation rows are blank.
+  Settings toggle "Gutter separator" (default off) draws a hairline (separatorColor) along the gutter's inner edge.
 - Settings (⌘,): font family, size, line spacing, editor padding, vim mode, hotkey.
 - Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` · `N pt` beside gear.
 
@@ -55,7 +57,13 @@
   `"` comments. Reloaded on save (file watcher) and via `:source`. Parse errors show line number in the status bar.
   Settings has "Open vimrc" (creates a commented template on first use).
 - Mode shown bottom-left of the status bar.
-- Footer: LEFT mode indicator (+ showcmd / command line), MIDDLE counts — Settings picks which of words / characters /
+- Command pane: `:` `/` `?` open a one-line pane directly above the footer (present in zen mode too, since the footer is not),
+  overlaying the bottom of the editor so the text does not jump. Prefix character in secondaryLabelColor, text in labelColor,
+  same SF 11pt as the footer, bar caret, hairline (separatorColor) on top. Enter runs / searches, Esc ⌃[ ⌃C cancel; the pane
+  collapses on either. Messages ("Not an editor command", "E486: Pattern not found", "3 substitutions on 2 lines",
+  "search hit BOTTOM, continuing at TOP") show in the pane until the next key. Search is incremental (caret follows as you
+  type, Esc restores), wraps, ICU regex like `:s`; matches highlighted monochrome (labelColor @ 12%) while `hlsearch`.
+- Footer: LEFT mode indicator (+ showcmd), MIDDLE counts — Settings picks which of words / characters /
   images / lines show (default words + characters) — never tail-truncated: segments drop from the right, then numbers-only,
   RIGHT `line:col` (always shown). Mode indicator is monochrome/typographic ("as if Apple built vim"): sentence-case
   label, SF 11pt medium, secondaryLabelColor, in a quiet capsule (labelColor @ 6%, radius 9, h18); Insert shows the bare
