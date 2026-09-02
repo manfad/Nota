@@ -19,6 +19,15 @@ final class MainWindowController: NSWindowController {
         /// Keeps zen-mode text clear of the traffic-light zone.
         static let zenTopInset: CGFloat = 28
         static let zenTextPadding: CGFloat = 40
+        /// The two document columns' floors in split, where both are on
+        /// screen and the divider is the reader's to drag. In the other two
+        /// modes the column that is away is held at nothing at all.
+        static let editorMinimumWidth: CGFloat = 360
+        static let previewMinimumWidth: CGFloat = 240
+        /// How long a mode you asked for takes to slide across, and how often
+        /// the slide steps while it does.
+        static let previewModeSlide: TimeInterval = 0.2
+        static let previewModeSlideStep: TimeInterval = 1.0 / 60
     }
 
     private let store: SessionStore
@@ -38,7 +47,7 @@ final class MainWindowController: NSWindowController {
     /// The document owns the shared tab strip and the editor/preview split
     /// beneath it, so the divider begins below rather than crossing the tabs.
     private let workspacePane = NSViewController()
-    private let workspaceSplitViewController = NSSplitViewController()
+    private let workspaceSplitViewController = DocumentSplitViewController()
     private let editorPane = NSViewController()
     private let sidebarPane = NSViewController()
     private var sidebarItem: NSSplitViewItem?
@@ -49,6 +58,30 @@ final class MainWindowController: NSWindowController {
     private var previewWorkItem: DispatchWorkItem?
     /// What the pane's current render was made from — see `RenderKey`.
     private var renderedKey: RenderKey?
+    /// The preview's share of the document split, as the divider was last
+    /// left. Read on the way out of split and pinned back on the way in.
+    private var splitPreviewFraction: CGFloat = 0.5
+    /// True while a mode slide is still moving. Only one is ever on the
+    /// wing: a second divider animation started over a first would fight it
+    /// for the same position, and the pair would land wherever they met.
+    private var previewModeIsSliding = false
+    /// The timer stepping the divider across, while one is stepping.
+    private var previewModeSlideTimer: Timer?
+    /// The split's width as of the last time the columns were arranged. A
+    /// resize notification that comes with a new width is the window
+    /// changing size — the columns keep their shares of it; one that comes
+    /// with the same width is a drag, which is a new share to remember.
+    private var lastSplitWidth: CGFloat = 0
+    /// True while the divider is being put somewhere, so the resize the move
+    /// itself sets off is not read back as a drag.
+    private var isPlacingDivider = false
+    /// Whether a drag is already waiting to be read at the end of the loop.
+    private var splitFractionReadPending = false
+    /// A mode asked for mid-slide, waiting for the slide to land, and how it
+    /// asked to arrive — a tab switch that lands there still snaps.
+    private var deferredPreviewModeSlides: Bool?
+    /// Counts the slides, so the one that lands is the one that took off.
+    private var previewModeSlideNumber = 0
     /// The mode the layout is actually in — the tab in front says which one
     /// it wants, zen mode says which of them it may have.
     private var installedPreviewMode: PreviewMode = .off
@@ -256,6 +289,7 @@ final class MainWindowController: NSWindowController {
         scrollView.hasVerticalRuler = true
         lineNumberRuler = ruler
         applyLineNumberVisibility()
+        applyWordWrap()
 
         let separator = statusSeparator
         separator.boxType = .separator
@@ -516,32 +550,74 @@ final class MainWindowController: NSWindowController {
     /// Keeping this split inside the workspace is what stops its divider at
     /// the bottom edge of the tabs.
     private func buildWorkspaceSplitItems() {
+        // Neither column ever collapses. A mode is a divider position inside
+        // the width the window gives the split: the editor's whole column in
+        // the editor mode, the render's whole column in reading, and the
+        // remembered share of it in split. Nothing here ever asks the split
+        // for a width, so nothing here can ask the window for one.
         let editor = NSSplitViewItem(viewController: editorPane)
-        editor.minimumThickness = 360
-        // Reading mode collapses the editor and gives the whole column to the
-        // render. Same behaviour as the pane's: the siblings share the room
-        // out and the window keeps the size it had.
-        editor.canCollapse = true
-        editor.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
-        editor.isCollapsed = installedPreviewMode == .reading
+        editor.canCollapse = false
 
         // A plain item, not an inspector: the preview is the note's other
         // half rather than chrome about it, so it takes the paper background
         // and an even split rather than the system's translucent material.
         let preview = NSSplitViewItem(viewController: previewPane)
-        preview.minimumThickness = 240
-        preview.preferredThicknessFraction = 0.5
-        preview.canCollapse = true
-        // The window keeps its size and the editor gives up half its width —
-        // the other way round, toggling the pane on and off after a zoom
-        // leaves the window narrower than it started.
-        preview.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
-        preview.isCollapsed = !previewIsVisible
+        preview.canCollapse = false
 
         workspaceSplitViewController.addSplitViewItem(editor)
         workspaceSplitViewController.addSplitViewItem(preview)
         previewItem = preview
         editorItem = editor
+        applyColumnBounds(for: installedPreviewMode)
+
+        // A column closed to nothing must not leave a divider drawn against
+        // the window's edge, nor a drag cursor over one.
+        workspaceSplitViewController.hidesDivider = { [weak self] in
+            self?.installedPreviewMode != .split
+        }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(documentSplitDidResize),
+            name: NSSplitView.didResizeSubviewsNotification,
+            object: workspaceSplitViewController.splitView
+        )
+    }
+
+    /// The split has been re-laid-out: either it has a new width — the
+    /// window resized, or was laid out for the first time — and the mode is
+    /// shared out against it again, or the divider moved inside a width that
+    /// did not, which is a drag and a new share to remember.
+    @objc private func documentSplitDidResize(_ notification: Notification) {
+        guard !previewModeIsSliding, !isPlacingDivider else { return }
+        let width = workspaceSplitViewController.splitView.bounds.width
+        guard abs(width - lastSplitWidth) > 0.5 else {
+            return scheduleSplitFractionRead()
+        }
+        lastSplitWidth = width
+        guard width > 1 else { return }
+        placeDivider(for: installedPreviewMode)
+    }
+
+    /// A drag is read at the end of the run loop rather than out of the
+    /// notification. A layout pass passes through arrangements nobody asked
+    /// for on its way to the one it settles on — the editor at its floor for
+    /// an instant is not a divider anybody dragged there — and only where it
+    /// comes to rest is a share worth remembering.
+    private func scheduleSplitFractionRead() {
+        guard !splitFractionReadPending else { return }
+        splitFractionReadPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.splitFractionReadPending = false
+            guard !self.previewModeIsSliding, !self.isPlacingDivider,
+                  self.installedPreviewMode == .split else { return }
+            // Where the remembered share already puts it: a placement of our
+            // own settling, not a drag. Reading it back would only fold the
+            // rounding into the share, over and over.
+            let editor = self.workspaceSplitViewController.splitView
+                .subviews.first?.frame.width ?? 0
+            guard abs(editor - self.dividerPosition(for: .split)) > 1 else { return }
+            self.rememberSplitFraction()
+        }
     }
 
     /// A real sidebar item on the left, an inspector item on the right — both
@@ -678,6 +754,14 @@ final class MainWindowController: NSWindowController {
     /// What the editor is typing with, for the tests.
     var editorParagraphStyle: NSParagraphStyle? { textView.defaultParagraphStyle }
 
+    /// The editor column's scrolling parts, for the word-wrap tests: how wide
+    /// the content is, how much of it is on screen, and what the container is
+    /// tracking.
+    var editorScrolling: (scrollView: NSScrollView, textView: NSTextView,
+                          container: NSTextContainer?, visibleWidth: CGFloat) {
+        (scrollView, textView, textView.textContainer, editorVisibleWidth)
+    }
+
     /// How much further in the right margin sits than the left.
     var trailingTextInsetExtra: CGFloat {
         isGutterVisible ? max(0, preferences.padding.inset - Self.gutterTextGap) : 0
@@ -695,6 +779,68 @@ final class MainWindowController: NSWindowController {
         lineNumberRuler?.showsSeparator = preferences.showsGutterSeparator
         lineNumberRuler?.setFontSize(preferences.fontSize)
         applyEditorInsets()
+    }
+
+    /// How wide a wrapped line gets. The gutter is a ruler, and AppKit makes
+    /// room for one by insetting the clip view's content rather than its
+    /// frame — so the clip view's own width is the whole column, insets and
+    /// all, and the text only gets what is left.
+    private var editorVisibleWidth: CGFloat {
+        let clip = scrollView.contentView
+        let insets = clip.contentInsets
+        return max(0, clip.bounds.width - insets.left - insets.right)
+    }
+
+    /// Settings → "Word wrap". On, the container is welded to the text view's
+    /// width and a long line folds, which is how the editor has always
+    /// behaved. Off, the container is unbounded, the text view grows to
+    /// whatever the longest line measures, and the scroll view puts a
+    /// horizontal scroller under it. The gutter is a ruler, so it stays
+    /// pinned to the left edge either way.
+    private func applyWordWrap() {
+        guard let container = textView.textContainer else { return }
+        let wraps = preferences.wrapsLines
+        scrollView.hasHorizontalScroller = !wraps
+
+        let visibleWidth = editorVisibleWidth
+        if wraps {
+            textView.isHorizontallyResizable = false
+            textView.autoresizingMask = [.width]
+            container.widthTracksTextView = true
+            container.size = NSSize(
+                width: visibleWidth, height: CGFloat.greatestFiniteMagnitude
+            )
+            textView.minSize = NSSize(width: 0, height: 0)
+            // Before the first layout there is no width to hand back, and the
+            // autoresizing mask will set one as soon as there is.
+            if visibleWidth > 0 {
+                textView.setFrameSize(
+                    NSSize(width: visibleWidth, height: textView.frame.height)
+                )
+            }
+        } else {
+            container.widthTracksTextView = false
+            container.size = NSSize(
+                width: CGFloat.greatestFiniteMagnitude,
+                height: CGFloat.greatestFiniteMagnitude
+            )
+            textView.isHorizontallyResizable = true
+            // The text view sizes itself to the text, so it must not also be
+            // stretched to the clip view.
+            textView.autoresizingMask = []
+            // The floor keeps a short note filling the width it can see, so a
+            // click to the right of the text still lands in it. A text view
+            // that is a scroll view's document view keeps this floor level
+            // with the column on its own as the window resizes — see
+            // `testWordWrapKeepsAShortNoteFillingAWidenedColumn`.
+            textView.minSize = NSSize(width: visibleWidth, height: 0)
+        }
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.layoutManager?.ensureLayout(for: container)
+        textView.sizeToFit()
+        lineNumberRuler?.refresh()
     }
 
     /// Restyles every tab, not just the visible one, so switching tabs after a
@@ -719,6 +865,7 @@ final class MainWindowController: NSWindowController {
         }
         applyTextAttributes()
         applyLineNumberVisibility()
+        applyWordWrap()
         if preferences.sidebarSide != installedSidebarSide {
             installedSidebarSide = preferences.sidebarSide
             rebuildSplitItems()
@@ -1355,6 +1502,32 @@ private final class PaneView: NSView {
     }
 }
 
+/// The editor and render's own split. Nothing about it collapses: a mode is
+/// a divider position, and in two of the three modes one column is closed to
+/// nothing at all. A divider against a column of no width is a line drawn on
+/// the window's edge and a resize cursor over the text beside it, so both go
+/// away for as long as the column is shut.
+final class DocumentSplitViewController: NSSplitViewController {
+    var hidesDivider: () -> Bool = { false }
+
+    override func splitView(
+        _ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int
+    ) -> Bool {
+        hidesDivider() || super.splitView(splitView, shouldHideDividerAt: dividerIndex)
+    }
+
+    override func splitView(
+        _ splitView: NSSplitView, effectiveRect proposedEffectiveRect: NSRect,
+        forDrawnRect drawnRect: NSRect, ofDividerAt dividerIndex: Int
+    ) -> NSRect {
+        guard !hidesDivider() else { return .zero }
+        return super.splitView(
+            splitView, effectiveRect: proposedEffectiveRect,
+            forDrawnRect: drawnRect, ofDividerAt: dividerIndex
+        )
+    }
+}
+
 /// A transparent strip that lets the window be dragged by its top edge once
 /// the title bar's own chrome is gone.
 private final class DragRegionView: NSView {
@@ -1582,6 +1755,10 @@ extension MainWindowController {
         (previewIsVisible, markdownPreview.renderedText, previewMode)
     }
 
+    /// Whether a mode slide is still on the wing — for the tests, which have
+    /// no other way to tell a 0.2s slide from a snap.
+    var isSlidingPreviewMode: Bool { previewModeIsSliding }
+
     /// Whether the front tab has a render at all. Only a saved `.md` file
     /// does; every other note keeps the whole window for its source.
     var canShowMarkdownPreview: Bool { currentNote?.supportsMarkdownPreview ?? false }
@@ -1623,7 +1800,7 @@ extension MainWindowController {
         focusForPreviewMode()
     }
 
-    /// Collapses and expands the two items to match the tab's mode.
+    /// Moves the divider to match the tab's mode.
     ///
     /// Zen has no say in it. Zen takes the chrome away — the strip, the
     /// footer, the gutter, the thumbnails, both mode controls — but the
@@ -1637,7 +1814,6 @@ extension MainWindowController {
     private func applyPreviewMode(animated: Bool = false) {
         let mode = previewMode
         guard mode != installedPreviewMode else { return }
-        installedPreviewMode = mode
         // Everything that is not the columns' width settles at once, before a
         // single frame is drawn: what the click on the page means, what the
         // keyboard belongs to, and whether a band is lit are all true of the
@@ -1650,62 +1826,248 @@ extension MainWindowController {
         // goes out on the way in.
         if mode == .reading { markdownPreview.clearHighlight() }
 
-        // Nothing to animate — a layout you did not ask to watch, or a window
-        // nobody is looking at, which is every window a test makes. The
-        // columns are simply where the mode says they are, and the widths are
-        // taken here rather than at the end of the run loop so the render that
-        // follows is made once, at the width it will be read at.
-        guard animated, let window, window.isVisible else {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0
-                context.allowsImplicitAnimation = false
-                collapseColumns(for: mode, animated: false)
-            }
-            workspaceSplitViewController.view.layoutSubtreeIfNeeded()
+        // A second slide started over a first would fight it for the same
+        // divider, and the two would land wherever they met. So a mode asked
+        // for mid-slide is only written down here; the slide applies it as it
+        // lands, and a key held on ⇧⌘P arrives as two slides rather than
+        // twenty.
+        guard !previewModeIsSliding else {
+            deferredPreviewModeSlides = (deferredPreviewModeSlides ?? true) && animated
+            return
+        }
+        // Where the divider was left — read while the columns are standing
+        // still, and before the mode it belongs to is replaced.
+        if installedPreviewMode == .split { rememberSplitFraction() }
+        installedPreviewMode = mode
+
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+
+        // Nothing to animate — a layout you did not ask to watch, Reduce
+        // Motion, or a window nobody is looking at, which is every window a
+        // test makes. The divider is simply where the mode says it is, and it
+        // is put there now rather than at the end of the run loop, so the
+        // render that follows is made once, at the width it will be read at.
+        guard animated, let window, window.isVisible, !reduceMotion else {
+            placeDivider(for: mode)
+            markdownPreview.thawWidth()
             updateModeControlOverlays()
             return
         }
 
         // The render on screen is the one that slides: it is made now, at the
         // width it is leaving, so the animation itself has no work in it — no
-        // render, no forced layout, nothing per frame. Both items move inside
-        // one group, so neither column is ever caught halfway and the two are
-        // never both collapsed, not even for a frame.
+        // render, no forced layout, nothing per frame.
+        previewModeIsSliding = true
         renderMarkdownPreview()
         // The render rides the animation at the width it was made for, rather
         // than re-wrapping itself on every frame of it.
-        let wasFrozen = markdownPreview.freezeWidth()
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            context.allowsImplicitAnimation = true
-            collapseColumns(for: mode, animated: true)
-        }, completionHandler: { [weak self] in
-            guard let self else { return }
-            if wasFrozen { self.markdownPreview.thawWidth() }
-            guard self.installedPreviewMode == mode else { return }
-            // The column has landed: only now is there a final width to fit a
-            // picture or a rule to, and only a render that depends on one is
-            // made again — for a plain note the key still matches and nothing
-            // happens here at all.
-            self.renderMarkdownPreview()
-            self.updateModeControlOverlays()
-        })
+        _ = markdownPreview.freezeWidth()
+        previewModeSlideNumber += 1
+        let slide = previewModeSlideNumber
+        slideDivider(to: mode) { [weak self] in self?.previewModeSlideDidLand(slide) }
     }
 
-    /// Which column is collapsed in each mode. Reading and the editor are
-    /// each other's opposite; split has both. Through the animator proxy the
-    /// two widths are interpolated, without it they simply are.
-    private func collapseColumns(for mode: PreviewMode, animated: Bool) {
-        let editor = animated ? editorItem?.animator() : editorItem
-        let preview = animated ? previewItem?.animator() : previewItem
-        if mode == .reading {
-            preview?.isCollapsed = false
-            editor?.isCollapsed = true
-        } else {
-            editor?.isCollapsed = false
-            preview?.isCollapsed = mode == .off
+    /// The divider has arrived. The render is free to wrap to the width it
+    /// found, the mode's own bounds go back on so the drag is what the mode
+    /// allows, and anything asked for while the slide was moving happens now.
+    private func previewModeSlideDidLand(_ slide: Int) {
+        guard previewModeIsSliding, slide == previewModeSlideNumber else { return }
+        previewModeIsSliding = false
+        applyColumnBounds(for: installedPreviewMode)
+        window?.layoutIfNeeded()
+        lastSplitWidth = workspaceSplitViewController.splitView.bounds.width
+        markdownPreview.thawWidth()
+        // Only now is there a final width to fit a picture or a rule to, and
+        // only a render that depends on one is made again — for a plain note
+        // the key still matches and nothing happens here at all.
+        renderMarkdownPreview()
+        updateModeControlOverlays()
+        let slides = deferredPreviewModeSlides
+        deferredPreviewModeSlides = nil
+        if let slides { applyPreviewMode(animated: slides) }
+    }
+
+    /// The divider, straight to where the mode wants it. Used for everything
+    /// that is not a mode switch you watched: a tab switch, a session
+    /// restore, a window that is not on screen, Reduce Motion, and a window
+    /// resize that has to keep split's share of a new width.
+    private func placeDivider(for mode: PreviewMode) {
+        let split = workspaceSplitViewController.splitView
+        // Every layout the placement sets off is the placement's own, not a
+        // drag: none of it is a new share to remember.
+        isPlacingDivider = true
+        defer { isPlacingDivider = false }
+        workspaceSplitViewController.view.layoutSubtreeIfNeeded()
+        guard splitColumnRoom > 1 else {
+            // A mode restored with the session arrives before the window has
+            // ever been laid out. There is no room to share out yet; the
+            // bounds alone say what the mode is, and the first layout pass
+            // arranges the columns against them.
+            applyColumnBounds(for: mode)
+            return
         }
+        setDividerPosition(dividerPosition(for: mode))
+        applyColumnBounds(for: mode)
+        workspaceSplitViewController.view.layoutSubtreeIfNeeded()
+        lastSplitWidth = split.bounds.width
+    }
+
+    /// The 0.2s slide, stepped by hand. `NSSplitViewItem`'s own animator
+    /// tweens a collapse, and a collapse is what used to take the window with
+    /// it; a divider walked across on a timer asks the split for nothing at
+    /// all, and the window is never in the conversation.
+    private func slideDivider(to mode: PreviewMode, then land: @escaping () -> Void) {
+        let split = workspaceSplitViewController.splitView
+        workspaceSplitViewController.view.layoutSubtreeIfNeeded()
+        guard splitColumnRoom > 1 else {
+            placeDivider(for: mode)
+            return land()
+        }
+        let from = split.subviews.first?.frame.width ?? 0
+        let to = dividerPosition(for: mode)
+        let began = Date()
+        previewModeSlideTimer?.invalidate()
+
+        // The frames, while they come. A window in the background has its
+        // timers coalesced to a handful a second, so this is what the slide
+        // looks like, never how long it takes.
+        let timer = Timer(
+            timeInterval: Layout.previewModeSlideStep, repeats: true
+        ) { [weak self] timer in
+            guard let self, self.previewModeSlideTimer === timer else {
+                return timer.invalidate()
+            }
+            let t = min(max(Date().timeIntervalSince(began) / Layout.previewModeSlide, 0), 1)
+            guard t < 1 else { return self.finishSlide(at: to, then: land) }
+            // Ease in, ease out — the same shape AppKit's own default gives.
+            self.setDividerPosition(from + (to - from) * CGFloat(t * t * (3 - 2 * t)))
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        previewModeSlideTimer = timer
+
+        // And how long it takes. The mode is 0.2s away whether or not there
+        // was a frame to spare for it: the deadline lands the slide, and a
+        // slide that has already landed ignores it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Layout.previewModeSlide) {
+            [weak self] in
+            guard let self, self.previewModeSlideTimer === timer else { return }
+            self.finishSlide(at: to, then: land)
+        }
+    }
+
+    /// The last frame of a slide: the divider is exactly where the mode wants
+    /// it, and the mode is what the layout is in.
+    private func finishSlide(at position: CGFloat, then land: () -> Void) {
+        previewModeSlideTimer?.invalidate()
+        previewModeSlideTimer = nil
+        setDividerPosition(position)
+        land()
+    }
+
+    /// Puts the divider at a position, with the columns unbounded while it
+    /// travels — a floor left over from the mode being left would otherwise
+    /// stop it short of the one being entered. The move re-lays the split
+    /// out, and that arrives back as a resize; the flag is what keeps it from
+    /// being read as a drag.
+    private func setDividerPosition(_ position: CGFloat) {
+        let wasPlacing = isPlacingDivider
+        isPlacingDivider = true
+        defer { isPlacingDivider = wasPlacing }
+        applyColumnBounds(for: nil)
+        workspaceSplitViewController.splitView.setPosition(position, ofDividerAt: 0)
+    }
+
+    /// Where the divider sits in each mode, measured from the leading edge —
+    /// which is the editor column's width. The editor mode gives the editor
+    /// all of the room, reading gives the render all of it, and split shares
+    /// it out at the fraction the divider was left at, inside the floors.
+    private func dividerPosition(for mode: PreviewMode) -> CGFloat {
+        let room = splitColumnRoom
+        switch mode {
+        case .off: return room
+        case .reading: return 0
+        case .split:
+            let floors = splitFloors
+            let preview = min(
+                max((room * splitPreviewFraction).rounded(), floors.preview),
+                room - floors.editor
+            )
+            return room - preview
+        }
+    }
+
+    /// What each column may be dragged to in a given mode. In split both are
+    /// bounded below and neither above, so the divider moves through the
+    /// whole range the two floors leave. In the other two the column that is
+    /// away is held at exactly nothing — no floor, no width, no divider to
+    /// drag — and the one on screen takes everything. `nil` is the slide
+    /// itself: no bounds at all, so the divider can be anywhere on its way.
+    private func applyColumnBounds(for mode: PreviewMode?) {
+        guard let editorItem, let previewItem else { return }
+        switch mode {
+        case nil:
+            open(editorItem, floor: 0)
+            open(previewItem, floor: 0)
+        case .off:
+            open(editorItem, floor: 0)
+            close(previewItem)
+        case .reading:
+            close(editorItem)
+            open(previewItem, floor: 0)
+        case .split:
+            let floors = splitFloors
+            open(editorItem, floor: floors.editor)
+            open(previewItem, floor: floors.preview)
+        }
+    }
+
+    /// Bounded below and open above: the other column's floor is the far end
+    /// of the drag, so neither ever needs a ceiling of its own.
+    private func open(_ item: NSSplitViewItem, floor: CGFloat) {
+        item.minimumThickness = floor
+        item.maximumThickness = NSSplitViewItem.unspecifiedDimension
+    }
+
+    /// Shut: no width at all, and no way to drag one back.
+    private func close(_ item: NSSplitViewItem) {
+        item.minimumThickness = 0
+        item.maximumThickness = 0
+    }
+
+    /// The floors split holds its two columns to. They are required
+    /// constraints, and two required floors adding up to more than the window
+    /// has is a window that grows to hold them — so in a window too narrow
+    /// for both they are scaled down together rather than asked for.
+    private var splitFloors: (editor: CGFloat, preview: CGFloat) {
+        let wanted = Layout.editorMinimumWidth + Layout.previewMinimumWidth
+        let room = splitColumnRoom
+        guard room > 1, room < wanted else {
+            return (Layout.editorMinimumWidth, Layout.previewMinimumWidth)
+        }
+        let scale = room / wanted
+        return (
+            (Layout.editorMinimumWidth * scale).rounded(.down),
+            (Layout.previewMinimumWidth * scale).rounded(.down)
+        )
+    }
+
+    /// What the two columns have between them: the split less the divider
+    /// they share. Sharing out the full width leaves the divider no room of
+    /// its own, and a pt over is a pt somebody has to find.
+    private var splitColumnRoom: CGFloat {
+        let split = workspaceSplitViewController.splitView
+        return split.bounds.width - split.dividerThickness
+    }
+
+    /// The preview's share of the split, taken while both columns are on
+    /// screen and standing still.
+    private func rememberSplitFraction() {
+        let split = workspaceSplitViewController.splitView
+        let total = splitColumnRoom
+        guard total > 1, split.subviews.count >= 2 else { return }
+        let previewWidth = split.subviews[1].frame.width
+        guard previewWidth > 1 else { return }
+        splitPreviewFraction = min(max(previewWidth / total, 0.01), 0.99)
     }
 
     /// The render is read, not typed in — so the keyboard stays in the editor,
@@ -2252,6 +2614,10 @@ extension MainWindowController: TabBarViewDelegate {
     func tabBar(_ bar: TabBarView, didRequestCloseAt index: Int) {
         closeTab(at: index)
     }
+
+    func tabBarDidRequestNewTab(_ bar: TabBarView) {
+        newTab()
+    }
 }
 
 extension MainWindowController: NSTextViewDelegate {
@@ -2327,5 +2693,25 @@ private final class BackgroundView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.textBackgroundColor.setFill()
         dirtyRect.fill()
+    }
+}
+
+// MARK: - Quick Look
+
+/// The Quick Look panel's responder hooks live in `ImageOpening.swift`, next
+/// to the rest of the Markup path; these two are what they reach through, and
+/// they are here because the sidebar and the remembered render are private to
+/// this file.
+extension MainWindowController {
+
+    var quickLookSidebar: ImageSidebarView { imageSidebar }
+
+    /// Markup wrote a new picture into an asset file. The store's decoded
+    /// image is already gone; the render on screen was made from it, so that
+    /// has to go too.
+    func assetDidChangeOnDisk() {
+        invalidateMarkdownRender()
+        scheduleMarkdownPreviewRender()
+        updateSidebarHighlight()
     }
 }

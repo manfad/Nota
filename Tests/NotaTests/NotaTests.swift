@@ -98,6 +98,14 @@ final class NotaTests: XCTestCase {
         preferences.showsLineNumbers = true
         XCTAssertTrue(preferences.showsLineNumbers)
 
+        // Long lines fold until you say otherwise.
+        XCTAssertTrue(preferences.wrapsLines)
+        preferences.wrapsLines = false
+        XCTAssertFalse(preferences.wrapsLines)
+        XCTAssertFalse(Preferences(defaults: defaults).wrapsLines)
+        preferences.wrapsLines = true
+        XCTAssertTrue(Preferences(defaults: defaults).wrapsLines)
+
         // The summon shortcut defaults to ⌥Space, is recordable, and can be
         // cleared to nothing without falling back to the default again.
         XCTAssertEqual(preferences.hotKey, .optionSpace)
@@ -161,7 +169,7 @@ final class NotaTests: XCTestCase {
 
         // Four label/control rows, laid out in one grid.
         let grid = window?.contentView?.subviews.compactMap { $0 as? NSGridView }.first
-        XCTAssertEqual(grid?.numberOfRows, 12)
+        XCTAssertEqual(grid?.numberOfRows, 13)
         XCTAssertEqual(grid?.numberOfColumns, 2)
 
         // Font popup offers the four designs plus "Other…".
@@ -171,20 +179,24 @@ final class NotaTests: XCTestCase {
             ["System", "Serif", "Rounded", "Monospaced", "Other…"]
         )
 
+        // Word wrap is a plain checkbox on the "Editor" row.
+        let wordWrap = grid?.cell(atColumnIndex: 1, rowIndex: 4).contentView as? NSButton
+        XCTAssertEqual(wordWrap?.title, "Word wrap")
+
         // The gutter row carries both switches, numbers first.
-        let gutterRow = grid?.cell(atColumnIndex: 1, rowIndex: 4).contentView as? NSStackView
+        let gutterRow = grid?.cell(atColumnIndex: 1, rowIndex: 5).contentView as? NSStackView
         XCTAssertEqual(
             gutterRow?.views.compactMap { ($0 as? NSButton)?.title },
             ["Line numbers", "Gutter separator"]
         )
 
         // Row labels, right-aligned in the first column.
-        let labels = (0..<11).compactMap {
+        let labels = (0..<12).compactMap {
             (grid?.cell(atColumnIndex: 0, rowIndex: $0).contentView as? NSTextField)?.stringValue
         }
         XCTAssertEqual(
             labels,
-            ["Font", "Size", "Line spacing", "Padding", "Gutter", "Status bar",
+            ["Font", "Size", "Line spacing", "Padding", "Editor", "Gutter", "Status bar",
              "Image sidebar", "Copy images as", "Markdown", "Vim mode", "Summon"]
         )
     }
@@ -1517,6 +1529,96 @@ final class NotaTests: XCTestCase {
         return nil
     }
 
+    // MARK: - Word wrap
+
+    /// Settings → "Word wrap". On, a long line folds and the content is
+    /// exactly as wide as the column. Off, the line runs on and the editor
+    /// scrolls sideways to follow it.
+    @MainActor
+    func testWordWrapTogglesHorizontalScrolling() throws {
+        _ = NSApplication.shared
+        let previous = Preferences.shared.wrapsLines
+        defer { Preferences.shared.wrapsLines = previous }
+        Preferences.shared.wrapsLines = true
+
+        let directory = try makeTemporaryDirectory()
+        let controller = MainWindowController(store: SessionStore(directory: directory))
+        let window = try XCTUnwrap(controller.window)
+        window.setContentSize(NSSize(width: 820, height: 560))
+        window.layoutIfNeeded()
+
+        let editor = controller.editorScrolling
+        let container = try XCTUnwrap(editor.container)
+        let long = String(repeating: "the quick brown fox ", count: 60)
+        editor.textView.insertText(long, replacementRange: editor.textView.selectedRange())
+        window.layoutIfNeeded()
+
+        // Wrapping: the container is welded to the text view, no sideways
+        // scroller, and the content is no wider than what is on screen.
+        XCTAssertTrue(container.widthTracksTextView)
+        XCTAssertFalse(editor.scrollView.hasHorizontalScroller)
+        XCTAssertEqual(
+            editor.textView.frame.width, controller.editorScrolling.visibleWidth, accuracy: 1
+        )
+
+        Preferences.shared.wrapsLines = false
+        window.layoutIfNeeded()
+
+        // Not wrapping: the container is unbounded, the scroller is there, and
+        // the one long line is wider than the column showing it.
+        XCTAssertFalse(container.widthTracksTextView)
+        XCTAssertTrue(editor.scrollView.hasHorizontalScroller)
+        XCTAssertGreaterThan(
+            editor.textView.frame.width, controller.editorScrolling.visibleWidth + 1
+        )
+        // The gutter is a ruler, so it keeps its own strip at the left edge
+        // whatever the text does.
+        XCTAssertTrue(editor.scrollView.rulersVisible)
+
+        Preferences.shared.wrapsLines = true
+        window.layoutIfNeeded()
+
+        // And back: tracking restored, scroller gone, content back in the column.
+        XCTAssertTrue(container.widthTracksTextView)
+        XCTAssertFalse(editor.scrollView.hasHorizontalScroller)
+        XCTAssertEqual(
+            editor.textView.frame.width, controller.editorScrolling.visibleWidth, accuracy: 1
+        )
+    }
+
+    /// With wrap off the text view is sized to its own text rather than
+    /// stretched to the column, so a short note has to keep filling the column
+    /// as the window grows — otherwise a click to the right of the text lands
+    /// nowhere. Being the scroll view's document view is what carries that
+    /// floor; this pins the behaviour down.
+    @MainActor
+    func testWordWrapKeepsAShortNoteFillingAWidenedColumn() throws {
+        _ = NSApplication.shared
+        let previous = Preferences.shared.wrapsLines
+        defer { Preferences.shared.wrapsLines = previous }
+        Preferences.shared.wrapsLines = false
+
+        let directory = try makeTemporaryDirectory()
+        let controller = MainWindowController(store: SessionStore(directory: directory))
+        let window = try XCTUnwrap(controller.window)
+        window.setContentSize(NSSize(width: 600, height: 400))
+        window.layoutIfNeeded()
+
+        let editor = controller.editorScrolling
+        editor.textView.insertText("short", replacementRange: editor.textView.selectedRange())
+        window.layoutIfNeeded()
+        XCTAssertGreaterThanOrEqual(
+            editor.textView.frame.width, controller.editorScrolling.visibleWidth - 1
+        )
+
+        window.setContentSize(NSSize(width: 1000, height: 400))
+        window.layoutIfNeeded()
+
+        let widened = controller.editorScrolling.visibleWidth
+        XCTAssertGreaterThan(widened, 600, "the column really did grow")
+        XCTAssertGreaterThanOrEqual(editor.textView.frame.width, widened - 1)
+    }
+
     // MARK: - Zen mode
 
     @MainActor
@@ -1607,10 +1709,11 @@ final class NotaTests: XCTestCase {
         let controller = MainWindowController(store: SessionStore(directory: directory))
         let window = try XCTUnwrap(controller.window)
         let split = try XCTUnwrap(window.contentViewController as? NSSplitViewController)
-        // Every pane that can collapse — the outer sidebar, and the editor
-        // and preview nested in the document, either of which reading and
-        // split modes collapse — makes its sibling give up room rather than
-        // changing the window frame.
+        // The thumbnails are the one thing left that collapses, and they
+        // make their sibling give up room rather than changing the window
+        // frame. The document's own two columns never collapse at all — a
+        // preview mode is a divider position, and a divider asks the window
+        // for nothing.
         let documentSplit = try XCTUnwrap(
             split.children.lazy
                 .flatMap(\.children)
@@ -1619,10 +1722,14 @@ final class NotaTests: XCTestCase {
         )
         let collapsible = (split.splitViewItems + documentSplit.splitViewItems)
             .filter(\.canCollapse)
-        XCTAssertEqual(collapsible.count, 3)
+        XCTAssertEqual(collapsible.count, 1)
         for item in collapsible {
             XCTAssertEqual(item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView)
         }
+        XCTAssertTrue(
+            documentSplit.splitViewItems.allSatisfy { !$0.canCollapse },
+            "neither document column collapses for a mode"
+        )
     }
 
     func testTextSitsCloserToTheGutterWhileTheRightMarginKeepsTheSetting() throws {

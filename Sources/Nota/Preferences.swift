@@ -114,6 +114,7 @@ final class Preferences {
         static let padding = "editorPadding"
         static let lineNumbers = "showsLineNumbers"
         static let gutterSeparator = "showsGutterSeparator"
+        static let wordWrap = "wrapsLines"
         static let sidebarSide = "sidebarSide"
         static let plainTextImageStyle = "plainTextImageStyle"
         static let markdownReadingMode = "opensMarkdownInReadingMode"
@@ -242,6 +243,18 @@ final class Preferences {
         set {
             guard newValue != showsGutterSeparator else { return }
             defaults.set(newValue, forKey: Key.gutterSeparator)
+            announce()
+        }
+    }
+
+    /// Whether long lines fold at the right margin. On: the default an editor
+    /// with no line-width cap wants. Off: a line runs as far as it likes and
+    /// the editor scrolls sideways to follow it.
+    var wrapsLines: Bool {
+        get { defaults.object(forKey: Key.wordWrap) as? Bool ?? true }
+        set {
+            guard newValue != wrapsLines else { return }
+            defaults.set(newValue, forKey: Key.wordWrap)
             announce()
         }
     }

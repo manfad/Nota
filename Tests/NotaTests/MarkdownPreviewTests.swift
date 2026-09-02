@@ -652,11 +652,11 @@ final class MarkdownPreviewTests: XCTestCase {
         controller.newTab()
         XCTAssertFalse(controller.previewState.isVisible, "a new tab opens without it")
         XCTAssertFalse(controller.showsMarkdownPreview)
-        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, true)
+        XCTAssertEqual(try previewWidth(of: controller), 0, "no render column on it")
 
         controller.selectTab(at: 0)
         XCTAssertTrue(controller.previewState.isVisible, "the first tab still wants it")
-        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
+        XCTAssertGreaterThan(try previewWidth(of: controller), 0)
 
         // And the other way round: turning it on in a second Markdown tab
         // leaves the first one alone. The untitled tab itself is ineligible.
@@ -732,7 +732,7 @@ final class MarkdownPreviewTests: XCTestCase {
             relaunched.previewState.isVisible,
             "and the one that did gets it back"
         )
-        XCTAssertEqual(previewItem(of: relaunched)?.isCollapsed, false)
+        XCTAssertGreaterThan(try previewWidth(of: relaunched), 0)
     }
 
     /// A session.json written before the pane was per-tab says nothing about
@@ -753,13 +753,24 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertNil(state.tabs.first?.previewMode)
     }
 
+    /// The render's column is always there. In the editor mode it is closed
+    /// to nothing — no width, no floor to grow back to, and no divider drawn
+    /// against the window's edge — rather than taken out of the split, which
+    /// is what keeps a mode change from ever being a rebuild.
     @MainActor
-    func testAHiddenPaneIsCollapsedRatherThanRemoved() throws {
+    func testAHiddenPaneIsClosedRatherThanRemoved() throws {
         _ = NSApplication.shared
         let controller = try makeController()
-        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, true)
-        XCTAssertEqual(previewItem(of: controller)?.minimumThickness, 240)
-        XCTAssertEqual(previewItem(of: controller)?.preferredThicknessFraction, 0.5)
+        let preview = try XCTUnwrap(previewItem(of: controller))
+        XCTAssertEqual(try previewWidth(of: controller), 0, "closed to nothing")
+        XCTAssertEqual(preview.minimumThickness, 0)
+        XCTAssertEqual(preview.maximumThickness, 0, "and pinned there — no drag opens it")
+        XCTAssertFalse(preview.canCollapse, "nothing about a mode collapses any more")
+        XCTAssertFalse(try XCTUnwrap(editorItem(of: controller)).canCollapse)
+        XCTAssertTrue(
+            try documentDividerRect(of: controller).isEmpty,
+            "and no divider answers the mouse against a column of no width"
+        )
     }
 
     /// Toggling the pane must never resize the window. It used to: the pane
@@ -767,42 +778,450 @@ final class MarkdownPreviewTests: XCTestCase {
     /// and closing it took that width off the editor — a zoomed window came
     /// back narrower than it went in.
     ///
-    /// The guard is on the collapse behaviour itself rather than on the panes'
-    /// widths, because AppKit does not arrange a split view in a window that
-    /// was never on screen: under test the panes keep their pre-layout frames
-    /// and measure identically whichever behaviour is set, so a width
-    /// assertion would pass for the wrong reason. The window's frame is
-    /// checked too — that much the controller does own.
+    /// Nothing asks the split for a width any more, so the room comes off
+    /// the editor and the frame is never in the conversation: the two columns
+    /// add up to the width the window gave them, before and after.
     @MainActor
     func testTheEditorGivesUpTheRoomForThePaneRatherThanTheWindow() throws {
         _ = NSApplication.shared
         let controller = try makeController()
         let window = try XCTUnwrap(controller.window)
-        let item = try XCTUnwrap(previewItem(of: controller))
 
+        let frame = NSRect(x: 120, y: 140, width: 1100, height: 620)
+        window.setFrame(frame, display: false)
+        window.layoutIfNeeded()
+        let editorAlone = try editorWidth(of: controller)
+        XCTAssertGreaterThan(editorAlone, 0, "the columns have to be laid out")
+
+        controller.setPreviewMode(.split)
+        window.layoutIfNeeded()
+        XCTAssertEqual(window.frame, frame, "opening the pane neither moves nor resizes it")
         XCTAssertEqual(
-            item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView,
-            "the split view keeps its size; its siblings share the room out"
+            try editorWidth(of: controller) + previewWidth(of: controller),
+            editorAlone, accuracy: 1,
+            "the render's half came off the editor, not off the window"
         )
-        XCTAssertEqual(item.preferredThicknessFraction, 0.5, "half the width on opening")
+        XCTAssertGreaterThan(try previewWidth(of: controller), 0)
+
+        controller.setPreviewMode(.off)
+        window.layoutIfNeeded()
+        XCTAssertEqual(window.frame, frame, "and closing it leaves the frame exactly as it was")
+        XCTAssertEqual(
+            try editorWidth(of: controller), editorAlone, accuracy: 1,
+            "the editor has its whole column back"
+        )
+        XCTAssertEqual(try previewWidth(of: controller), 0)
+    }
+
+    /// A tab that comes back split gets its columns shared out against the
+    /// split's own width — which means the split has to have one. The mode
+    /// arrives with the session, before the window has ever been laid out,
+    /// and the pane used to open on whatever room the editor's floor left it.
+    @MainActor
+    func testASplitRestoredWithTheSessionOpensOnHalfTheWindow() throws {
+        _ = NSApplication.shared
+        let directory = try makeTemporaryDirectory()
+        let file = directory.appendingPathComponent("note.md")
+        try "# Hello\n\nbody\n".write(to: file, atomically: true, encoding: .utf8)
+        let id = UUID()
+        SessionStore(directory: directory).save(SessionState(
+            tabs: [SessionTab(
+                id: id, path: file.path, untitledName: nil, isDirty: false,
+                selection: 0, format: .default, previewMode: .split
+            )],
+            selectedTabID: id,
+            fontSize: 13
+        ))
+
+        let controller = try makeController(in: directory)
+        let window = try XCTUnwrap(controller.window)
+        window.setContentSize(NSSize(width: 1000, height: 560))
+        window.layoutIfNeeded()
+
+        XCTAssertEqual(controller.previewMode, .split, "the tab came back split")
+        XCTAssertEqual(
+            try splitFraction(of: controller), 0.5, accuracy: 0.05,
+            "and on half the window, not on what the editor's floor left over"
+        )
+    }
+
+    /// ⇧⌘P cycles through reading, where the preview holds the full column.
+    /// Coming back into split must not reopen at that full width — that plus
+    /// the editor's minimum is what used to grow the window past the screen,
+    /// and each cycle compounded it.
+    @MainActor
+    func testCyclingThroughReadingDoesNotGrowTheWindow() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
 
         let frame = NSRect(x: 120, y: 140, width: 1100, height: 620)
         window.setFrame(frame, display: false)
         window.layoutIfNeeded()
 
-        controller.setPreviewMode(.split)
-        window.layoutIfNeeded()
-        XCTAssertEqual(window.frame, frame, "opening the pane neither moves nor resizes it")
+        func assertTheWindowHeld(in mode: PreviewMode) throws {
+            XCTAssertEqual(
+                window.frame.size, frame.size,
+                "\(mode.rawValue): the window keeps the frame it had"
+            )
+            let content = try XCTUnwrap(window.contentView)
+            let preview = try previewView(of: controller)
+            let previewWidth = preview.convert(preview.bounds, to: content).width
+            XCTAssertLessThanOrEqual(
+                previewWidth, content.bounds.width + 1,
+                "\(mode.rawValue): the preview stays inside the window"
+            )
+            if mode == .split {
+                let split = try documentSplitViewController(of: controller).splitView
+                let splitPreviewWidth = preview.convert(preview.bounds, to: split).width
+                XCTAssertEqual(
+                    splitPreviewWidth, split.bounds.width / 2, accuracy: 50,
+                    "split is about half, not the full column reading left behind"
+                )
+                XCTAssertLessThan(
+                    splitPreviewWidth, split.bounds.width - 40,
+                    "and it is not the full window"
+                )
+            }
+        }
 
-        controller.setPreviewMode(.off)
-        window.layoutIfNeeded()
-        XCTAssertEqual(window.frame, frame, "and closing it leaves the frame exactly as it was")
+        for mode in [PreviewMode.split, .reading, .off, .split] {
+            controller.setPreviewMode(mode)
+            window.layoutIfNeeded()
+            try assertTheWindowHeld(in: mode)
+        }
+
+        for _ in 0 ..< 12 {
+            controller.toggleMarkdownPreview()
+            window.layoutIfNeeded()
+            try assertTheWindowHeld(in: controller.previewMode)
+        }
     }
 
-    /// The items are rebuilt when the sidebar changes sides, so the behaviour
-    /// has to be set there too rather than only on the first build.
+    /// The mode you ask for slides. On a window somebody is actually looking
+    /// at, ⇧⌘P starts a 0.2s animation rather than snapping — and it is over
+    /// by the time the run loop has turned for half a second.
     @MainActor
-    func testThePaneKeepsItsCollapseBehaviourWhenTheSidebarChangesSides() throws {
+    func testAModeSwitchYouAskForSlides() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFront(nil)
+        window.layoutIfNeeded()
+        try XCTSkipUnless(window.isVisible, "no window server here — nothing slides")
+
+        controller.setPreviewMode(.split)
+        XCTAssertTrue(controller.isSlidingPreviewMode, "⇧⌘P slides the columns over")
+        settle(0.5)
+        XCTAssertFalse(controller.isSlidingPreviewMode, "and the slide finishes")
+
+        // A tab switch is not a mode switch: it lays out for what is in
+        // front of you rather than sliding in behind it.
+        controller.newTab()
+        window.layoutIfNeeded()
+        XCTAssertFalse(controller.isSlidingPreviewMode, "an untitled tab simply appears")
+    }
+
+    /// ⇧⌘P is a key people hold down. At any cadence — twenty taps inside
+    /// one 0.2s slide, or taps spaced just under and just over it — the
+    /// window comes out the size it went in, and split comes back at the
+    /// divider it was left at rather than the full width reading gave the
+    /// render.
+    @MainActor
+    func testSpammingTheModeCycleMovesNeitherTheWindowNorTheDivider() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.setFrame(NSRect(x: 120, y: 140, width: 1100, height: 620), display: false)
+        window.makeKeyAndOrderFront(nil)
+        window.layoutIfNeeded()
+
+        controller.setPreviewMode(.split)
+        settle(0.5)
+        let frame = window.frame
+        let fraction = try splitFraction(of: controller)
+        XCTAssertEqual(fraction, 0.5, accuracy: 0.1, "split opens on about half")
+
+        func assertNothingMoved(_ cadence: String) throws {
+            XCTAssertEqual(
+                window.frame.width, frame.width, accuracy: 0.5, "\(cadence): the width held"
+            )
+            XCTAssertEqual(
+                window.frame.height, frame.height, accuracy: 0.5, "\(cadence): the height held"
+            )
+            XCTAssertEqual(
+                window.frame.origin.x, frame.origin.x, accuracy: 0.5, "\(cadence): it stayed put"
+            )
+        }
+
+        /// Cycles until split is in front again, then measures the divider.
+        func returnToSplit(_ cadence: String) throws {
+            while controller.previewMode != .split {
+                controller.toggleMarkdownPreview()
+                settle(0.3)
+            }
+            settle(0.5)
+            try assertNothingMoved(cadence)
+            XCTAssertEqual(
+                try splitFraction(of: controller), fraction, accuracy: 0.03,
+                "\(cadence): split came back at the divider it was left at"
+            )
+        }
+
+        // Faster than the run loop can turn: twenty taps inside one slide.
+        for _ in 0 ..< 20 { controller.toggleMarkdownPreview() }
+        settle(0.5)
+        try assertNothingMoved("twenty at once")
+        try returnToSplit("twenty at once")
+
+        // And with the loop turning between them — inside the 0.2s slide,
+        // then just past it, which is where the divider used to drift.
+        for pause in [0.05, 0.3] {
+            for _ in 0 ..< 9 {
+                controller.toggleMarkdownPreview()
+                settle(pause)
+            }
+            settle(0.5)
+            try assertNothingMoved("every \(Int(pause * 1000))ms")
+            try returnToSplit("every \(Int(pause * 1000))ms")
+        }
+    }
+
+    /// Reading gives the render the whole column. Coming back out into split
+    /// it has to hand the editor its half back — at the fraction the divider
+    /// was left at, not at the width reading had it.
+    @MainActor
+    func testReadingHandsTheDividerBackWhereItFoundIt() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.setFrame(NSRect(x: 120, y: 140, width: 1100, height: 620), display: false)
+        window.makeKeyAndOrderFront(nil)
+        window.layoutIfNeeded()
+
+        controller.setPreviewMode(.split)
+        settle(0.5)
+
+        // A divider nobody would land on by accident.
+        let split = try documentSplitViewController(of: controller).splitView
+        split.setPosition(split.bounds.width * 0.7, ofDividerAt: 0)
+        window.layoutIfNeeded()
+        let dragged = try splitFraction(of: controller)
+        XCTAssertEqual(dragged, 0.3, accuracy: 0.05, "the drag took")
+        let frame = window.frame
+
+        for round in 1 ... 3 {
+            controller.setPreviewMode(.reading)
+            settle(0.4)
+            XCTAssertEqual(
+                try splitFraction(of: controller), 1, accuracy: 0.02,
+                "round \(round): reading gives the render the whole column"
+            )
+            controller.setPreviewMode(.split)
+            settle(0.4)
+            XCTAssertEqual(
+                try splitFraction(of: controller), dragged, accuracy: 0.03,
+                "round \(round): and split comes back where it was dragged to"
+            )
+            XCTAssertEqual(
+                window.frame.width, frame.width, accuracy: 0.5,
+                "round \(round): the window keeps its frame"
+            )
+        }
+    }
+
+    /// ⇧⌘P goes round: split → reading → off → split. The divider has to be
+    /// where it was left when the cycle comes back to it — the whole way
+    /// round, not only on the short hop out of reading. Going through the
+    /// editor mode is the hard part: the preview is collapsed there, holding
+    /// the full width reading gave it, and the pane used to reopen on its own
+    /// 240pt floor instead of the half it was dragged to.
+    @MainActor
+    func testTheDividerSurvivesTheWholeModeCycle() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.setFrame(NSRect(x: 100, y: 120, width: 1200, height: 700), display: false)
+        window.makeKeyAndOrderFront(nil)
+        window.layoutIfNeeded()
+
+        controller.setPreviewMode(.split)
+        settle(0.5)
+        try setSplitFraction(0.5, of: controller)
+        let frame = window.frame
+        XCTAssertEqual(try splitFraction(of: controller), 0.5, accuracy: 0.02, "50/50 to start")
+
+        for round in 1 ... 3 {
+            // The whole lap, one ⇧⌘P at a time.
+            for mode in [PreviewMode.reading, .off, .split] {
+                controller.toggleMarkdownPreview()
+                settle(0.4)
+                XCTAssertEqual(controller.previewMode, mode, "round \(round): the cycle's order")
+            }
+            XCTAssertEqual(
+                try splitFraction(of: controller), 0.5, accuracy: 0.02,
+                "round \(round): split came back at the divider, not at the pane's floor"
+            )
+            XCTAssertEqual(
+                window.frame, frame, "round \(round): and the window kept its frame"
+            )
+        }
+
+        // The share is a fraction, not a width: the window can change size
+        // while the divider is put away and split still comes back at half.
+        for (mode, width) in [(PreviewMode.off, 900.0), (.reading, 1400.0)] {
+            controller.setPreviewMode(mode)
+            settle(0.4)
+            window.setFrame(
+                NSRect(x: 100, y: 120, width: width, height: 700), display: false
+            )
+            window.layoutIfNeeded()
+            settle(0.3)
+            controller.setPreviewMode(.split)
+            settle(0.4)
+            XCTAssertEqual(
+                try splitFraction(of: controller), 0.5, accuracy: 0.02,
+                "still half a \(Int(width))pt window after a resize in \(mode.rawValue)"
+            )
+        }
+    }
+
+    /// Opening split pins the preview to the remembered share so it cannot
+    /// ask for more room than the split has. The pin is a way of getting
+    /// there, not a width to live at: once the columns have landed the
+    /// preview is back to its own 240pt floor and no ceiling at all, and the
+    /// divider moves through the whole range the editor's minimum leaves.
+    @MainActor
+    func testThePreviewDividerStaysDraggableInSplit() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.setFrame(NSRect(x: 120, y: 140, width: 1100, height: 620), display: false)
+        controller.setPreviewMode(.split)
+        window.layoutIfNeeded()
+
+        let split = try documentSplitViewController(of: controller).splitView
+        let preview = try XCTUnwrap(previewItem(of: controller))
+        let editor = try XCTUnwrap(editorItem(of: controller))
+        XCTAssertGreaterThan(split.bounds.width, 1, "the split has to be laid out")
+        XCTAssertEqual(preview.minimumThickness, 240, "the pin came off")
+        XCTAssertEqual(
+            preview.maximumThickness, NSSplitViewItem.unspecifiedDimension,
+            "no ceiling of its own — the editor's floor is the far end of the drag"
+        )
+
+        // Drag it to where the editor hits its minimum, and back.
+        split.setPosition(editor.minimumThickness, ofDividerAt: 0)
+        window.layoutIfNeeded()
+        XCTAssertEqual(
+            preview.viewController.view.frame.width,
+            split.bounds.width - editor.minimumThickness, accuracy: 2,
+            "the preview grows until the editor hits its floor"
+        )
+        split.setPosition(split.bounds.width - preview.minimumThickness, ofDividerAt: 0)
+        window.layoutIfNeeded()
+        XCTAssertEqual(
+            preview.viewController.view.frame.width, preview.minimumThickness, accuracy: 2,
+            "and shrinks until it hits its own"
+        )
+    }
+
+    /// The divider belongs to the reader in split and to nobody in the other
+    /// two: the column that is away is pinned shut at both ends, so there is
+    /// nothing to drag it out by and no divider drawn to drag.
+    @MainActor
+    func testTheDividerIsDraggableOnlyInSplit() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.setFrame(NSRect(x: 120, y: 140, width: 1100, height: 620), display: false)
+        window.layoutIfNeeded()
+        let split = try documentSplitViewController(of: controller).splitView
+
+        for mode in [PreviewMode.off, .reading] {
+            controller.setPreviewMode(mode)
+            window.layoutIfNeeded()
+            let shut = try XCTUnwrap(
+                mode == .off ? previewItem(of: controller) : editorItem(of: controller)
+            )
+            XCTAssertEqual(shut.minimumThickness, 0, "\(mode.rawValue): no floor")
+            XCTAssertEqual(shut.maximumThickness, 0, "\(mode.rawValue): and no ceiling above it")
+            XCTAssertEqual(
+                shut.viewController.view.frame.width, 0,
+                "\(mode.rawValue): the closed column is exactly nothing wide"
+            )
+            XCTAssertTrue(
+                try documentDividerRect(of: controller).isEmpty,
+                "\(mode.rawValue): and the divider answers nothing beside it"
+            )
+
+            // A drag right into the middle of the window changes nothing.
+            split.setPosition(split.bounds.width / 2, ofDividerAt: 0)
+            window.layoutIfNeeded()
+            XCTAssertEqual(
+                shut.viewController.view.frame.width, 0,
+                "\(mode.rawValue): the divider does not move for a drag"
+            )
+        }
+
+        controller.setPreviewMode(.split)
+        window.layoutIfNeeded()
+        XCTAssertFalse(
+            try documentDividerRect(of: controller).isEmpty,
+            "split is the mode whose divider is the reader's to drag"
+        )
+    }
+
+    /// The window frame is the one thing a mode change may never touch, and
+    /// the case that used to touch it is the narrow one: two floors adding up
+    /// to more than the window has is a window that grows to hold them, and a
+    /// column pinned to a stale width is a window that shrinks onto it. Both
+    /// ends of the range, all the way round the cycle, twice.
+    @MainActor
+    func testTheWindowKeepsItsFrameAtEveryWidthTheModesCycleAt() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        let split = try documentSplitViewController(of: controller).splitView
+
+        // 500pt is under the two floors together, 640pt is just over them,
+        // and 1470x919 is the window a real screen gives you.
+        for size in [
+            NSSize(width: 500, height: 400),
+            NSSize(width: 640, height: 400),
+            NSSize(width: 1470, height: 919),
+        ] {
+            let frame = NSRect(origin: NSPoint(x: 60, y: 80), size: size)
+            window.setFrame(frame, display: false)
+            window.layoutIfNeeded()
+
+            for _ in 0 ..< 6 {
+                controller.toggleMarkdownPreview()
+                window.layoutIfNeeded()
+                let mode = controller.previewMode
+                let where_ = "\(mode.rawValue) at \(Int(size.width))pt"
+                XCTAssertEqual(window.frame, frame, "\(where_): the window is untouched")
+                let room = split.bounds.width - split.dividerThickness
+                XCTAssertEqual(
+                    try editorWidth(of: controller) + previewWidth(of: controller),
+                    room, accuracy: 1,
+                    "\(where_): the columns fill the split and no more"
+                )
+                if mode == .split {
+                    XCTAssertGreaterThan(
+                        try editorWidth(of: controller), 0, "\(where_): both columns are there"
+                    )
+                    XCTAssertGreaterThan(try previewWidth(of: controller), 0, where_)
+                }
+            }
+        }
+    }
+
+    /// The outer items are rebuilt when the sidebar changes sides. The
+    /// document's two are not, so split is still split on the other side —
+    /// at its floors, on about half the room, with the window untouched.
+    @MainActor
+    func testThePaneKeepsItsColumnsWhenTheSidebarChangesSides() throws {
         _ = NSApplication.shared
         let previousSide = Preferences.shared.sidebarSide
         defer { Preferences.shared.sidebarSide = previousSide }
@@ -810,12 +1229,18 @@ final class MarkdownPreviewTests: XCTestCase {
         for side in [SidebarSide.right, .left] {
             Preferences.shared.sidebarSide = side
             let controller = try makeControllerShowingPreview()
+            let frame = try XCTUnwrap(controller.window).frame
             let item = try XCTUnwrap(previewItem(of: controller))
+            XCTAssertFalse(item.canCollapse, "on the \(side.title)")
+            XCTAssertEqual(item.minimumThickness, 240)
             XCTAssertEqual(
-                item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView,
-                "on the \(side.title)"
+                try splitFraction(of: controller), 0.5, accuracy: 0.05,
+                "still about half on the \(side.title)"
             )
-            XCTAssertEqual(item.preferredThicknessFraction, 0.5)
+            XCTAssertEqual(
+                try XCTUnwrap(controller.window).frame, frame,
+                "and the window never moved for it"
+            )
         }
     }
 
@@ -864,8 +1289,8 @@ final class MarkdownPreviewTests: XCTestCase {
         window.layoutIfNeeded()
         XCTAssertTrue(controller.previewState.isVisible, "the render is half the note, not chrome")
         XCTAssertEqual(controller.previewMode, .split, "and the mode is untouched")
-        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
-        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, false, "both columns stay")
+        XCTAssertGreaterThan(try previewWidth(of: controller), 0)
+        XCTAssertGreaterThan(try editorWidth(of: controller), 0, "both columns stay")
         XCTAssertEqual(preview.frame.width, width, accuracy: 0.5, "at the divider it was left at")
 
         // The controls over the two columns are chrome, and go with the rest.
@@ -876,7 +1301,7 @@ final class MarkdownPreviewTests: XCTestCase {
         controller.toggleZenMode()
         window.layoutIfNeeded()
         XCTAssertTrue(controller.previewState.isVisible, "and nothing moved on the way out")
-        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
+        XCTAssertGreaterThan(try previewWidth(of: controller), 0)
         XCTAssertEqual(preview.frame.width, width, accuracy: 0.5)
         XCTAssertFalse(editorOverlay.isHidden, "the controls come back with the chrome")
         XCTAssertFalse(previewOverlay.isHidden)
@@ -1004,6 +1429,67 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertGreaterThan(cursor.maxX, dividerX)
         XCTAssertGreaterThanOrEqual(editorFrame.minY, badge.maxY - 0.5)
         XCTAssertGreaterThanOrEqual(previewFrame.minY, cursor.maxY - 0.5)
+    }
+
+    /// Safari's pattern: a compact + at the trailing end of the strip, always
+    /// there, opens a new tab the way ⌘T does.
+    @MainActor
+    func testTheTabStripCarriesANewTabButton() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        let tabBar = try XCTUnwrap(
+            descendant(of: try XCTUnwrap(window.contentView), ofType: TabBarView.self)
+        )
+        let plus = try XCTUnwrap(descendant(of: tabBar, ofType: NewTabButton.self))
+
+        XCTAssertEqual(plus.accessibilityLabel(), "New Tab")
+        XCTAssertEqual(plus.accessibilityRole(), .button)
+        XCTAssertEqual(plus.toolTip, "New Tab  ⌘T")
+        XCTAssertFalse(plus.isHidden)
+        XCTAssertTrue(controller.canShowMarkdownPreview, "the window opens on a saved .md")
+
+        plus.performClick(nil)
+        XCTAssertFalse(
+            controller.canShowMarkdownPreview,
+            "the + opens an untitled note, which has no render until it is saved"
+        )
+        controller.selectTab(at: 0)
+        XCTAssertTrue(controller.canShowMarkdownPreview, "the original .md is still the first tab")
+        controller.selectTab(at: 1)
+        XCTAssertFalse(controller.canShowMarkdownPreview, "and the new one is still the second")
+    }
+
+    /// When the strip overflows, the tabs scroll in the leading remainder;
+    /// the + stays pinned at the trailing end and is never covered.
+    @MainActor
+    func testTheNewTabButtonStaysVisibleWhenTabsOverflow() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.setFrame(NSRect(x: 80, y: 80, width: 520, height: 560), display: false)
+        for _ in 0 ..< 12 { controller.newTab() }
+        window.layoutIfNeeded()
+
+        let tabBar = try XCTUnwrap(
+            descendant(of: try XCTUnwrap(window.contentView), ofType: TabBarView.self)
+        )
+        tabBar.layoutSubtreeIfNeeded()
+        let plus = try XCTUnwrap(descendant(of: tabBar, ofType: NewTabButton.self))
+
+        XCTAssertFalse(plus.isHidden)
+        XCTAssertGreaterThanOrEqual(plus.frame.minX, 0)
+        XCTAssertLessThanOrEqual(plus.frame.maxX, tabBar.bounds.maxX + 0.5)
+        XCTAssertGreaterThanOrEqual(plus.frame.minY, 0)
+        XCTAssertLessThanOrEqual(plus.frame.maxY, tabBar.bounds.maxY + 0.5)
+
+        for subview in tabBar.subviews where subview !== plus && !subview.isHidden {
+            XCTAssertFalse(
+                subview.frame.intersects(plus.frame),
+                "a tab sits on the +"
+            )
+            XCTAssertLessThanOrEqual(subview.frame.maxX, plus.frame.minX + 0.5)
+        }
     }
 
     // MARK: - Code boxes
@@ -1370,56 +1856,53 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(controller.previewMode, .reading)
     }
 
-    /// Reading mode collapses the editor rather than the window: the render
+    /// Reading closes the editor's column rather than the window: the render
     /// takes the column the text had, and the frame is the frame it was.
     @MainActor
-    func testReadingModeCollapsesTheEditorAndNeverTheWindow() throws {
+    func testReadingModeClosesTheEditorColumnAndNeverTheWindow() throws {
         _ = NSApplication.shared
         let controller = try makeController()
         let window = try XCTUnwrap(controller.window)
-        let editor = try XCTUnwrap(editorItem(of: controller))
-
-        XCTAssertTrue(editor.canCollapse, "the editor has to be collapsible to get out of the way")
-        XCTAssertEqual(
-            editor.collapseBehavior, .preferResizingSiblingsWithFixedSplitView,
-            "the render takes the room the editor gives up; the window keeps its size"
-        )
 
         let frame = NSRect(x: 120, y: 140, width: 1100, height: 620)
         window.setFrame(frame, display: false)
         window.layoutIfNeeded()
+        let room = try editorWidth(of: controller)
 
         controller.setPreviewMode(.reading)
         window.layoutIfNeeded()
-        XCTAssertEqual(editor.isCollapsed, true, "the text is not on screen in reading mode")
-        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
+        XCTAssertEqual(try editorWidth(of: controller), 0, "the text is not on screen here")
+        XCTAssertEqual(
+            try previewWidth(of: controller), room, accuracy: 1,
+            "the render has the whole column the editor had"
+        )
         XCTAssertEqual(window.frame, frame, "going in neither moves nor resizes the window")
 
         controller.setPreviewMode(.split)
         window.layoutIfNeeded()
-        XCTAssertEqual(editor.isCollapsed, false, "and the editor is back beside the render")
+        XCTAssertGreaterThan(
+            try editorWidth(of: controller), 0, "and the editor is back beside the render"
+        )
         XCTAssertEqual(window.frame, frame)
 
         controller.setPreviewMode(.off)
         window.layoutIfNeeded()
-        XCTAssertEqual(editor.isCollapsed, false)
-        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, true)
+        XCTAssertEqual(try editorWidth(of: controller), room, accuracy: 1)
+        XCTAssertEqual(try previewWidth(of: controller), 0)
         XCTAssertEqual(window.frame, frame, "and coming all the way out leaves it where it was")
     }
 
-    /// The two panes are never both collapsed, not even for the instant a
-    /// mode change takes — that would leave the window showing nothing.
+    /// The two columns are never both shut, not even for the instant a mode
+    /// change takes — that would leave the window showing nothing.
     @MainActor
     func testSomethingIsAlwaysOnScreenAsTheModesChange() throws {
         _ = NSApplication.shared
         let controller = try makeController()
-        let editor = try XCTUnwrap(editorItem(of: controller))
-        let preview = try XCTUnwrap(previewItem(of: controller))
 
         for mode in [PreviewMode.reading, .off, .reading, .split, .off] {
             controller.setPreviewMode(mode)
-            XCTAssertFalse(
-                editor.isCollapsed && preview.isCollapsed,
+            XCTAssertGreaterThan(
+                try editorWidth(of: controller) + previewWidth(of: controller), 1,
                 "nothing to look at in \(mode.rawValue)"
             )
         }
@@ -1458,7 +1941,7 @@ final class MarkdownPreviewTests: XCTestCase {
 
         XCTAssertEqual(controller.previewMode, .reading, "no way out through the keyboard")
         XCTAssertEqual(editor.string, "note", "and nothing landed in the text")
-        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, true)
+        XCTAssertEqual(try editorWidth(of: controller), 0)
     }
 
     /// An arrow key is the render's own — it walks the page rather than
@@ -1485,6 +1968,9 @@ final class MarkdownPreviewTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         window.makeKeyAndOrderFront(nil)
         controller.setPreviewMode(.reading)
+        // On a window somebody can see, the mode slides in — ⌘F is asked for
+        // once it has landed.
+        settle(0.4)
         window.layoutIfNeeded()
 
         let preview = try previewView(of: controller)
@@ -1502,7 +1988,7 @@ final class MarkdownPreviewTests: XCTestCase {
         window.layoutIfNeeded()
 
         XCTAssertEqual(controller.previewMode, .reading, "the search happens where you are")
-        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, true, "no editor came back")
+        XCTAssertEqual(try editorWidth(of: controller), 0, "no editor came back")
 
         try XCTSkipUnless(scrollView.isFindBarVisible, "no find bar headlessly")
         XCTAssertTrue(preview.isFindBarVisible)
@@ -1543,7 +2029,7 @@ final class MarkdownPreviewTests: XCTestCase {
         try clickPreview(of: controller, on: "Second paragraph.")
 
         XCTAssertEqual(controller.previewMode, .reading, "the page is where you still are")
-        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, true, "no editor came back")
+        XCTAssertEqual(try editorWidth(of: controller), 0, "no editor came back")
         XCTAssertEqual(editor.selectedRange(), caret, "and the editor's caret never moved")
         XCTAssertEqual(preview.highlightedSourceRange, litBefore, "no band under the click")
         let pane = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
@@ -1635,17 +2121,17 @@ final class MarkdownPreviewTests: XCTestCase {
 
         controller.selectTab(at: 1)
         XCTAssertEqual(controller.previewMode, .reading)
-        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, true)
+        XCTAssertEqual(try editorWidth(of: controller), 0)
         XCTAssertEqual(controller.previewModeControl.selectedSegment, 2)
 
         controller.selectTab(at: 0)
         XCTAssertEqual(controller.previewMode, .split)
-        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, false)
-        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
+        XCTAssertGreaterThan(try editorWidth(of: controller), 0)
+        XCTAssertGreaterThan(try previewWidth(of: controller), 0)
         XCTAssertEqual(controller.previewModeControl.selectedSegment, 1)
 
         controller.selectTab(at: 2)
-        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, true)
+        XCTAssertEqual(try previewWidth(of: controller), 0)
         XCTAssertEqual(controller.previewModeControl.selectedSegment, 0)
     }
 
@@ -1669,7 +2155,7 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(relaunched.previewMode, .split, "the tab it opens on")
         relaunched.selectTab(at: 0)
         XCTAssertEqual(relaunched.previewMode, .reading)
-        XCTAssertEqual(editorItem(of: relaunched)?.isCollapsed, true)
+        XCTAssertEqual(try editorWidth(of: relaunched), 0)
         XCTAssertEqual(relaunched.previewModeControl.selectedSegment, 2)
     }
 
@@ -1766,12 +2252,12 @@ final class MarkdownPreviewTests: XCTestCase {
 
         controller.toggleZenMode()
         XCTAssertTrue(controller.previewState.isVisible, "the render is the note here, not chrome")
-        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
-        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, true)
+        XCTAssertGreaterThan(try previewWidth(of: controller), 0)
+        XCTAssertEqual(try editorWidth(of: controller), 0)
 
         controller.toggleZenMode()
-        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
-        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, true)
+        XCTAssertGreaterThan(try previewWidth(of: controller), 0)
+        XCTAssertEqual(try editorWidth(of: controller), 0)
     }
 
     // MARK: - The mode control
@@ -2091,7 +2577,7 @@ final class MarkdownPreviewTests: XCTestCase {
         let on = try makeController()
         on.open(url: markdown)
         XCTAssertEqual(on.previewMode, .reading)
-        XCTAssertEqual(editorItem(of: on)?.isCollapsed, true)
+        XCTAssertEqual(try editorWidth(of: on), 0)
 
         on.open(url: text)
         XCTAssertEqual(on.previewMode, .off, "a .txt is not Markdown")
@@ -2164,6 +2650,66 @@ final class MarkdownPreviewTests: XCTestCase {
         controller.toggleMarkdownPreview()
         controller.window?.layoutIfNeeded()
         return controller
+    }
+
+    /// Turns the run loop for a while. A 0.2s slide only advances when the
+    /// loop does, so this is how a test waits one out.
+    @MainActor
+    private func settle(_ seconds: TimeInterval) {
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// Puts the divider where a drag would have left it, as a share of the
+    /// room the two columns have between them.
+    @MainActor
+    private func setSplitFraction(
+        _ fraction: CGFloat, of controller: MainWindowController
+    ) throws {
+        let split = try documentSplitViewController(of: controller).splitView
+        let room = split.bounds.width - split.dividerThickness
+        XCTAssertGreaterThan(room, 1, "the split has to be laid out")
+        split.setPosition(room * (1 - fraction), ofDividerAt: 0)
+        controller.window?.layoutIfNeeded()
+    }
+
+    /// The area the document split's divider answers the mouse in. A column
+    /// closed to nothing leaves none of it: no drag, and no resize cursor
+    /// over the text beside it.
+    @MainActor
+    private func documentDividerRect(of controller: MainWindowController) throws -> NSRect {
+        let document = try documentSplitViewController(of: controller)
+        let split = document.splitView
+        let drawn = NSRect(
+            x: split.subviews.first?.frame.width ?? 0, y: 0,
+            width: split.dividerThickness, height: split.bounds.height
+        )
+        return document.splitView(
+            split, effectiveRect: drawn, forDrawnRect: drawn, ofDividerAt: 0
+        )
+    }
+
+    /// A column's width inside the document split. A mode that has closed a
+    /// column closes it to exactly nothing — there is no collapsed item to
+    /// ask any more, only a column of no width.
+    @MainActor
+    private func editorWidth(of controller: MainWindowController) throws -> CGFloat {
+        try XCTUnwrap(editorItem(of: controller)).viewController.view.frame.width
+    }
+
+    @MainActor
+    private func previewWidth(of controller: MainWindowController) throws -> CGFloat {
+        try XCTUnwrap(previewItem(of: controller)).viewController.view.frame.width
+    }
+
+    /// The preview's share of the document split: 0.5 in an even split, 1 in
+    /// reading, 0 with the render away.
+    @MainActor
+    private func splitFraction(of controller: MainWindowController) throws -> CGFloat {
+        let split = try documentSplitViewController(of: controller).splitView
+        let preview = try XCTUnwrap(previewItem(of: controller)).viewController.view
+        let room = split.bounds.width - split.dividerThickness
+        XCTAssertGreaterThan(room, 1, "the split has to be laid out")
+        return preview.frame.width / room
     }
 
     /// Long enough for the 150 ms render to have fired.

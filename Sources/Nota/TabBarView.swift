@@ -8,6 +8,7 @@ struct TabBarItem {
 protocol TabBarViewDelegate: AnyObject {
     func tabBar(_ bar: TabBarView, didSelect index: Int)
     func tabBar(_ bar: TabBarView, didRequestCloseAt index: Int)
+    func tabBarDidRequestNewTab(_ bar: TabBarView)
 }
 
 /// The strip of tabs that sits in the title bar next to the traffic lights.
@@ -26,6 +27,7 @@ final class TabBarView: NSView {
 
     private static let tabHeight: CGFloat = 24
     private static let spacing: CGFloat = 4
+    private static let newTabButtonSize: CGFloat = 24
     private static let idealMaxWidth: CGFloat = 180
     private static let idealMinWidth: CGFloat = 110
     /// Tabs stop shrinking here; past it the strip scrolls instead.
@@ -34,12 +36,22 @@ final class TabBarView: NSView {
     private var items: [TabBarItem] = []
     private var selectedIndex = 0
     private var itemViews: [TabItemView] = []
+    private let newTabButton = NewTabButton()
 
     /// How far the strip is scrolled when the tabs do not all fit.
     private var scrollOffset: CGFloat = 0
 
     /// Empty strip is title-bar background, so dragging it moves the window.
     override var mouseDownCanMoveWindow: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        newTabButton.target = self
+        newTabButton.action = #selector(requestNewTab)
+        addSubview(newTabButton)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
 
     /// Double-clicking the empty strip behaves like double-clicking a title bar,
     /// honouring System Settings ▸ Desktop & Dock ▸ "Double-click a window's title bar to".
@@ -65,7 +77,7 @@ final class TabBarView: NSView {
         let delta = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
             ? event.scrollingDeltaX
             : event.scrollingDeltaY
-        guard delta != 0, contentWidth > bounds.width else {
+        guard delta != 0, contentWidth > tabsViewportWidth else {
             super.scrollWheel(with: event)
             return
         }
@@ -73,10 +85,15 @@ final class TabBarView: NSView {
     }
 
     private func setScrollOffset(_ value: CGFloat) {
-        let clamped = min(max(0, value), max(0, contentWidth - bounds.width))
+        let clamped = min(max(0, value), max(0, contentWidth - tabsViewportWidth))
         guard clamped != scrollOffset else { return }
         scrollOffset = clamped
         needsLayout = true
+    }
+
+    /// Room the tabs may occupy: the strip minus the pinned + and its gap.
+    private var tabsViewportWidth: CGFloat {
+        max(0, bounds.width - Self.newTabButtonSize - Self.spacing)
     }
 
     /// Total width the tabs want at their readable size.
@@ -91,12 +108,13 @@ final class TabBarView: NSView {
     }
 
     func scrollSelectedTabIntoView() {
-        guard itemViews.indices.contains(selectedIndex), contentWidth > bounds.width else { return }
+        let viewport = tabsViewportWidth
+        guard itemViews.indices.contains(selectedIndex), contentWidth > viewport else { return }
         let frame = itemViews[selectedIndex].frame
         if frame.minX < 0 {
             setScrollOffset(scrollOffset + frame.minX)
-        } else if frame.maxX > bounds.width {
-            setScrollOffset(scrollOffset + frame.maxX - bounds.width)
+        } else if frame.maxX > viewport {
+            setScrollOffset(scrollOffset + frame.maxX - viewport)
         }
     }
 
@@ -108,13 +126,17 @@ final class TabBarView: NSView {
             let view = TabItemView()
             view.onSelect = { [weak self] tab in self?.select(tab) }
             view.onClose = { [weak self] tab in self?.close(tab) }
-            addSubview(view)
+            addSubview(view, positioned: .below, relativeTo: newTabButton)
             itemViews.append(view)
         }
         for (index, item) in items.enumerated() {
             itemViews[index].configure(item, isSelected: index == selectedIndex)
         }
         needsLayout = true
+    }
+
+    @objc private func requestNewTab() {
+        delegate?.tabBarDidRequestNewTab(self)
     }
 
     private func select(_ view: TabItemView) {
@@ -129,23 +151,98 @@ final class TabBarView: NSView {
 
     override func layout() {
         super.layout()
+
+        let plusSize = Self.newTabButtonSize
+        newTabButton.frame = NSRect(
+            x: bounds.width - plusSize,
+            y: (bounds.height - plusSize) / 2,
+            width: plusSize,
+            height: plusSize
+        )
+
         guard !itemViews.isEmpty else { return }
 
         // Tabs never shrink below a readable width; once they no longer fit,
-        // the strip scrolls rather than squeezing them into slivers.
+        // the strip scrolls rather than squeezing them into slivers. The +
+        // stays pinned at the trailing edge, so they only use the leading
+        // remainder — a tab that would sit under the + is hidden instead.
+        let viewport = tabsViewportWidth
         let widths = items.map(Self.readableWidth)
         let total = widths.reduce(0, +) + Self.spacing * CGFloat(itemViews.count - 1)
-        if total <= bounds.width { scrollOffset = 0 }
-        scrollOffset = min(scrollOffset, max(0, total - bounds.width))
+        if total <= viewport { scrollOffset = 0 }
+        scrollOffset = min(scrollOffset, max(0, total - viewport))
 
         let y = (bounds.height - Self.tabHeight) / 2
         var x = -scrollOffset
         for (index, view) in itemViews.enumerated() {
             view.frame = NSRect(x: x, y: y, width: widths[index], height: Self.tabHeight)
-            // Tabs scrolled off the edge should not be clickable.
-            view.isHidden = x + widths[index] < 0 || x > bounds.width
+            // Tabs scrolled off the edge should not be clickable, and a tab
+            // that would cross the + slot is not shown there either.
+            view.isHidden = x + widths[index] < 0 || x >= viewport || x + widths[index] > viewport
             x += widths[index] + Self.spacing
         }
+    }
+}
+
+/// Trailing control on the tab strip. Same density as a tab (24pt), not an
+/// iOS-sized hit target; the + never scrolls away with the tabs.
+final class NewTabButton: NSButton {
+    private var hoverArea: NSTrackingArea?
+    private var isHovered = false {
+        didSet { if isHovered != oldValue { needsDisplay = true } }
+    }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+        image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")?
+            .withSymbolConfiguration(config)
+        isBordered = false
+        bezelStyle = .inline
+        imagePosition = .imageOnly
+        contentTintColor = .secondaryLabelColor
+        toolTip = "New Tab  ⌘T"
+        setAccessibilityLabel("New Tab")
+        setAccessibilityRole(.button)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if isHovered || isHighlighted {
+            NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.08 : 0.04).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+        }
+        super.draw(dirtyRect)
+    }
+
+    override func highlight(_ flag: Bool) {
+        super.highlight(flag)
+        needsDisplay = true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        isHovered = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        isHovered = false
     }
 }
 

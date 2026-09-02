@@ -24,6 +24,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let gutterSeparatorCheckbox = NSButton(
         checkboxWithTitle: "Gutter separator", target: nil, action: nil
     )
+    private let wordWrapCheckbox = NSButton(checkboxWithTitle: "Word wrap", target: nil, action: nil)
     private let sidebarSidePopUp = NSPopUpButton()
     private let plainTextImageStylePopUp = NSPopUpButton()
     private let readingModeCheckbox = NSButton(
@@ -118,6 +119,9 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
              with: PlainTextImageStyle.allCases.map { ($0.title, $0.rawValue) },
              action: #selector(plainTextImageStyleChanged))
 
+        wordWrapCheckbox.target = self
+        wordWrapCheckbox.action = #selector(wordWrapChanged)
+
         lineNumbersCheckbox.target = self
         lineNumbersCheckbox.action = #selector(lineNumbersChanged)
 
@@ -169,6 +173,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             [label("Size"), sizeRow],
             [label("Line spacing"), spacingPopUp],
             [label("Padding"), paddingPopUp],
+            [label("Editor"), wordWrapCheckbox],
             [label("Gutter"), gutterRow],
             [label("Status bar"), footerGrid],
             [label("Image sidebar"), sidebarSidePopUp],
@@ -239,6 +244,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         select(paddingPopUp, raw: preferences.padding.rawValue)
         select(sidebarSidePopUp, raw: preferences.sidebarSide.rawValue)
         select(plainTextImageStylePopUp, raw: preferences.plainTextImageStyle.rawValue)
+        wordWrapCheckbox.state = preferences.wrapsLines ? .on : .off
         lineNumbersCheckbox.state = preferences.showsLineNumbers ? .on : .off
         gutterSeparatorCheckbox.state = preferences.showsGutterSeparator ? .on : .off
         gutterSeparatorCheckbox.isEnabled = preferences.showsLineNumbers
@@ -342,6 +348,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     @objc private func clearHotKey() {
         preferences.hotKey = nil
         hotKeyField.shortcut = nil
+    }
+
+    @objc private func wordWrapChanged(_ sender: NSButton) {
+        preferences.wrapsLines = sender.state == .on
     }
 
     @objc private func lineNumbersChanged(_ sender: NSButton) {

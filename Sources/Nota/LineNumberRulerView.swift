@@ -116,12 +116,22 @@ final class LineNumberRulerView: NSRulerView {
         let origin = textView.textContainerOrigin
         let offset = convert(NSPoint.zero, from: textView).y + origin.y
 
-        let visible = scrollView?.contentView.bounds ?? .zero
+        // The band of text the clip view shows, widened to the whole document:
+        // with word wrap off the content also scrolls sideways, and a short
+        // line that has slid off to the left still needs its number.
+        var visible = scrollView?.contentView.bounds ?? .zero
+        visible.origin.x = 0
+        visible.size.width = max(visible.width, textView.bounds.width)
         // Never draw a number outside the band the clip view actually shows;
         // `glyphRange(forBoundingRect:)` also returns fragments that merely
-        // intersect it, whose numbers would otherwise land on the footer.
+        // intersect it, whose numbers would otherwise land on the footer. The
+        // clip is vertical only, for the same reason.
         if let clipView = scrollView?.contentView {
-            NSBezierPath(rect: convert(clipView.bounds, from: clipView).intersection(bounds)).addClip()
+            let band = convert(clipView.bounds, from: clipView)
+            let strip = NSRect(
+                x: bounds.minX, y: band.minY, width: bounds.width, height: band.height
+            )
+            NSBezierPath(rect: strip.intersection(bounds)).addClip()
         }
         let visibleGlyphs = layoutManager.glyphRange(forBoundingRect: visible, in: container)
         let visibleChars = layoutManager.characterRange(

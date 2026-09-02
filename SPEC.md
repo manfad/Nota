@@ -20,7 +20,9 @@
 - System font (SF Pro) 13pt default, full-width text, no line-width cap.
 - Line numbers in a left gutter (Settings toggle, default on). One number per hard line; wrapped continuation rows are blank.
   Settings toggle "Gutter separator" (default off) draws a hairline (separatorColor) along the gutter's inner edge.
-- Settings (⌘,): font family, size, line spacing, editor padding, vim mode, hotkey.
+- Settings toggle "Word wrap" (default on). Off: a long line runs on and the editor scrolls sideways; the gutter stays
+  pinned at the left edge. The Markdown render always wraps.
+- Settings (⌘,): font family, size, line spacing, editor padding, word wrap, vim mode, hotkey.
 - Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` · `N pt` beside gear.
 
 ## Markdown preview — three modes (⇧⌘P cycles, View menu; per tab, remembered in the session)
@@ -31,7 +33,8 @@
   not yet saved — has no render, no mode control, and both View items are disabled there, so ⇧⌘P and ⌥⇧⌘P do nothing.
 - Split: a read-only rendered pane beside the editor (trailing side, resizable, 50% default, min 240pt); the image sidebar
   stays outermost. Reading: the editor collapses and the render takes its column. Either way the window keeps its frame —
-  the panes share the room out between them.
+  the panes share the room out between them. A mode you ask for slides across in 0.2s (Reduce Motion snaps; a tab switch
+  snaps); taps during a slide land once it has. Split remembers its divider, as a fraction, across reading and editor.
 - Shared chrome: the tab strip runs across the top of both columns and the status bar across the bottom of both, so the
   editor/preview divider starts under the tabs and stops above the footer. The pane has no header of its own — it is the
   render and nothing else, starting at the top of its column with the editor's own leading inset.
@@ -104,7 +107,7 @@
 - Orphan assets are never auto-deleted.
 
 ## Tabs
-- Min readable width ~110pt, strip scrolls horizontally past that. ⌘P fuzzy tab switcher by title.
+- Min readable width ~110pt, strip scrolls horizontally past that. A + pinned at the trailing end of the strip opens a new tab (same as ⌘T); overflowing tabs scroll in the remaining space. ⌘P fuzzy tab switcher by title.
 - Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab.
 
 ## Summon
