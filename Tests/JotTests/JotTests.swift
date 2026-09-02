@@ -1324,6 +1324,14 @@ final class JotTests: XCTestCase {
         return found
     }
 
+    /// The split view lives under the window's root controller, not as it —
+    /// the tab strip is above it and belongs to the window.
+    @MainActor
+    private func splitViewController(of window: NSWindow) -> NSSplitViewController? {
+        window.contentViewController?.children
+            .compactMap { $0 as? NSSplitViewController }.first
+    }
+
     /// The first view of a kind anywhere under another.
     @MainActor
     private func descendant<T: NSView>(of view: NSView, ofType type: T.Type) -> T? {
@@ -1367,9 +1375,7 @@ final class JotTests: XCTestCase {
 
         // The split view survives the round trip intact: the editor, the
         // preview and the image sidebar, the last two collapsed.
-        XCTAssertEqual(
-            (window.contentViewController as? NSSplitViewController)?.splitViewItems.count, 3
-        )
+        XCTAssertEqual(splitViewController(of: window)?.splitViewItems.count, 3)
     }
 
     // MARK: - Sidebar utility row
@@ -1417,12 +1423,13 @@ final class JotTests: XCTestCase {
 
     // MARK: - Gutter separator
 
+    @MainActor
     func testTheSidebarNeverResizesTheWindow() throws {
         _ = NSApplication.shared
         let directory = try makeTemporaryDirectory()
         let controller = MainWindowController(store: SessionStore(directory: directory))
         let window = try XCTUnwrap(controller.window)
-        let split = try XCTUnwrap(window.contentViewController as? NSSplitViewController)
+        let split = try XCTUnwrap(splitViewController(of: window))
         // Every pane that can collapse — sidebar, editor and preview: reading
         // mode collapses the editor itself — gives up room to its siblings
         // rather than letting the window change its frame.

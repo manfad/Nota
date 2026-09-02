@@ -1,17 +1,14 @@
 import AppKit
 
-/// The rendered pane beside the editor: a header band matching the tab strip,
-/// and under it a read-only text view showing what `MarkdownRenderer` made of
-/// the note.
+/// The rendered pane beside the editor: a read-only text view showing what
+/// `MarkdownRenderer` made of the note. It starts right under the window's tab
+/// strip — no band of its own, and no title.
 ///
 /// It is a view of the note, never a second place to type in it. Clicking a
 /// block does not put a caret here — it sends you to that block in the editor,
 /// which is the only place a note is ever edited.
 final class MarkdownPreviewView: NSView {
 
-    static let title = "Markdown Preview"
-
-    private let header = PreviewHeaderView()
     private let scrollView = NSScrollView()
     private let textView: PreviewTextView
 
@@ -104,11 +101,6 @@ final class MarkdownPreviewView: NSView {
         ]
         textView.onClick = { [weak self] index in self?.clicked(at: index) }
 
-        header.translatesAutoresizingMaskIntoConstraints = false
-        header.title = Self.title
-        header.leadingInset = horizontalInset
-        addSubview(header)
-
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
@@ -119,14 +111,7 @@ final class MarkdownPreviewView: NSView {
         addSubview(scrollView)
 
         NSLayoutConstraint.activate([
-            // Pinned to the very top, not the safe area: the band has to line
-            // up with the tab strip across the divider, title bar and all.
-            header.topAnchor.constraint(equalTo: topAnchor),
-            header.leadingAnchor.constraint(equalTo: leadingAnchor),
-            header.trailingAnchor.constraint(equalTo: trailingAnchor),
-            header.heightAnchor.constraint(equalToConstant: TabBarView.height),
-
-            scrollView.topAnchor.constraint(equalTo: header.bottomAnchor),
+            scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -159,8 +144,6 @@ final class MarkdownPreviewView: NSView {
     var renderedText: String { textView.string }
 
     var renderedContent: NSAttributedString { textView.attributedString() }
-
-    var headerTitle: String { header.title }
 
     /// One rectangle per fenced code block, in the text view's coordinates.
     var codeBoxRects: [NSRect] { textView.codeBoxRects }
@@ -264,50 +247,6 @@ final class MarkdownPreviewView: NSView {
     private func applyInsets() {
         textView.textContainerInset = NSSize(
             width: horizontalInset, height: Self.verticalInset
-        )
-        header.leadingInset = horizontalInset
-    }
-}
-
-// MARK: - The header band
-
-/// The pane's top band. It is the tab strip's opposite number across the
-/// divider, so it takes the same height and the same paper the strip sits on,
-/// and says what the pane is rather than sitting there empty.
-private final class PreviewHeaderView: NSView {
-    var title: String = "" {
-        didSet {
-            guard title != oldValue else { return }
-            needsDisplay = true
-        }
-    }
-
-    var leadingInset: CGFloat = 20 {
-        didSet {
-            guard leadingInset != oldValue else { return }
-            needsDisplay = true
-        }
-    }
-
-    /// The band is chrome, so dragging it moves the window the way the strip
-    /// beside it does.
-    override var mouseDownCanMoveWindow: Bool { true }
-
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.textBackgroundColor.setFill()
-        dirtyRect.fill()
-
-        NSColor.separatorColor.setFill()
-        NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
-
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-            .foregroundColor: NSColor.secondaryLabelColor,
-        ]
-        let size = (title as NSString).size(withAttributes: attributes)
-        (title as NSString).draw(
-            at: NSPoint(x: leadingInset, y: (bounds.height - size.height) / 2),
-            withAttributes: attributes
         )
     }
 }
