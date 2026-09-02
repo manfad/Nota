@@ -74,7 +74,9 @@
   Context menu: Copy Image / Save Image As… / Reveal in Finder. Bottom-pinned utility row with a Settings gear (leading edge).
 - ⌘A ⌘C carries images (RTFD) to other apps, and when the selection holds exactly one image the picture also goes
   as PNG/TIFF, so it pastes into terminals, browsers and Slack; two or more images offer no picture flavour.
-  Jot→Jot paste prefers Jot's own flavour, re-linking without duplicating assets.
+  A lone chip also carries its file URL, so a terminal or Finder paste gets the asset's path.
+  Jot→Jot paste prefers Jot's own flavour, re-linking without duplicating assets; a file URL from inside the
+  asset store re-links too.
 - Orphan assets are never auto-deleted.
 
 ## Tabs

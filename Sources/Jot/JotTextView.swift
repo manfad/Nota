@@ -376,6 +376,14 @@ final class JotTextView: NSTextView {
     // MARK: - Writing
 
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        // A chip selected on its own *is* the picture, so it goes out
+        // image-first: whatever takes files — Finder, a terminal, Claude Code —
+        // gets the asset's path rather than a lone U+FFFC. `.jotNote` still
+        // leads, so Jot -> Jot keeps re-linking the asset it already has.
+        if loneSelectedImageID != nil {
+            return [.jotNote, .fileURL, .png, .tiff, .rtfd, .string]
+        }
+
         var types: [NSPasteboard.PasteboardType] = [.jotNote]
         // Only offer RTFD when there is actually an image to carry, so
         // copying prose into another app stays unstyled.
@@ -387,6 +395,20 @@ final class JotTextView: NSTextView {
         if soleSelectedImageID != nil { types += [.png, .tiff] }
         types.append(.string)
         return types
+    }
+
+    /// Belt and braces. Whether `NSTextView` forwards a type it does not know
+    /// to the per-type method is undocumented, and the flavours a lone chip
+    /// leans on are exactly those — so they go on explicitly once super has had
+    /// its turn. Both paths write the same bytes, so doing it twice is free.
+    override func writeSelection(
+        to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]
+    ) -> Bool {
+        var wrote = super.writeSelection(to: pboard, types: types)
+        for type in [NSPasteboard.PasteboardType.fileURL, .png, .tiff] where types.contains(type) {
+            if writeSelection(to: pboard, type: type) { wrote = true }
+        }
+        return wrote
     }
 
     override func writeSelection(
@@ -404,6 +426,13 @@ final class JotTextView: NSTextView {
         case .rtfd:
             guard let data = rtfdData(for: selection) else { return false }
             return pboard.setData(data, forType: .rtfd)
+
+        case .fileURL:
+            // A string is enough: the pasteboard promotes `public.file-url`
+            // into the filename flavours too, so `readObjects(forClasses:)`
+            // hands the URL back on the way in.
+            guard let id = loneSelectedImageID, let url = assets?.url(for: id) else { return false }
+            return pboard.setString(url.absoluteString, forType: .fileURL)
 
         case .png, .tiff:
             guard let id = soleSelectedImageID,
@@ -442,6 +471,21 @@ final class JotTextView: NSTextView {
         let ids = selectedImageIDs
         guard ids.count == 1, let id = ids.first, assets?.exists(id) == true else { return nil }
         return id
+    }
+
+    /// The chip a `public.file-url` could mean: the selection is that one
+    /// character and nothing else. Prose around it would make the path a lie —
+    /// a terminal pasting the file would silently drop the words — so only the
+    /// bare chip offers where it lives on disk.
+    private var loneSelectedImageID: String? {
+        guard let storage = textStorage else { return nil }
+        let range = selectedRange()
+        guard range.length == 1, range.location < storage.length,
+              let jot = storage.attribute(.attachment, at: range.location, effectiveRange: nil)
+                  as? JotImageAttachment,
+              assets?.exists(jot.assetID) == true
+        else { return nil }
+        return jot.assetID
     }
 
     /// Swaps each Jot attachment for a stock one carrying the asset's bytes,
