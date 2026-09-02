@@ -40,8 +40,8 @@ final class MainWindowController: NSWindowController {
     private let markdownPreview = MarkdownPreviewView()
     private var previewItem: NSSplitViewItem?
     private var previewWorkItem: DispatchWorkItem?
-    /// Whether the pane is on screen right now — the preference says whether
-    /// it is wanted, zen mode says whether it may be shown.
+    /// Whether the pane is on screen right now — the tab in front says
+    /// whether it is wanted, zen mode says whether it may be shown.
     private var previewIsVisible = false
     private var tabBarLeading: NSLayoutConstraint?
     private let statusSeparator = NSBox()
@@ -375,7 +375,6 @@ final class MainWindowController: NSWindowController {
     }
 
     private func buildPreviewPane() {
-        previewIsVisible = preferences.showsMarkdownPreview
         let container = previewPane.view
         markdownPreview.translatesAutoresizingMaskIntoConstraints = false
         markdownPreview.horizontalInset = preferences.padding.inset
@@ -648,6 +647,9 @@ final class MainWindowController: NSWindowController {
         )
         note.isDirty = isDirty
         note.selectionLocation = max(0, min(tab.selection, note.storage.length))
+        // A session written before the pane was per-tab says nothing, and
+        // those tabs come back without it.
+        note.showsPreview = tab.showsPreview ?? false
         return note
     }
 
@@ -692,6 +694,10 @@ final class MainWindowController: NSWindowController {
         textView.scrollRangeToVisible(textView.selectedRange())
         window?.makeFirstResponder(textView)
         lineNumberRuler?.refresh()
+        // The pane belongs to the tab, so switching tabs opens or closes it.
+        // Not animated: the tab's other half is simply there or not, the way
+        // its text is, rather than sliding in behind the note you asked for.
+        applyPreviewVisibility(animated: false)
         renderMarkdownPreview()
     }
 
@@ -1405,24 +1411,36 @@ extension MainWindowController {
         (previewIsVisible, markdownPreview.renderedText)
     }
 
-    var isMarkdownPreviewVisible: Bool { previewIsVisible }
+    /// Whether the tab in front asks for the pane — what the View menu's
+    /// checkmark says, whether or not zen is hiding it at this moment.
+    var showsMarkdownPreview: Bool { currentNote?.showsPreview ?? false }
 
-    /// ⇧⌘P. The choice is remembered across launches, so a note that is being
-    /// written in Markdown opens with its preview beside it.
+    /// ⇧⌘P. The pane belongs to the tab, not to the app: a Markdown note
+    /// keeps its preview — across relaunches, through the session — while the
+    /// next ⌘T opens without one.
     func toggleMarkdownPreview() {
-        preferences.showsMarkdownPreview.toggle()
+        guard let note = currentNote else { return }
+        note.showsPreview.toggle()
+        applyPreviewVisibility(animated: true)
+        renderMarkdownPreview()
+        flush()
         // The pane is read, not typed in: whatever it does to the layout, the
         // caret stays where it was.
         focusEditor()
     }
 
-    /// The preference says whether the pane is wanted; zen says whether it may
-    /// be shown. Leaving zen brings back whatever the preference asks for.
-    private func applyPreviewVisibility() {
-        let shouldShow = preferences.showsMarkdownPreview && !isZenMode
+    /// The tab says whether the pane is wanted; zen says whether it may be
+    /// shown. Leaving zen brings back whatever the tab asks for.
+    private func applyPreviewVisibility(animated: Bool = true) {
+        let shouldShow = showsMarkdownPreview && !isZenMode
         guard shouldShow != previewIsVisible else { return }
         previewIsVisible = shouldShow
-        previewItem?.animator().isCollapsed = !shouldShow
+        // There is nothing to animate in a window nobody is looking at, and
+        // an animation still in flight when the split items are rebuilt under
+        // it — the sidebar changing sides — takes AppKit with it.
+        let target = animated && window?.isVisible == true
+            ? previewItem?.animator() : previewItem
+        target?.isCollapsed = !shouldShow
     }
 
     /// Debounced, like the cache write: a burst of keystrokes re-renders once,

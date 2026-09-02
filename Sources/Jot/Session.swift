@@ -180,6 +180,10 @@ struct SessionTab: Codable, Equatable {
     /// Latin-1 file is still one after a relaunch. `nil` for a note with no
     /// file, and for a session written before Jot remembered any of this.
     var format: TextFileFormat?
+    /// Whether the tab had the Markdown preview pane open. `nil` in a session
+    /// written before the pane was a per-tab thing — those tabs come back
+    /// without it.
+    var showsPreview: Bool?
 }
 
 struct SessionState: Codable, Equatable {

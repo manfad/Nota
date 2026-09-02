@@ -18,6 +18,10 @@ final class Note {
     /// note, so nothing about it is worth keeping.
     var isScratch: Bool = false
     var selectionLocation: Int = 0
+    /// Whether this tab wants the Markdown preview pane beside it. Per tab,
+    /// not per app: ⇧⌘P on a Markdown note must not follow you into the next
+    /// ⌘T. Off until asked for.
+    var showsPreview: Bool = false
     /// The shape the file was in when it was opened — encoding, byte-order
     /// mark, line endings — and the shape ⌘S puts back. A note that has never
     /// been a file starts out as UTF-8 with LF lines.
@@ -61,7 +65,8 @@ final class Note {
             selection: selectionLocation,
             // Only a real file has a shape worth keeping; an untitled note
             // comes back as the default whatever happened in between.
-            format: fileURL == nil ? nil : format
+            format: fileURL == nil ? nil : format,
+            showsPreview: showsPreview
         )
     }
 }

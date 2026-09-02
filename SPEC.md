@@ -22,9 +22,12 @@
 - Settings (⌘,): font family, size, line spacing, editor padding, vim mode, hotkey.
 - Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` · `N pt` beside gear.
 
-## Markdown preview (⇧⌘P, View menu, checkmark; remembered across relaunch)
+## Markdown preview (⇧⌘P, View menu, checkmark; per tab, remembered in the session)
 - A read-only rendered pane beside the editor (trailing side, resizable split, 50% default, min 240pt); the image sidebar
   stays outermost. Works for any note. Hidden in zen (it is chrome); back when zen ends. Focus stays in the editor.
+- Per tab, not per app: ⇧⌘P opens the pane for the tab in front only, and switching tabs opens or collapses it for the
+  tab you land on — a new ⌘T tab and a freshly opened file start without it. The flag rides in `session.json`, so each
+  tab comes back the way it was left. The View menu's checkmark is the front tab's.
 - Native: Foundation's Markdown parser (`AttributedString(markdown:)`, full interpretation) + Jot's own block styling.
   No WebView, no dependencies, no theming. Same font family/size as the editor; headings scale from it (H1 ×1.6 … H6 ×1.0,
   semibold); lists indented with `•` / `1.`; block quotes with a leading hairline bar in secondaryLabelColor; code spans
