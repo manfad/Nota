@@ -291,14 +291,7 @@ private final class SidebarImageItemView: NSView {
     private var assetURL: URL? { assets?.url(for: assetID) }
 
     @objc private func copyImage() {
-        guard let data = assets?.data(for: assetID) else { return }
-        let png: Data?
-        if (assetID as NSString).pathExtension.lowercased() == "png" {
-            png = data
-        } else {
-            png = NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:])
-        }
-        guard let png else { return }
+        guard let png = assets?.pngData(for: assetID) else { return }
         let board = NSPasteboard.general
         board.clearContents()
         board.setData(png, forType: .png)

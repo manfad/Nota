@@ -263,7 +263,7 @@ final class JotTests: XCTestCase {
         )
     }
 
-    func testPasteImageThenCopyOffersAllThreeFlavours() throws {
+    func testPasteImageThenCopyOffersEveryFlavour() throws {
         let assets = AssetStore(directory: try makeTemporaryDirectory())
         let view = makeTextView(assets: assets)
 
@@ -286,10 +286,12 @@ final class JotTests: XCTestCase {
         XCTAssertEqual(try assetFileCount(assets), 1)
         XCTAssertTrue(ids[0].hasSuffix(".png"))
 
-        // Copying it out offers Jot's own flavour, RTFD, and plain text.
+        // Copying it out offers Jot's own flavour, RTFD, the bare picture and
+        // plain text — in that order, so Jot and rich-text apps take the
+        // flavour that keeps the words around the image.
         view.setSelectedRange(NSRange(location: 0, length: storage.length))
         let types = view.writablePasteboardTypes
-        XCTAssertEqual(Set(types), Set([.jotNote, .rtfd, .string]))
+        XCTAssertEqual(types, [.jotNote, .rtfd, .png, .tiff, .string])
 
         let out = makePasteboard()
         out.clearContents()
@@ -425,6 +427,98 @@ final class JotTests: XCTestCase {
             }
             XCTAssertEqual(carried, [png])
         }
+    }
+
+    /// The bug: a copied chip pasted into Jot and Notes but nowhere else —
+    /// a terminal, a browser and Slack read `public.png` and nothing Jot was
+    /// offering. The picture now rides along whether the chip is copied on
+    /// its own or inside a line of prose.
+    @MainActor
+    func testACopiedChipIsAlsoAPNGAndTIFFOnTheClipboard() throws {
+        _ = NSApplication.shared
+        let assets = AssetStore(directory: try makeTemporaryDirectory())
+        let view = makeTextView(assets: assets)
+        let png = makePNGData()
+        let id = try XCTUnwrap(assets.importImageData(png, preferredExtension: "png"))
+        let source = try XCTUnwrap(NSBitmapImageRep(data: png))
+        try XCTUnwrap(view.textStorage).setAttributedString(NoteText.render(
+            "asd \(NoteText.token(for: id)) asdasd",
+            attributes: [.font: NSFont.systemFont(ofSize: 13)], assets: assets
+        ))
+
+        // The chip alone, as a click on it selects it.
+        view.setSelectedRange(NSRange(location: 4, length: 1))
+        XCTAssertEqual(view.writablePasteboardTypes, [.jotNote, .rtfd, .png, .tiff, .string])
+
+        // And the whole line around it, as a triple click takes it.
+        for range in [NSRange(location: 4, length: 1), NSRange(location: 0, length: 12)] {
+            view.setSelectedRange(range)
+            let board = makePasteboard()
+            board.clearContents()
+            let types = view.writablePasteboardTypes
+            board.declareTypes(types, owner: nil)
+            for type in types {
+                XCTAssertTrue(view.writeSelection(to: board, type: type), "failed \(type)")
+            }
+
+            // Already a PNG on disk, so the very bytes go out — no re-encode.
+            XCTAssertEqual(board.data(forType: .png), png)
+            let tiff = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(board.data(forType: .tiff))))
+            XCTAssertEqual(tiff.pixelsWide, source.pixelsWide)
+            XCTAssertEqual(tiff.pixelsHigh, source.pixelsHigh)
+
+            // Jot -> Jot still takes its own flavour first, so the asset is
+            // re-linked rather than imported a second time.
+            let second = makeTextView(assets: assets)
+            XCTAssertEqual(
+                second.preferredPasteboardType(
+                    from: board.types ?? [], restrictedToTypesFrom: second.readablePasteboardTypes
+                ),
+                .jotNote
+            )
+            XCTAssertTrue(second.readSelection(from: board, type: .jotNote))
+            XCTAssertEqual(attachmentIDs(in: try XCTUnwrap(second.textStorage)), [id])
+            XCTAssertEqual(try assetFileCount(assets), 1)
+        }
+    }
+
+    /// One `public.png` cannot say which of two pictures is meant, so a
+    /// selection holding both goes out as text and RTFD only.
+    @MainActor
+    func testASelectionWithTwoChipsOffersNoPictureFlavour() throws {
+        _ = NSApplication.shared
+        let assets = AssetStore(directory: try makeTemporaryDirectory())
+        let view = makeTextView(assets: assets)
+        let first = try XCTUnwrap(assets.importImageData(makePNGData(), preferredExtension: "png"))
+        let second = try XCTUnwrap(assets.importImageData(makePNGData(), preferredExtension: "png"))
+        let storage = try XCTUnwrap(view.textStorage)
+        storage.setAttributedString(NoteText.render(
+            "\(NoteText.token(for: first)) and \(NoteText.token(for: second))",
+            attributes: [.font: NSFont.systemFont(ofSize: 13)], assets: assets
+        ))
+
+        view.setSelectedRange(NSRange(location: 0, length: storage.length))
+        XCTAssertEqual(view.writablePasteboardTypes, [.jotNote, .rtfd, .string])
+
+        // Either one on its own is unambiguous again.
+        view.setSelectedRange(NSRange(location: 0, length: 1))
+        XCTAssertEqual(view.writablePasteboardTypes, [.jotNote, .rtfd, .png, .tiff, .string])
+    }
+
+    /// Copying prose stays prose: no image flavours, and still no RTFD.
+    @MainActor
+    func testAPlainTextSelectionOffersNoImageFlavours() throws {
+        _ = NSApplication.shared
+        let assets = AssetStore(directory: try makeTemporaryDirectory())
+        let view = makeTextView(assets: assets)
+        let storage = try XCTUnwrap(view.textStorage)
+        storage.setAttributedString(NSAttributedString(
+            string: "just words", attributes: [.font: NSFont.systemFont(ofSize: 13)]
+        ))
+
+        view.setSelectedRange(NSRange(location: 0, length: storage.length))
+        XCTAssertEqual(view.writablePasteboardTypes, [.jotNote, .string])
+        XCTAssertFalse(view.writeSelection(to: makePasteboard(), type: .png))
     }
 
     func testMissingAssetKeepsItsTokenThroughARoundTrip() throws {

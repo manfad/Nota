@@ -380,6 +380,11 @@ final class JotTextView: NSTextView {
         // Only offer RTFD when there is actually an image to carry, so
         // copying prose into another app stays unstyled.
         if selectionContainsImage { types.append(.rtfd) }
+        // A terminal, a browser or Slack reads none of the flavours above —
+        // only a bare picture — so one goes on the board too. After RTFD, so
+        // Jot and the rich-text apps still take the flavour that keeps the
+        // words around the image.
+        if soleSelectedImageID != nil { types += [.png, .tiff] }
         types.append(.string)
         return types
     }
@@ -400,6 +405,12 @@ final class JotTextView: NSTextView {
             guard let data = rtfdData(for: selection) else { return false }
             return pboard.setData(data, forType: .rtfd)
 
+        case .png, .tiff:
+            guard let id = soleSelectedImageID,
+                  let data = type == .png ? assets?.pngData(for: id) : assets?.tiffData(for: id)
+            else { return false }
+            return pboard.setData(data, forType: type)
+
         case .string:
             let plain = NoteText.strippingTokens(NoteText.serialize(selection))
             return pboard.setString(plain, forType: .string)
@@ -409,18 +420,28 @@ final class JotTextView: NSTextView {
         }
     }
 
-    private var selectionContainsImage: Bool {
-        guard let storage = textStorage else { return false }
+    private var selectionContainsImage: Bool { !selectedImageIDs.isEmpty }
+
+    /// The assets behind the chips in the selection, in document order.
+    private var selectedImageIDs: [String] {
+        guard let storage = textStorage else { return [] }
         let range = selectedRange()
-        guard range.length > 0 else { return false }
-        var found = false
-        storage.enumerateAttribute(.attachment, in: range) { value, _, stop in
-            if value is JotImageAttachment {
-                found = true
-                stop.pointee = true
-            }
+        guard range.length > 0 else { return [] }
+        var ids: [String] = []
+        storage.enumerateAttribute(.attachment, in: range) { value, _, _ in
+            if let jot = value as? JotImageAttachment { ids.append(jot.assetID) }
         }
-        return found
+        return ids
+    }
+
+    /// The one picture a `public.png` could mean. Two chips in the selection
+    /// leave that ambiguous — a single image flavour can only carry one — so
+    /// those copies go out as text and RTFD alone. Words around the chip are
+    /// welcome: copying a whole line still pastes the picture into a terminal.
+    private var soleSelectedImageID: String? {
+        let ids = selectedImageIDs
+        guard ids.count == 1, let id = ids.first, assets?.exists(id) == true else { return nil }
+        return id
     }
 
     /// Swaps each Jot attachment for a stock one carrying the asset's bytes,

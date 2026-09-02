@@ -156,6 +156,41 @@ final class AssetStore {
         return image
     }
 
+    // MARK: Copying out
+
+    /// Jot's chips travel as tokens, and its own flavours mean nothing to a
+    /// terminal, a browser or Slack: those read `public.png` and `public.tiff`
+    /// and nothing else. Every copy that leaves Jot — the sidebar's Copy
+    /// Image, ⌘C over a chip — puts a real picture on the board through here.
+    func pngData(for assetID: String) -> Data? {
+        data(for: assetID).flatMap(Self.pngData(from:))
+    }
+
+    func tiffData(for assetID: String) -> Data? {
+        data(for: assetID).flatMap(Self.tiffData(from:))
+    }
+
+    /// Bytes that already are a PNG are handed back untouched — the magic
+    /// number says so — rather than decoded and re-encoded.
+    static func pngData(from data: Data) -> Data? {
+        if data.starts(with: pngMagic) { return data }
+        return bitmap(from: data)?.representation(using: .png, properties: [:])
+    }
+
+    static func tiffData(from data: Data) -> Data? {
+        NSImage(data: data)?.tiffRepresentation
+    }
+
+    private static let pngMagic: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+
+    /// `NSBitmapImageRep` reads the common formats straight; the ones it will
+    /// not (a multi-representation icon, say) still go through `NSImage`.
+    private static func bitmap(from data: Data) -> NSBitmapImageRep? {
+        if let rep = NSBitmapImageRep(data: data) { return rep }
+        guard let tiff = NSImage(data: data)?.tiffRepresentation else { return nil }
+        return NSBitmapImageRep(data: tiff)
+    }
+
     // MARK: Importing
 
     /// Screenshots arrive as TIFF and become PNG; a real jpg/png/gif keeps its
