@@ -30,13 +30,17 @@
 - Split: a read-only rendered pane beside the editor (trailing side, resizable, 50% default, min 240pt); the image sidebar
   stays outermost. Reading: the editor collapses and the render takes its column. Either way the window keeps its frame —
   the panes share the room out between them. Works for any note.
-- Markdown row: a 26pt band under the tab strip and above the first line of text, on Markdown tabs only — extension
-  `md` / `markdown`, and untitled notes, which save as `.md`. The editor's background with a hairline along the bottom,
-  like the strip's. It carries the mode control at its trailing end (12pt inset, centred) and nothing else: three
-  segments, `pencil` / `rectangle.split.2x1` / `book` as monochrome template symbols, tool tips naming the state and its
-  keys. It follows the front tab, and clicking a segment sets the mode. In editor and split modes the row is on the
-  editor column; in reading that column is collapsed, so the row is on the preview column instead. A non-Markdown tab
-  has no row — the text starts straight under the strip — and ⇧⌘P / ⌥⇧⌘P still work there: the pane is for any note.
+- Mode control: three segments — `pencil` / `rectangle.split.2x1` / `book`, tool tips naming the state and its keys —
+  floating over the top-trailing corner of whichever column is on screen, 8pt under the strip's hairline and 12pt off the
+  trailing edge. It sits over the text rather than in a row of its own: nothing is pushed down for it, and the text
+  starts at the strip's bottom edge. On a small rounded plate in the editor background with a `separatorColor` hairline,
+  radius concentric with the control's; idle segments in `secondaryLabelColor`, the selected one in the standard filled
+  look. Hover only: it fades in (opacity, ≤150ms, no movement) when the pointer is anywhere in the top 44pt of the
+  column and fades out when it leaves; while it is away the band takes no clicks, so the text under it stays reachable.
+  It follows the front tab, and clicking a segment sets the mode. In editor and split modes it is over the editor
+  column; in reading that column is collapsed, so it is over the preview column instead. ⌘F's find bar opens in the same
+  corner and takes it for as long as the bar is up. Markdown tabs only — extension `md` / `markdown`, and untitled
+  notes, which save as `.md`; other tabs never show it, and ⇧⌘P / ⌥⇧⌘P still work there: the pane is for any note.
 - Getting back to the text from reading: click a block (→ split, caret on that block), type a printable character (→ split,
   the key lands in the editor), or ⌘F (→ split, find bar). Arrow and page keys stay in the render and scroll it — the
   keyboard belongs to the render in reading mode, and to the editor in the other two.
@@ -63,7 +67,7 @@
   lit at a time; the band clears when the text changes under it. No proportional scroll following any more.
 
 ## Zen mode
-- ⌥⌘Z toggles: tab strip, traffic lights, Markdown row, status bar, line-number gutter, and image sidebar all hide; only the text remains
+- ⌥⌘Z toggles: tab strip, traffic lights, mode control, status bar, line-number gutter, and image sidebar all hide; only the text remains
   (same font/width, padding grows to 40pt). ⌘ shortcuts still work (⌘T, ⌘W, ⌘P, ⌘B forces the sidebar back for that note).
   Remembered per session; combine with ⌃⌘F for full screen if wanted.
 

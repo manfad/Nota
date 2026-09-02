@@ -2,7 +2,7 @@ import AppKit
 
 /// What a tab does with the Markdown render: nothing, beside the editor, or
 /// instead of it. The case order is the order ⇧⌘P cycles them in, and the
-/// order the Markdown row's segments sit in.
+/// order the mode control's segments sit in.
 enum PreviewMode: String, Codable, CaseIterable {
     case off, split, reading
 
@@ -13,7 +13,7 @@ enum PreviewMode: String, Codable, CaseIterable {
         return all[(index + 1) % all.count]
     }
 
-    /// The segment's picture in the Markdown row.
+    /// The segment's picture in the mode control.
     var symbolName: String {
         switch self {
         case .off: "pencil"
