@@ -102,7 +102,6 @@ final class Preferences {
         static let lineNumbers = "showsLineNumbers"
         static let gutterSeparator = "showsGutterSeparator"
         static let sidebarSide = "sidebarSide"
-        static let markdownPreview = "showsMarkdownPreview"
         static let vimMode = "vimMode"
         static let footerWords = "footerShowsWords"
         static let footerCharacters = "footerShowsCharacters"
@@ -205,18 +204,6 @@ final class Preferences {
         set {
             guard newValue != sidebarSide else { return }
             defaults.set(newValue.rawValue, forKey: Key.sidebarSide)
-            announce()
-        }
-    }
-
-    /// The rendered pane beside the editor. Off until asked for — most notes
-    /// are prose or code, not Markdown, and the pane is worth half the window
-    /// only when it is being read.
-    var showsMarkdownPreview: Bool {
-        get { defaults.object(forKey: Key.markdownPreview) as? Bool ?? false }
-        set {
-            guard newValue != showsMarkdownPreview else { return }
-            defaults.set(newValue, forKey: Key.markdownPreview)
             announce()
         }
     }

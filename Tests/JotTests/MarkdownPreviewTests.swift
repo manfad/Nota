@@ -601,45 +601,118 @@ final class MarkdownPreviewTests: XCTestCase {
 
     // MARK: - The window
 
+    /// The menu's checkmark is the front tab's answer, not the app's.
     @MainActor
-    func testTheViewMenuTogglesThePaneAndTheChoiceIsRemembered() throws {
+    func testTheViewMenuTogglesThePaneForTheTabInFront() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(false) {
-            let controller = try makeController()
-            XCTAssertFalse(controller.previewState.isVisible, "off until asked for")
+        let controller = try makeController()
+        XCTAssertFalse(controller.previewState.isVisible, "off until asked for")
+        XCTAssertFalse(controller.showsMarkdownPreview, "and the checkmark is off with it")
 
-            controller.toggleMarkdownPreview()
-            XCTAssertTrue(controller.previewState.isVisible)
-            XCTAssertTrue(Preferences.shared.showsMarkdownPreview, "written through")
+        controller.toggleMarkdownPreview()
+        XCTAssertTrue(controller.previewState.isVisible)
+        XCTAssertTrue(controller.showsMarkdownPreview)
 
-            controller.toggleMarkdownPreview()
-            XCTAssertFalse(controller.previewState.isVisible)
-            XCTAssertFalse(Preferences.shared.showsMarkdownPreview)
-        }
+        controller.toggleMarkdownPreview()
+        XCTAssertFalse(controller.previewState.isVisible)
+        XCTAssertFalse(controller.showsMarkdownPreview)
     }
 
+    /// ⇧⌘P on one tab is about that tab. Opening the pane on a Markdown note
+    /// must not follow you into the next one.
     @MainActor
-    func testAWindowOpensWithThePaneWhenTheSettingIsOn() throws {
+    func testThePaneBelongsToTheTabItWasOpenedOn() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(true) {
-            let controller = try makeController()
-            XCTAssertTrue(
-                controller.previewState.isVisible,
-                "the pane comes back the way it was left"
-            )
-            XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
+        let controller = try makeControllerShowingPreview()
+        XCTAssertTrue(controller.previewState.isVisible)
+
+        controller.newTab()
+        XCTAssertFalse(controller.previewState.isVisible, "a new tab opens without it")
+        XCTAssertFalse(controller.showsMarkdownPreview)
+        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, true)
+
+        controller.selectTab(at: 0)
+        XCTAssertTrue(controller.previewState.isVisible, "the first tab still wants it")
+        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
+
+        // And the other way round: turning it on in the second tab leaves the
+        // first one alone.
+        controller.selectTab(at: 1)
+        controller.toggleMarkdownPreview()
+        XCTAssertTrue(controller.previewState.isVisible)
+        controller.selectTab(at: 0)
+        controller.toggleMarkdownPreview()
+        XCTAssertFalse(controller.previewState.isVisible)
+        controller.selectTab(at: 1)
+        XCTAssertTrue(controller.previewState.isVisible, "the second tab kept its own answer")
+    }
+
+    /// A file dropped on the window is a fresh tab like any other: it opens
+    /// as it was asked for, not as the tab beside it happens to be.
+    @MainActor
+    func testAFreshlyOpenedFileOpensWithoutThePane() throws {
+        _ = NSApplication.shared
+        let controller = try makeControllerShowingPreview()
+        let file = try makeTemporaryDirectory().appendingPathComponent("notes.md")
+        try "# Heading".write(to: file, atomically: true, encoding: .utf8)
+
+        controller.open(url: file)
+        XCTAssertFalse(controller.previewState.isVisible, "the opened file has no pane")
+
+        controller.selectTab(at: 0)
+        XCTAssertTrue(controller.previewState.isVisible)
+    }
+
+    /// The flag rides in `session.json`, so each tab comes back the way it was
+    /// left rather than every tab sharing one answer.
+    @MainActor
+    func testEachTabComesBackFromTheSessionWithItsOwnPane() throws {
+        _ = NSApplication.shared
+        let directory = try makeTemporaryDirectory()
+
+        do {
+            let controller = try makeController(in: directory)
+            controller.toggleMarkdownPreview()
+            controller.newTab()
+            XCTAssertFalse(controller.previewState.isVisible)
+            controller.flushAll()
         }
+
+        let relaunched = try makeController(in: directory)
+        XCTAssertFalse(relaunched.previewState.isVisible, "the tab it opens on had none")
+        relaunched.selectTab(at: 0)
+        XCTAssertTrue(
+            relaunched.previewState.isVisible,
+            "and the one that did gets it back"
+        )
+        XCTAssertEqual(previewItem(of: relaunched)?.isCollapsed, false)
+    }
+
+    /// A session.json written before the pane was per-tab says nothing about
+    /// it; those tabs still decode, and come back without one.
+    func testASessionWrittenBeforeThePaneWasPerTabStillDecodes() throws {
+        let directory = try makeTemporaryDirectory()
+        let id = UUID()
+        let json = """
+        {"fontSize":13,"selectedTabID":"\(id.uuidString)",\
+        "tabs":[{"id":"\(id.uuidString)","isDirty":false,"selection":0}]}
+        """
+        try json.write(
+            to: directory.appendingPathComponent("session.json"),
+            atomically: true, encoding: .utf8
+        )
+
+        let state = try XCTUnwrap(SessionStore(directory: directory).load())
+        XCTAssertNil(state.tabs.first?.showsPreview)
     }
 
     @MainActor
     func testAHiddenPaneIsCollapsedRatherThanRemoved() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(false) {
-            let controller = try makeController()
-            XCTAssertEqual(previewItem(of: controller)?.isCollapsed, true)
-            XCTAssertEqual(previewItem(of: controller)?.minimumThickness, 240)
-            XCTAssertEqual(previewItem(of: controller)?.preferredThicknessFraction, 0.5)
-        }
+        let controller = try makeController()
+        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, true)
+        XCTAssertEqual(previewItem(of: controller)?.minimumThickness, 240)
+        XCTAssertEqual(previewItem(of: controller)?.preferredThicknessFraction, 0.5)
     }
 
     /// Toggling the pane must never resize the window. It used to: the pane
@@ -656,29 +729,27 @@ final class MarkdownPreviewTests: XCTestCase {
     @MainActor
     func testTheEditorGivesUpTheRoomForThePaneRatherThanTheWindow() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(false) {
-            let controller = try makeController()
-            let window = try XCTUnwrap(controller.window)
-            let item = try XCTUnwrap(previewItem(of: controller))
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        let item = try XCTUnwrap(previewItem(of: controller))
 
-            XCTAssertEqual(
-                item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView,
-                "the split view keeps its size; its siblings share the room out"
-            )
-            XCTAssertEqual(item.preferredThicknessFraction, 0.5, "half the width on opening")
+        XCTAssertEqual(
+            item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView,
+            "the split view keeps its size; its siblings share the room out"
+        )
+        XCTAssertEqual(item.preferredThicknessFraction, 0.5, "half the width on opening")
 
-            let frame = NSRect(x: 120, y: 140, width: 1100, height: 620)
-            window.setFrame(frame, display: false)
-            window.layoutIfNeeded()
+        let frame = NSRect(x: 120, y: 140, width: 1100, height: 620)
+        window.setFrame(frame, display: false)
+        window.layoutIfNeeded()
 
-            controller.toggleMarkdownPreview()
-            window.layoutIfNeeded()
-            XCTAssertEqual(window.frame, frame, "opening the pane neither moves nor resizes it")
+        controller.toggleMarkdownPreview()
+        window.layoutIfNeeded()
+        XCTAssertEqual(window.frame, frame, "opening the pane neither moves nor resizes it")
 
-            controller.toggleMarkdownPreview()
-            window.layoutIfNeeded()
-            XCTAssertEqual(window.frame, frame, "and closing it leaves the frame exactly as it was")
-        }
+        controller.toggleMarkdownPreview()
+        window.layoutIfNeeded()
+        XCTAssertEqual(window.frame, frame, "and closing it leaves the frame exactly as it was")
     }
 
     /// The items are rebuilt when the sidebar changes sides, so the behaviour
@@ -689,17 +760,15 @@ final class MarkdownPreviewTests: XCTestCase {
         let previousSide = Preferences.shared.sidebarSide
         defer { Preferences.shared.sidebarSide = previousSide }
 
-        try withPreviewPreference(true) {
-            for side in [SidebarSide.right, .left] {
-                Preferences.shared.sidebarSide = side
-                let controller = try makeController()
-                let item = try XCTUnwrap(previewItem(of: controller))
-                XCTAssertEqual(
-                    item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView,
-                    "on the \(side.title)"
-                )
-                XCTAssertEqual(item.preferredThicknessFraction, 0.5)
-            }
+        for side in [SidebarSide.right, .left] {
+            Preferences.shared.sidebarSide = side
+            let controller = try makeControllerShowingPreview()
+            let item = try XCTUnwrap(previewItem(of: controller))
+            XCTAssertEqual(
+                item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView,
+                "on the \(side.title)"
+            )
+            XCTAssertEqual(item.preferredThicknessFraction, 0.5)
         }
     }
 
@@ -709,124 +778,114 @@ final class MarkdownPreviewTests: XCTestCase {
         let previousSide = Preferences.shared.sidebarSide
         defer { Preferences.shared.sidebarSide = previousSide }
 
-        try withPreviewPreference(true) {
-            for side in [SidebarSide.right, .left] {
-                Preferences.shared.sidebarSide = side
-                let controller = try makeController()
-                let roles = try splitRoles(of: controller)
-                XCTAssertEqual(
-                    roles,
-                    side == .right
-                        ? ["editor", "preview", "sidebar"]
-                        : ["sidebar", "editor", "preview"],
-                    "the images stay outermost on the \(side.title)"
-                )
-            }
+        for side in [SidebarSide.right, .left] {
+            Preferences.shared.sidebarSide = side
+            let controller = try makeControllerShowingPreview()
+            let roles = try splitRoles(of: controller)
+            XCTAssertEqual(
+                roles,
+                side == .right
+                    ? ["editor", "preview", "sidebar"]
+                    : ["sidebar", "editor", "preview"],
+                "the images stay outermost on the \(side.title)"
+            )
         }
     }
 
     @MainActor
     func testZenTakesThePaneAwayAndGivesItBack() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(true) {
-            let controller = try makeController()
-            XCTAssertTrue(controller.previewState.isVisible)
+        let controller = try makeControllerShowingPreview()
+        XCTAssertTrue(controller.previewState.isVisible)
 
-            controller.toggleZenMode()
-            XCTAssertFalse(controller.previewState.isVisible, "the pane is chrome in zen")
-            XCTAssertEqual(previewItem(of: controller)?.isCollapsed, true)
+        controller.toggleZenMode()
+        XCTAssertFalse(controller.previewState.isVisible, "the pane is chrome in zen")
+        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, true)
 
-            controller.toggleZenMode()
-            XCTAssertTrue(controller.previewState.isVisible, "and comes back after it")
-            XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
-        }
+        controller.toggleZenMode()
+        XCTAssertTrue(controller.previewState.isVisible, "and comes back after it")
+        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
     }
 
     @MainActor
     func testTogglingThePaneLeavesTheCaretInTheEditor() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(false) {
-            let controller = try makeController()
-            let window = try XCTUnwrap(controller.window)
-            controller.focusEditor()
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        controller.focusEditor()
 
-            controller.toggleMarkdownPreview()
-            XCTAssertTrue(
-                window.firstResponder is JotTextView,
-                "the pane is read, not typed in"
-            )
-            controller.toggleMarkdownPreview()
-            XCTAssertTrue(window.firstResponder is JotTextView)
-        }
+        controller.toggleMarkdownPreview()
+        XCTAssertTrue(
+            window.firstResponder is JotTextView,
+            "the pane is read, not typed in"
+        )
+        controller.toggleMarkdownPreview()
+        XCTAssertTrue(window.firstResponder is JotTextView)
     }
 
     @MainActor
     func testTypingReRendersThePaneOnceTheKeystrokesStop() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(true) {
-            let controller = try makeController()
-            let window = try XCTUnwrap(controller.window)
-            let editor = try XCTUnwrap(
-                descendant(of: try XCTUnwrap(window.contentView), ofType: JotTextView.self)
-            )
-            XCTAssertEqual(controller.previewState.renderedText, "", "an empty note")
+        let controller = try makeControllerShowingPreview()
+        let window = try XCTUnwrap(controller.window)
+        let editor = try XCTUnwrap(
+            descendant(of: try XCTUnwrap(window.contentView), ofType: JotTextView.self)
+        )
+        XCTAssertEqual(controller.previewState.renderedText, "", "an empty note")
 
-            editor.insertText("# Hello", replacementRange: editor.selectedRange())
-            XCTAssertEqual(
-                controller.previewState.renderedText, "",
-                "nothing re-renders while the keys are still coming"
-            )
+        editor.insertText("# Hello", replacementRange: editor.selectedRange())
+        XCTAssertEqual(
+            controller.previewState.renderedText, "",
+            "nothing re-renders while the keys are still coming"
+        )
 
-            waitForDebounce()
-            XCTAssertEqual(controller.previewState.renderedText, "Hello")
+        waitForDebounce()
+        XCTAssertEqual(controller.previewState.renderedText, "Hello")
 
-            editor.insertText("\n\n- item", replacementRange: editor.selectedRange())
-            waitForDebounce()
-            XCTAssertEqual(controller.previewState.renderedText, "Hello\n•\titem")
-        }
+        editor.insertText("\n\n- item", replacementRange: editor.selectedRange())
+        waitForDebounce()
+        XCTAssertEqual(controller.previewState.renderedText, "Hello\n•\titem")
     }
 
     @MainActor
     func testSwitchingTabsRendersTheTabYouLandOn() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(true) {
-            let controller = try makeController()
-            let window = try XCTUnwrap(controller.window)
-            let editor = try XCTUnwrap(
-                descendant(of: try XCTUnwrap(window.contentView), ofType: JotTextView.self)
-            )
-            editor.insertText("## First tab", replacementRange: editor.selectedRange())
-            waitForDebounce()
-            XCTAssertEqual(controller.previewState.renderedText, "First tab")
+        let controller = try makeControllerShowingPreview()
+        let window = try XCTUnwrap(controller.window)
+        let editor = try XCTUnwrap(
+            descendant(of: try XCTUnwrap(window.contentView), ofType: JotTextView.self)
+        )
+        editor.insertText("## First tab", replacementRange: editor.selectedRange())
+        waitForDebounce()
+        XCTAssertEqual(controller.previewState.renderedText, "First tab")
 
-            controller.newTab()
-            XCTAssertEqual(controller.previewState.renderedText, "", "the new tab is empty")
+        // The pane is per tab, so the second one has to ask for it too.
+        controller.newTab()
+        controller.toggleMarkdownPreview()
+        XCTAssertEqual(controller.previewState.renderedText, "", "the new tab is empty")
 
-            controller.selectTab(at: 0)
-            XCTAssertEqual(
-                controller.previewState.renderedText, "First tab",
-                "switching back re-renders straight away, without waiting"
-            )
-        }
+        controller.selectTab(at: 0)
+        XCTAssertEqual(
+            controller.previewState.renderedText, "First tab",
+            "switching back re-renders straight away, without waiting"
+        )
     }
 
     @MainActor
     func testAHiddenPaneIsNotRenderedAtAll() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(false) {
-            let controller = try makeController()
-            let window = try XCTUnwrap(controller.window)
-            let editor = try XCTUnwrap(
-                descendant(of: try XCTUnwrap(window.contentView), ofType: JotTextView.self)
-            )
-            editor.insertText("# Unseen", replacementRange: editor.selectedRange())
-            waitForDebounce()
-            XCTAssertEqual(controller.previewState.renderedText, "")
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        let editor = try XCTUnwrap(
+            descendant(of: try XCTUnwrap(window.contentView), ofType: JotTextView.self)
+        )
+        editor.insertText("# Unseen", replacementRange: editor.selectedRange())
+        waitForDebounce()
+        XCTAssertEqual(controller.previewState.renderedText, "")
 
-            // Turning it on renders what is already there.
-            controller.toggleMarkdownPreview()
-            XCTAssertEqual(controller.previewState.renderedText, "Unseen")
-        }
+        // Turning it on renders what is already there.
+        controller.toggleMarkdownPreview()
+        XCTAssertEqual(controller.previewState.renderedText, "Unseen")
     }
 
     // MARK: - The header
@@ -854,20 +913,18 @@ final class MarkdownPreviewTests: XCTestCase {
     @MainActor
     func testTheHeaderComesAndGoesWithThePane() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(false) {
-            let controller = try makeController()
-            let content = try XCTUnwrap(controller.window?.contentView)
-            XCTAssertNil(
-                descendant(of: content, ofType: MarkdownPreviewView.self),
-                "a collapsed pane is not in the window at all"
-            )
+        let controller = try makeController()
+        let content = try XCTUnwrap(controller.window?.contentView)
+        XCTAssertNil(
+            descendant(of: content, ofType: MarkdownPreviewView.self),
+            "a collapsed pane is not in the window at all"
+        )
 
-            controller.toggleMarkdownPreview()
-            controller.window?.layoutIfNeeded()
-            let preview = try previewView(of: controller)
-            XCTAssertEqual(preview.headerTitle, "Markdown Preview")
-            XCTAssertGreaterThanOrEqual(preview.bounds.height, TabBarView.height)
-        }
+        controller.toggleMarkdownPreview()
+        controller.window?.layoutIfNeeded()
+        let preview = try previewView(of: controller)
+        XCTAssertEqual(preview.headerTitle, "Markdown Preview")
+        XCTAssertGreaterThanOrEqual(preview.bounds.height, TabBarView.height)
     }
 
     // MARK: - Code boxes
@@ -980,80 +1037,74 @@ final class MarkdownPreviewTests: XCTestCase {
     @MainActor
     func testClickingABlockPutsTheCaretOnItsSourceInTheEditor() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(true) {
-            let controller = try makeController()
-            let editor = try editorTextView(of: controller)
-            editor.insertText(
-                "# Title\n\nFirst paragraph.\n\nSecond paragraph.",
-                replacementRange: editor.selectedRange()
-            )
-            waitForDebounce()
-            XCTAssertEqual(
-                controller.previewState.renderedText,
-                "Title\nFirst paragraph.\nSecond paragraph."
-            )
+        let controller = try makeControllerShowingPreview()
+        let editor = try editorTextView(of: controller)
+        editor.insertText(
+            "# Title\n\nFirst paragraph.\n\nSecond paragraph.",
+            replacementRange: editor.selectedRange()
+        )
+        waitForDebounce()
+        XCTAssertEqual(
+            controller.previewState.renderedText,
+            "Title\nFirst paragraph.\nSecond paragraph."
+        )
 
-            try clickPreview(of: controller, on: "Second paragraph.")
-            // "Second paragraph." starts at 27 in the source.
-            XCTAssertEqual(editor.selectedRange(), NSRange(location: 27, length: 0))
+        try clickPreview(of: controller, on: "Second paragraph.")
+        // "Second paragraph." starts at 27 in the source.
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 27, length: 0))
 
-            try clickPreview(of: controller, on: "Title")
-            XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 0),
-                           "the caret lands on the block's first character")
-        }
+        try clickPreview(of: controller, on: "Title")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 0),
+                       "the caret lands on the block's first character")
     }
 
     @MainActor
     func testClickingABlockLeavesFocusInTheEditor() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(true) {
-            let controller = try makeController()
-            let window = try XCTUnwrap(controller.window)
-            let editor = try editorTextView(of: controller)
-            editor.insertText("# Title\n\nBody.", replacementRange: editor.selectedRange())
-            waitForDebounce()
-            controller.focusEditor()
+        let controller = try makeControllerShowingPreview()
+        let window = try XCTUnwrap(controller.window)
+        let editor = try editorTextView(of: controller)
+        editor.insertText("# Title\n\nBody.", replacementRange: editor.selectedRange())
+        waitForDebounce()
+        controller.focusEditor()
 
-            try clickPreview(of: controller, on: "Body.")
-            XCTAssertTrue(
-                window.firstResponder is JotTextView,
-                "a click in the pane is a jump, not a place to type"
-            )
-            let preview = try previewView(of: controller)
-            let previewText = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
-            XCTAssertFalse(previewText.acceptsFirstResponder)
-        }
+        try clickPreview(of: controller, on: "Body.")
+        XCTAssertTrue(
+            window.firstResponder is JotTextView,
+            "a click in the pane is a jump, not a place to type"
+        )
+        let preview = try previewView(of: controller)
+        let previewText = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+        XCTAssertFalse(previewText.acceptsFirstResponder)
     }
 
     @MainActor
     func testClickingABlockOffScreenScrollsTheEditorToIt() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(true) {
-            let controller = try makeController()
-            let editor = try editorTextView(of: controller)
-            let long = (1 ... 120).map { "Paragraph \($0) of the note." }
-                .joined(separator: "\n\n")
-            editor.insertText(long, replacementRange: editor.selectedRange())
-            editor.setSelectedRange(NSRange(location: 0, length: 0))
-            editor.scrollRangeToVisible(NSRange(location: 0, length: 0))
-            waitForDebounce()
+        let controller = try makeControllerShowingPreview()
+        let editor = try editorTextView(of: controller)
+        let long = (1 ... 120).map { "Paragraph \($0) of the note." }
+            .joined(separator: "\n\n")
+        editor.insertText(long, replacementRange: editor.selectedRange())
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        editor.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        waitForDebounce()
 
-            let scrollView = try XCTUnwrap(editor.enclosingScrollView)
-            XCTAssertEqual(scrollView.contentView.bounds.origin.y, 0, accuracy: 1)
+        let scrollView = try XCTUnwrap(editor.enclosingScrollView)
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, 0, accuracy: 1)
 
-            try clickPreview(of: controller, on: "Paragraph 100 of the note.")
-            XCTAssertGreaterThan(
-                scrollView.contentView.bounds.origin.y, 0,
-                "the editor comes to the block that was clicked"
-            )
-            let caret = editor.selectedRange().location
-            XCTAssertEqual(
-                (editor.string as NSString).substring(
-                    with: NSRange(location: caret, length: 13)
-                ),
-                "Paragraph 100"
-            )
-        }
+        try clickPreview(of: controller, on: "Paragraph 100 of the note.")
+        XCTAssertGreaterThan(
+            scrollView.contentView.bounds.origin.y, 0,
+            "the editor comes to the block that was clicked"
+        )
+        let caret = editor.selectedRange().location
+        XCTAssertEqual(
+            (editor.string as NSString).substring(
+                with: NSRange(location: caret, length: 13)
+            ),
+            "Paragraph 100"
+        )
     }
 
     @MainActor
@@ -1062,73 +1113,67 @@ final class MarkdownPreviewTests: XCTestCase {
         let previousVim = Preferences.shared.vimMode
         defer { Preferences.shared.vimMode = previousVim }
 
-        try withPreviewPreference(true) {
-            Preferences.shared.vimMode = true
-            let controller = try makeController()
-            let editor = try editorTextView(of: controller)
-            editor.insertText("# Title\n\nBody.", replacementRange: editor.selectedRange())
-            waitForDebounce()
+        Preferences.shared.vimMode = true
+        let controller = try makeControllerShowingPreview()
+        let editor = try editorTextView(of: controller)
+        editor.insertText("# Title\n\nBody.", replacementRange: editor.selectedRange())
+        waitForDebounce()
 
-            controller.vim.enterInsertMode()
-            XCTAssertEqual(controller.vim.mode, .insert)
-            try clickPreview(of: controller, on: "Body.")
-            XCTAssertEqual(controller.vim.mode, .normal, "a jump is a move, not a typing session")
-        }
+        controller.vim.enterInsertMode()
+        XCTAssertEqual(controller.vim.mode, .insert)
+        try clickPreview(of: controller, on: "Body.")
+        XCTAssertEqual(controller.vim.mode, .normal, "a jump is a move, not a typing session")
     }
 
     @MainActor
     func testMovingTheCaretLightsTheBlockItIsIn() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(true) {
-            let controller = try makeController()
-            let editor = try editorTextView(of: controller)
-            editor.insertText(
-                "# Title\n\nFirst paragraph.\n\nSecond paragraph.",
-                replacementRange: editor.selectedRange()
-            )
-            waitForDebounce()
-            let preview = try previewView(of: controller)
+        let controller = try makeControllerShowingPreview()
+        let editor = try editorTextView(of: controller)
+        editor.insertText(
+            "# Title\n\nFirst paragraph.\n\nSecond paragraph.",
+            replacementRange: editor.selectedRange()
+        )
+        waitForDebounce()
+        let preview = try previewView(of: controller)
 
-            editor.setSelectedRange(NSRange(location: 2, length: 0))
-            XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 0, length: 7))
+        editor.setSelectedRange(NSRange(location: 2, length: 0))
+        XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 0, length: 7))
 
-            editor.setSelectedRange(NSRange(location: 12, length: 0))
-            XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 9, length: 16))
+        editor.setSelectedRange(NSRange(location: 12, length: 0))
+        XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 9, length: 16))
 
-            editor.setSelectedRange(NSRange(location: 30, length: 0))
-            XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 27, length: 17))
+        editor.setSelectedRange(NSRange(location: 30, length: 0))
+        XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 27, length: 17))
 
-            // A caret on the blank line between two blocks belongs to the one
-            // above it rather than to nothing.
-            editor.setSelectedRange(NSRange(location: 26, length: 0))
-            XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 9, length: 16))
-        }
+        // A caret on the blank line between two blocks belongs to the one
+        // above it rather than to nothing.
+        editor.setSelectedRange(NSRange(location: 26, length: 0))
+        XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 9, length: 16))
     }
 
     @MainActor
     func testEditingPutsTheBandOutAndTheReRenderBringsItBack() throws {
         _ = NSApplication.shared
-        try withPreviewPreference(true) {
-            let controller = try makeController()
-            let editor = try editorTextView(of: controller)
-            editor.insertText("# Title\n\nBody.", replacementRange: editor.selectedRange())
-            waitForDebounce()
-            let preview = try previewView(of: controller)
+        let controller = try makeControllerShowingPreview()
+        let editor = try editorTextView(of: controller)
+        editor.insertText("# Title\n\nBody.", replacementRange: editor.selectedRange())
+        waitForDebounce()
+        let preview = try previewView(of: controller)
 
-            editor.setSelectedRange(NSRange(location: 2, length: 0))
-            XCTAssertNotNil(preview.highlightedSourceRange)
+        editor.setSelectedRange(NSRange(location: 2, length: 0))
+        XCTAssertNotNil(preview.highlightedSourceRange)
 
-            // The blocks have moved under the band; it means nothing until the
-            // pane is rendered again.
-            editor.insertText("x", replacementRange: NSRange(location: 0, length: 0))
-            XCTAssertNil(preview.highlightedSourceRange, "the band goes out on an edit")
+        // The blocks have moved under the band; it means nothing until the
+        // pane is rendered again.
+        editor.insertText("x", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertNil(preview.highlightedSourceRange, "the band goes out on an edit")
 
-            waitForDebounce()
-            XCTAssertNotNil(
-                preview.highlightedSourceRange,
-                "and comes back for the caret once the render lands"
-            )
-        }
+        waitForDebounce()
+        XCTAssertNotNil(
+            preview.highlightedSourceRange,
+            "and comes back for the caret once the render lands"
+        )
     }
 
     @MainActor
@@ -1155,22 +1200,27 @@ final class MarkdownPreviewTests: XCTestCase {
 
     @MainActor
     private func makeController() throws -> MainWindowController {
-        let controller = MainWindowController(store: SessionStore(
-            directory: try makeTemporaryDirectory()
-        ))
+        try makeController(in: try makeTemporaryDirectory())
+    }
+
+    /// The same window over a given cache dir — how a relaunch is played out.
+    @MainActor
+    private func makeController(in directory: URL) throws -> MainWindowController {
+        let controller = MainWindowController(store: SessionStore(directory: directory))
         let window = try XCTUnwrap(controller.window)
         window.setContentSize(NSSize(width: 1000, height: 560))
         window.layoutIfNeeded()
         return controller
     }
 
-    /// The preview lives in `UserDefaults`, so a test that changes it has to
-    /// put it back the way it found it.
-    private func withPreviewPreference(_ value: Bool, _ body: () throws -> Void) rethrows {
-        let previous = Preferences.shared.showsMarkdownPreview
-        defer { Preferences.shared.showsMarkdownPreview = previous }
-        Preferences.shared.showsMarkdownPreview = value
-        try body()
+    /// The pane is the tab's, so a test that wants it open asks the tab in
+    /// front for it — there is no preference to set any more.
+    @MainActor
+    private func makeControllerShowingPreview() throws -> MainWindowController {
+        let controller = try makeController()
+        controller.toggleMarkdownPreview()
+        controller.window?.layoutIfNeeded()
+        return controller
     }
 
     /// Long enough for the 150 ms render to have fired.

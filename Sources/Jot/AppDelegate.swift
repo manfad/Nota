@@ -138,10 +138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menuItem.title = zen ? "Exit Zen Mode" : "Zen Mode"
         }
         // The preview is a place, not a verb: the title stays put and a
-        // checkmark says whether it is showing.
+        // checkmark says whether the tab in front has it open.
         if menuItem.action == #selector(toggleMarkdownPreview(_:)) {
             menuItem.state =
-                (windowController?.isMarkdownPreviewVisible ?? false) ? .on : .off
+                (windowController?.showsMarkdownPreview ?? false) ? .on : .off
         }
         return true
     }
