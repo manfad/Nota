@@ -1704,14 +1704,15 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(readingOverlay.isHidden)
     }
 
-    /// ⌘F's bar opens above the text, in the corner the control floats over.
-    /// The bar wins for as long as it is up — its own buttons have to stay
-    /// clickable.
+    /// ⌘F's bar opens right under the strip — there is no row in the way any
+    /// more — which is the corner the control floats over. The bar wins for as
+    /// long as it is up: its own buttons have to stay clickable.
     @MainActor
-    func testTheFindBarTakesTheCornerFromTheModeControl() throws {
+    func testTheFindBarOpensUnderTheStripAndTakesTheCorner() throws {
         _ = NSApplication.shared
         let controller = try makeController()
         let window = try XCTUnwrap(controller.window)
+        let content = try XCTUnwrap(window.contentView)
         window.makeKeyAndOrderFront(nil)
         window.layoutIfNeeded()
 
@@ -1728,6 +1729,13 @@ final class MarkdownPreviewTests: XCTestCase {
 
         try XCTSkipUnless(scrollView.isFindBarVisible, "no find bar headlessly")
         XCTAssertTrue(overlay.isHidden, "the control gets out of the bar's way")
+
+        // Straight under the strip's hairline, with nothing between them.
+        let bar = try XCTUnwrap(scrollView.findBarView)
+        let strip = try XCTUnwrap(descendant(of: content, ofType: TabBarView.self))
+        XCTAssertEqual(
+            bar.convert(bar.bounds, to: content).maxY, strip.frame.minY, accuracy: 0.5
+        )
 
         let hideFind = NSMenuItem()
         hideFind.tag = NSTextFinder.Action.hideFindInterface.rawValue
