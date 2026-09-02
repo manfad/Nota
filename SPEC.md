@@ -150,3 +150,8 @@
 
 ## Explicitly out
 - Created-date header, git/auto-commit, theming, menu-bar icon, collapse/expand images, jk escape, app icon (for now).
+
+## Known issues (later)
+- The split slide can feel laggy with word wrap on: every frame narrows the editor, and the text view re-wraps the
+  whole note to the new width as it goes. Fix candidates: freeze the editor's container width for the slide the way the
+  render's is frozen, or slide a snapshot of the editor and re-wrap once on landing.
