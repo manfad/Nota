@@ -247,18 +247,36 @@ final class JotTextView: NSTextView {
 
     // MARK: - Chip clicks
 
-    /// A single click on an `Image N` chip selects the picture rather than
-    /// just dropping a caret somewhere inside the line.
+    /// A single click on an `Image N` chip selects the picture — a real
+    /// length-1 selection over the attachment, the way an inline image
+    /// selects in Notes — so ⌘C copies it and ⌫ or typing replaces it. A
+    /// caret next to the chip would look selected and copy nothing, since
+    /// `writeSelection` has no range to write.
+    ///
+    /// `super` goes first so AppKit's mouse-tracking loop still runs: a drag
+    /// out of a chip, a ⇧-click on one to extend a selection over its line,
+    /// and double- and triple-clicks all keep the behaviour they have
+    /// everywhere else. Only a press that ends with the caret still collapsed
+    /// was a plain click on the chip.
     override func mouseDown(with event: NSEvent) {
-        guard event.clickCount == 1, let index = chipCharacterIndex(for: event) else {
-            super.mouseDown(with: event)
-            return
-        }
-        // Caret goes just after the chip, which is also what makes the
-        // sidebar's caret-adjacent highlight agree with the selection — or,
-        // when vim's block caret is up, onto the chip, where the block sits.
-        let location = vimCursorStyle == .bar ? index + 1 : index
-        setSelectedRange(NSRange(location: location, length: 0))
+        let chip = event.clickCount == 1 ? chipCharacterIndex(for: event) : nil
+        super.mouseDown(with: event)
+        guard let chip else { return }
+        selectClickedChip(at: chip)
+    }
+
+    /// What a plain click on the chip at `index` leaves behind. Split out from
+    /// `mouseDown` because AppKit's tracking loop cannot be driven from a test.
+    func selectClickedChip(at index: Int) {
+        // A drag or a ⇧-click already made a selection; that one is meant.
+        guard selectedRange().length == 0 else { return }
+        // Vim's block caret sits *on* a character rather than between two, so
+        // there the chip keeps a caret and the block draws over it; plain Jot
+        // selects the chip itself, which lights the same one thumbnail.
+        let range = vimCursorStyle == .bar
+            ? NSRange(location: index, length: 1)
+            : NSRange(location: index, length: 0)
+        setSelectedRange(range)
         onChipClick?(index)
     }
 

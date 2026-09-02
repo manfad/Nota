@@ -324,6 +324,109 @@ final class JotTests: XCTestCase {
         XCTAssertEqual(try assetFileCount(assets), 1)
     }
 
+    /// The bug: a click dropped a caret *beside* the chip, so the picture
+    /// looked selected and ⌘C copied nothing — `writeSelection` bails on a
+    /// zero-length range. A click now selects the chip character itself.
+    @MainActor
+    func testClickingAChipSelectsItSoCopyCarriesTheImage() throws {
+        _ = NSApplication.shared
+        let assets = AssetStore(directory: try makeTemporaryDirectory())
+        let view = makeTextView(assets: assets)
+        let id = try XCTUnwrap(assets.importImageData(makePNGData(), preferredExtension: "png"))
+        try XCTUnwrap(view.textStorage).setAttributedString(NoteText.render(
+            "hello \(NoteText.token(for: id)) world",
+            attributes: [.font: NSFont.systemFont(ofSize: 13)], assets: assets
+        ))
+
+        var clicked: Int?
+        view.onChipClick = { clicked = $0 }
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        view.selectClickedChip(at: 6)
+
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 6, length: 1))
+        XCTAssertEqual(clicked, 6)
+        // The sidebar still rings exactly one thumbnail for that one chip.
+        XCTAssertEqual(
+            ChipHighlight.resolve(
+                clickedChipLocation: nil, selection: view.selectedRange(), chipLocations: [6]
+            ),
+            [0]
+        )
+
+        // ⌘C, the real action, now has a range to write.
+        withGeneralPasteboard { board in
+            board.clearContents()
+            view.copy(nil as Any?)
+            XCTAssertTrue(Set<NSPasteboard.PasteboardType>([.jotNote, .rtfd, .string])
+                .isSubset(of: Set(board.types ?? [])))
+            XCTAssertEqual(board.string(forType: .jotNote), NoteText.token(for: id))
+        }
+
+        // A drag or a ⇧-click has already said what is meant; leave it be.
+        view.setSelectedRange(NSRange(location: 0, length: 13))
+        view.selectClickedChip(at: 6)
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 0, length: 13))
+
+        // Vim's block caret sits *on* the chip instead, where the block draws.
+        view.vimCursorStyle = .block
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        view.selectClickedChip(at: 6)
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 6, length: 0))
+    }
+
+    /// A whole line copied the way ⌘C and Edit ▸ Copy take it — through
+    /// `copy(_:)` and the general pasteboard, not `writeSelection` by hand.
+    @MainActor
+    func testCopyingALineWithAChipPastesTheImageBackAndCarriesItsBytes() throws {
+        _ = NSApplication.shared
+        let assets = AssetStore(directory: try makeTemporaryDirectory())
+        let view = makeTextView(assets: assets)
+        let png = makePNGData()
+        let id = try XCTUnwrap(assets.importImageData(png, preferredExtension: "png"))
+        let token = NoteText.token(for: id)
+        try XCTUnwrap(view.textStorage).setAttributedString(NoteText.render(
+            "hello \(token) world\nsecond line",
+            attributes: [.font: NSFont.systemFont(ofSize: 13)], assets: assets
+        ))
+
+        // "hello " + chip + " world" + newline: the first line, as a triple
+        // click takes it.
+        view.setSelectedRange(NSRange(location: 0, length: 14))
+
+        try withGeneralPasteboard { board in
+            board.clearContents()
+            view.copy(nil as Any?)
+
+            XCTAssertTrue(Set<NSPasteboard.PasteboardType>([.jotNote, .rtfd, .string])
+                .isSubset(of: Set(board.types ?? [])))
+            XCTAssertEqual(board.string(forType: .jotNote), "hello \(token) world\n")
+            XCTAssertEqual(board.string(forType: .string), "hello  world\n")
+
+            // Jot -> Jot: the chip comes back, still pointing at the one asset.
+            let second = makeTextView(assets: assets)
+            let chosen = second.preferredPasteboardType(
+                from: board.types ?? [], restrictedToTypesFrom: second.readablePasteboardTypes
+            )
+            XCTAssertEqual(chosen, .jotNote)
+            XCTAssertTrue(second.readSelection(from: board, type: try XCTUnwrap(chosen)))
+            XCTAssertEqual(attachmentIDs(in: try XCTUnwrap(second.textStorage)), [id])
+            XCTAssertEqual(try assetFileCount(assets), 1)
+
+            // And the RTFD other apps take really carries the picture.
+            let rtfd = try XCTUnwrap(board.data(forType: .rtfd))
+            let restored = try XCTUnwrap(NSAttributedString(rtfd: rtfd, documentAttributes: nil))
+            var carried: [Data] = []
+            restored.enumerateAttribute(
+                .attachment, in: NSRange(location: 0, length: restored.length)
+            ) { value, _, _ in
+                if let contents = (value as? NSTextAttachment)?.fileWrapper?.regularFileContents {
+                    carried.append(contents)
+                }
+            }
+            XCTAssertEqual(carried, [png])
+        }
+    }
+
     func testMissingAssetKeepsItsTokenThroughARoundTrip() throws {
         let assets = AssetStore(directory: try makeTemporaryDirectory())
         let plain = "before \(NoteText.token(for: "missing-0000.png")) after"
@@ -1207,6 +1310,25 @@ final class JotTests: XCTestCase {
     /// person at the keyboard has on their real clipboard.
     private func makePasteboard() -> NSPasteboard {
         NSPasteboard(name: NSPasteboard.Name("JotTests-\(UUID().uuidString)"))
+    }
+
+    /// Lends the real clipboard out and puts back what was on it. `copy(_:)`
+    /// writes to `NSPasteboard.general` and nowhere else, so testing the
+    /// action itself means borrowing it rather than using a private board.
+    private func withGeneralPasteboard(_ body: (NSPasteboard) throws -> Void) rethrows {
+        let board = NSPasteboard.general
+        let saved = (board.pasteboardItems ?? []).map { item -> NSPasteboardItem in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+            }
+            return copy
+        }
+        defer {
+            board.clearContents()
+            if !saved.isEmpty { board.writeObjects(saved) }
+        }
+        try body(board)
     }
 
     private func makePNGData() -> Data {
