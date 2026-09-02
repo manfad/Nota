@@ -987,6 +987,55 @@ final class JotTests: XCTestCase {
         XCTAssertFalse(pane.isShowingMessage)
     }
 
+    // MARK: - The find bar
+
+    /// AppKit's own focus ring on the find bar's search field is a thick
+    /// light-blue slab across the whole width of the window — the ⌘P picker
+    /// already turns this off on its own field, and the native find bar gets
+    /// the same treatment.
+    @MainActor
+    func testTheFindBarShowsNoFocusRingOnItsFields() throws {
+        _ = NSApplication.shared
+        let directory = try makeTemporaryDirectory()
+        let controller = MainWindowController(store: SessionStore(directory: directory))
+        let window = try XCTUnwrap(controller.window)
+        window.setContentSize(NSSize(width: 820, height: 560))
+        window.makeKeyAndOrderFront(nil)
+        window.layoutIfNeeded()
+
+        let content = try XCTUnwrap(window.contentView)
+        let scrollView = try XCTUnwrap(descendant(of: content, ofType: NSScrollView.self))
+        let textView = try XCTUnwrap(descendant(of: content, ofType: JotTextView.self))
+
+        // Same route ⌘F takes: a menu item tagged with the finder action,
+        // sent to the text view.
+        let showFind = NSMenuItem()
+        showFind.tag = NSTextFinder.Action.showFindInterface.rawValue
+        textView.performTextFinderAction(showFind)
+        // A couple of the bar's own decorations are only realized once it
+        // lays itself out.
+        scrollView.needsLayout = true
+        scrollView.layoutSubtreeIfNeeded()
+
+        guard let findBarView = scrollView.findBarView else {
+            throw XCTSkip("the native find bar did not install headlessly")
+        }
+        let fields = allTextFields(in: findBarView)
+        XCTAssertFalse(fields.isEmpty, "expected at least the search field")
+        for field in fields {
+            XCTAssertEqual(field.focusRingType, .none)
+        }
+    }
+
+    /// Every `NSTextField` (an `NSSearchField` included) anywhere under `view`.
+    @MainActor
+    private func allTextFields(in view: NSView) -> [NSTextField] {
+        var found: [NSTextField] = []
+        if let field = view as? NSTextField { found.append(field) }
+        for subview in view.subviews { found += allTextFields(in: subview) }
+        return found
+    }
+
     /// The first view of a kind anywhere under another.
     @MainActor
     private func descendant<T: NSView>(of view: NSView, ofType type: T.Type) -> T? {

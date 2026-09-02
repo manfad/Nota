@@ -14,6 +14,7 @@
 - Window close = hide (app stays alive). Quit never prompts; everything restores.
 - Search: ⌘F native find bar (in note); ⇧⌘F across all open tabs. In vim mode `/` `?` are vim's own search, typed in the
   command pane (see Vim mode); `n` `N` `*` `#` repeat it; `:noh` clears highlights. ⌘F stays native in every mode.
+  Find bar field shows no focus ring.
 
 ## Editor
 - System font (SF Pro) 13pt default, full-width text, no line-width cap.
