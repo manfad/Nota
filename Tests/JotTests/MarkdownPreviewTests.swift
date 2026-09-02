@@ -635,9 +635,11 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(controller.previewState.isVisible, "the first tab still wants it")
         XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
 
-        // And the other way round: turning it on in the second tab leaves the
-        // first one alone.
-        controller.selectTab(at: 1)
+        // And the other way round: turning it on in a second Markdown tab
+        // leaves the first one alone. The untitled tab itself is ineligible.
+        let second = try makeTemporaryDirectory().appendingPathComponent("second.md")
+        try "".write(to: second, atomically: true, encoding: .utf8)
+        controller.open(url: second)
         controller.toggleMarkdownPreview()
         XCTAssertTrue(controller.previewState.isVisible)
         controller.selectTab(at: 0)
@@ -645,6 +647,28 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertFalse(controller.previewState.isVisible)
         controller.selectTab(at: 1)
         XCTAssertTrue(controller.previewState.isVisible, "the second tab kept its own answer")
+    }
+
+    @MainActor
+    func testPreviewIsAvailableOnlyForDotMdFiles() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        XCTAssertTrue(controller.canShowMarkdownPreview)
+
+        let directory = try makeTemporaryDirectory()
+        let text = directory.appendingPathComponent("notes.txt")
+        try "# Plain text".write(to: text, atomically: true, encoding: .utf8)
+        controller.open(url: text)
+
+        XCTAssertFalse(controller.canShowMarkdownPreview)
+        controller.toggleMarkdownPreview()
+        XCTAssertFalse(controller.previewState.isVisible)
+        XCTAssertFalse(controller.showsMarkdownPreview)
+
+        let uppercase = directory.appendingPathComponent("notes.MD")
+        try "# Markdown".write(to: uppercase, atomically: true, encoding: .utf8)
+        controller.open(url: uppercase)
+        XCTAssertTrue(controller.canShowMarkdownPreview)
     }
 
     /// A file dropped on the window is a fresh tab like any other: it opens
@@ -785,10 +809,17 @@ final class MarkdownPreviewTests: XCTestCase {
             XCTAssertEqual(
                 roles,
                 side == .right
-                    ? ["editor", "preview", "sidebar"]
-                    : ["sidebar", "editor", "preview"],
+                    ? ["workspace", "sidebar"]
+                    : ["sidebar", "workspace"],
                 "the images stay outermost on the \(side.title)"
             )
+            let documentRoles = try documentSplitViewController(of: controller).splitViewItems.map {
+                let view = $0.viewController.view
+                if descendant(of: view, ofType: JotTextView.self) != nil { return "editor" }
+                if descendant(of: view, ofType: MarkdownPreviewView.self) != nil { return "preview" }
+                return "?"
+            }
+            XCTAssertEqual(documentRoles, ["editor", "preview"])
         }
     }
 
@@ -859,8 +890,10 @@ final class MarkdownPreviewTests: XCTestCase {
         waitForDebounce()
         XCTAssertEqual(controller.previewState.renderedText, "First tab")
 
-        // The pane is per tab, so the second one has to ask for it too.
-        controller.newTab()
+        // The pane is per tab, so the second Markdown file asks for it too.
+        let second = try makeTemporaryDirectory().appendingPathComponent("second.md")
+        try "".write(to: second, atomically: true, encoding: .utf8)
+        controller.open(url: second)
         controller.toggleMarkdownPreview()
         XCTAssertEqual(controller.previewState.renderedText, "", "the new tab is empty")
 
@@ -888,43 +921,43 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(controller.previewState.renderedText, "Unseen")
     }
 
-    // MARK: - The header
+    // MARK: - Shared tab strip
 
     @MainActor
-    func testThePaneHasAHeaderBandMatchingTheTabStrip() throws {
+    func testThePreviewContentStartsAtTheTopOfItsPane() throws {
         _ = NSApplication.shared
         let preview = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 320, height: 300))
         preview.layoutSubtreeIfNeeded()
 
-        XCTAssertEqual(preview.headerTitle, "Markdown Preview")
-        // The band and the tab strip are opposite numbers across the divider.
-        let header = try XCTUnwrap(preview.subviews.first { !($0 is NSScrollView) })
-        XCTAssertEqual(header.frame.height, TabBarView.height)
-        XCTAssertEqual(header.frame.width, preview.bounds.width, "it runs the pane's full width")
-        XCTAssertEqual(header.frame.maxY, preview.bounds.maxY, "and sits at the very top")
-
-        // The rendered text scrolls beneath it, never under it.
         let scrollView = try XCTUnwrap(descendant(of: preview, ofType: NSScrollView.self))
-        XCTAssertEqual(scrollView.frame.maxY, header.frame.minY, accuracy: 0.5)
+        XCTAssertEqual(scrollView.frame, preview.bounds)
     }
 
-    /// The band is part of the pane, so it comes and goes with it rather than
-    /// leaving a titled strip over nothing.
     @MainActor
-    func testTheHeaderComesAndGoesWithThePane() throws {
+    func testSharedChromeSpansTheEditorAndPreviewAroundTheirDivider() throws {
         _ = NSApplication.shared
-        let controller = try makeController()
-        let content = try XCTUnwrap(controller.window?.contentView)
-        XCTAssertNil(
-            descendant(of: content, ofType: MarkdownPreviewView.self),
-            "a collapsed pane is not in the window at all"
-        )
-
-        controller.toggleMarkdownPreview()
+        let controller = try makeControllerShowingPreview()
         controller.window?.layoutIfNeeded()
+        let content = try XCTUnwrap(controller.window?.contentView)
+        let tabBar = try XCTUnwrap(descendant(of: content, ofType: TabBarView.self))
+        let editor = try editorTextView(of: controller)
         let preview = try previewView(of: controller)
-        XCTAssertEqual(preview.headerTitle, "Markdown Preview")
-        XCTAssertGreaterThanOrEqual(preview.bounds.height, TabBarView.height)
+        let footer = controller.footerRegions
+
+        let tabs = tabBar.convert(tabBar.bounds, to: content)
+        let editorFrame = editor.convert(editor.bounds, to: content)
+        let previewFrame = preview.convert(preview.bounds, to: content)
+        let badge = footer.badge.convert(footer.badge.bounds, to: content)
+        let cursor = footer.cursor.convert(footer.cursor.bounds, to: content)
+        let dividerX = (editorFrame.maxX + previewFrame.minX) / 2
+        XCTAssertLessThan(tabs.minX, dividerX)
+        XCTAssertGreaterThan(tabs.maxX, dividerX)
+        XCTAssertLessThanOrEqual(editorFrame.maxY, tabs.minY + 0.5)
+        XCTAssertLessThanOrEqual(previewFrame.maxY, tabs.minY + 0.5)
+        XCTAssertLessThan(badge.minX, dividerX)
+        XCTAssertGreaterThan(cursor.maxX, dividerX)
+        XCTAssertGreaterThanOrEqual(editorFrame.minY, badge.maxY - 0.5)
+        XCTAssertGreaterThanOrEqual(previewFrame.minY, cursor.maxY - 0.5)
     }
 
     // MARK: - Code boxes
@@ -1206,7 +1239,22 @@ final class MarkdownPreviewTests: XCTestCase {
     /// The same window over a given cache dir — how a relaunch is played out.
     @MainActor
     private func makeController(in directory: URL) throws -> MainWindowController {
-        let controller = MainWindowController(store: SessionStore(directory: directory))
+        let store = SessionStore(directory: directory)
+        if store.load() == nil {
+            let file = directory.appendingPathComponent("note.md")
+            try "".write(to: file, atomically: true, encoding: .utf8)
+            let id = UUID()
+            store.save(SessionState(
+                tabs: [SessionTab(
+                    id: id, path: file.path, untitledName: nil,
+                    isDirty: false, selection: 0, format: .default,
+                    showsPreview: false
+                )],
+                selectedTabID: id,
+                fontSize: 13
+            ))
+        }
+        let controller = MainWindowController(store: store)
         let window = try XCTUnwrap(controller.window)
         window.setContentSize(NSSize(width: 1000, height: 560))
         window.layoutIfNeeded()
@@ -1239,20 +1287,32 @@ final class MarkdownPreviewTests: XCTestCase {
     }
 
     @MainActor
+    private func documentSplitViewController(
+        of controller: MainWindowController
+    ) throws -> NSSplitViewController {
+        let outer = try splitViewController(of: controller)
+        return try XCTUnwrap(
+            outer.children.lazy
+                .flatMap(\.children)
+                .compactMap { $0 as? NSSplitViewController }
+                .first
+        )
+    }
+
+    @MainActor
     private func previewItem(of controller: MainWindowController) -> NSSplitViewItem? {
-        try? splitViewController(of: controller).splitViewItems.first {
+        try? documentSplitViewController(of: controller).splitViewItems.first {
             descendant(of: $0.viewController.view, ofType: MarkdownPreviewView.self) != nil
         }
     }
 
-    /// What each split item holds, in order.
+    /// What the outer split holds, with the document workspace kept whole.
     @MainActor
     private func splitRoles(of controller: MainWindowController) throws -> [String] {
         try splitViewController(of: controller).splitViewItems.map { item in
             let view = item.viewController.view
-            if descendant(of: view, ofType: MarkdownPreviewView.self) != nil { return "preview" }
             if descendant(of: view, ofType: ImageSidebarView.self) != nil { return "sidebar" }
-            if descendant(of: view, ofType: JotTextView.self) != nil { return "editor" }
+            if descendant(of: view, ofType: JotTextView.self) != nil { return "workspace" }
             return "?"
         }
     }

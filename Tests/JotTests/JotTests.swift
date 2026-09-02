@@ -1548,10 +1548,11 @@ final class JotTests: XCTestCase {
             )
         }
 
-        // The split view survives the round trip intact: the editor, the
-        // preview and the image sidebar, the last two collapsed.
+        // The outer split survives the round trip intact: the document
+        // workspace and the image sidebar. The preview is nested inside the
+        // workspace so its divider starts below the shared tabs.
         XCTAssertEqual(
-            (window.contentViewController as? NSSplitViewController)?.splitViewItems.count, 3
+            (window.contentViewController as? NSSplitViewController)?.splitViewItems.count, 2
         )
     }
 
@@ -1606,9 +1607,17 @@ final class JotTests: XCTestCase {
         let controller = MainWindowController(store: SessionStore(directory: directory))
         let window = try XCTUnwrap(controller.window)
         let split = try XCTUnwrap(window.contentViewController as? NSSplitViewController)
-        // Every pane that can collapse — sidebar and preview — makes the
-        // editor give up room rather than the window change its frame.
-        let collapsible = split.splitViewItems.filter(\.canCollapse)
+        // Every pane that can collapse — the outer sidebar and the preview
+        // nested in the document — makes its sibling give up room rather than
+        // changing the window frame.
+        let documentSplit = try XCTUnwrap(
+            split.children.lazy
+                .flatMap(\.children)
+                .compactMap { $0 as? NSSplitViewController }
+                .first
+        )
+        let collapsible = (split.splitViewItems + documentSplit.splitViewItems)
+            .filter(\.canCollapse)
         XCTAssertEqual(collapsible.count, 2)
         for item in collapsible {
             XCTAssertEqual(item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView)

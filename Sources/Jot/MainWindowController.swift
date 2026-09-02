@@ -1,7 +1,8 @@
 import AppKit
 
-/// The whole UI: tab strip in the title bar, one plain-text editor, a status
-/// line at the bottom.
+/// The whole UI: a document workspace with a tab strip across its title bar,
+/// an editor and optional Markdown preview between shared chrome, and a status
+/// line across the bottom.
 ///
 /// There is a single `NSTextView`; switching tabs swaps that note's
 /// `NSTextStorage` and `UndoManager` into it, which is what keeps undo from
@@ -32,7 +33,12 @@ final class MainWindowController: NSWindowController {
     private var lineNumberRuler: LineNumberRulerView?
     private let tabBar = TabBarView()
     private lazy var imageSidebar = ImageSidebarView(topInset: 8)
+    /// The outer split keeps the optional image sidebar outside the document.
     private let splitViewController = NSSplitViewController()
+    /// The document owns the shared tab strip and the editor/preview split
+    /// beneath it, so the divider begins below rather than crossing the tabs.
+    private let workspacePane = NSViewController()
+    private let workspaceSplitViewController = NSSplitViewController()
     private let editorPane = NSViewController()
     private let sidebarPane = NSViewController()
     private var sidebarItem: NSSplitViewItem?
@@ -44,6 +50,10 @@ final class MainWindowController: NSWindowController {
     /// whether it is wanted, zen mode says whether it may be shown.
     private var previewIsVisible = false
     private var tabBarLeading: NSLayoutConstraint?
+    private var workspaceSplitTopToTabBar: NSLayoutConstraint?
+    private var workspaceSplitTopToPane: NSLayoutConstraint?
+    private var workspaceSplitBottomToStatus: NSLayoutConstraint?
+    private var workspaceSplitBottomToPane: NSLayoutConstraint?
     private let statusSeparator = NSBox()
     private var editorTrailing: NSLayoutConstraint?
 
@@ -51,10 +61,8 @@ final class MainWindowController: NSWindowController {
     /// never persisted, so Jot always opens with its chrome.
     private(set) var isZenMode = false
     private let zenDragRegion = DragRegionView()
-    private var editorTopToTabBar: NSLayoutConstraint?
-    private var editorTopToPane: NSLayoutConstraint?
-    private var editorBottomToStatus: NSLayoutConstraint?
-    private var editorBottomToPane: NSLayoutConstraint?
+    private var editorTopToContent: NSLayoutConstraint?
+    private var editorTopToZenInset: NSLayoutConstraint?
     private var sidebarWorkItem: DispatchWorkItem?
     /// The chip most recently clicked, until the selection moves some other
     /// way — see `ChipHighlight`.
@@ -140,8 +148,9 @@ final class MainWindowController: NSWindowController {
         window.center()
         window.setFrameAutosaveName("JotMainWindow")
 
-        let pane = PaneView()
-        editorPane.view = pane
+        let workspace = PaneView()
+        workspacePane.view = workspace
+        editorPane.view = NSView()
         sidebarPane.view = NSView()
         // Keeps the thumbnails clear of the traffic lights when on the left.
         sidebarPane.view.additionalSafeAreaInsets = NSEdgeInsets(
@@ -152,9 +161,10 @@ final class MainWindowController: NSWindowController {
         buildUI()
         // The counts are re-fitted once the two side regions have their
         // frames, which is the only moment their real widths are known.
-        pane.onLayout = { [weak self] in self?.updateCountsLabel() }
+        workspace.onLayout = { [weak self] in self?.updateCountsLabel() }
         buildSidebarPane()
         buildPreviewPane()
+        buildWorkspaceSplitItems()
         rebuildSplitItems()
         configureVim()
         restoreSession()
@@ -171,7 +181,18 @@ final class MainWindowController: NSWindowController {
 
     private func buildUI() {
         let content = editorPane.view
+        let workspace = workspacePane.view
         content.wantsLayer = true
+        workspace.wantsLayer = true
+
+        let workspaceBackground = BackgroundView()
+        workspaceBackground.translatesAutoresizingMaskIntoConstraints = false
+        workspace.addSubview(workspaceBackground)
+
+        workspacePane.addChild(workspaceSplitViewController)
+        let workspaceSplit = workspaceSplitViewController.view
+        workspaceSplit.translatesAutoresizingMaskIntoConstraints = false
+        workspace.addSubview(workspaceSplit)
 
         let background = BackgroundView()
         background.translatesAutoresizingMaskIntoConstraints = false
@@ -179,7 +200,7 @@ final class MainWindowController: NSWindowController {
 
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         tabBar.delegate = self
-        content.addSubview(tabBar)
+        workspace.addSubview(tabBar)
 
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.controlSize = .small
@@ -189,7 +210,7 @@ final class MainWindowController: NSWindowController {
         searchField.isHidden = true
         searchField.sendsWholeSearchString = false
         searchField.sendsSearchStringImmediately = false
-        content.addSubview(searchField)
+        workspace.addSubview(searchField)
         searchResults.delegate = self
         tabPicker.delegate = self
 
@@ -213,7 +234,7 @@ final class MainWindowController: NSWindowController {
         let separator = statusSeparator
         separator.boxType = .separator
         separator.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(separator)
+        workspace.addSubview(separator)
 
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
@@ -226,46 +247,53 @@ final class MainWindowController: NSWindowController {
         // constraints and still win, which is the last-resort safety net.
         statusLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         statusLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
-        content.addSubview(statusLabel)
+        workspace.addSubview(statusLabel)
 
         modeBadge.translatesAutoresizingMaskIntoConstraints = false
         modeBadge.setMode(vimMode, animated: false)
-        content.addSubview(modeBadge)
+        workspace.addSubview(modeBadge)
 
         // The pending keys are the badge's quiet companion, so they follow the
         // badge's type rather than the counts'.
         pendingKeysLabel.translatesAutoresizingMaskIntoConstraints = false
         pendingKeysLabel.font = .systemFont(ofSize: 11, weight: .medium)
         pendingKeysLabel.textColor = .tertiaryLabelColor
-        content.addSubview(pendingKeysLabel)
+        workspace.addSubview(pendingKeysLabel)
 
         cursorLabel.translatesAutoresizingMaskIntoConstraints = false
         cursorLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         cursorLabel.textColor = .secondaryLabelColor
-        content.addSubview(cursorLabel)
+        workspace.addSubview(cursorLabel)
 
         zenDragRegion.translatesAutoresizingMaskIntoConstraints = false
         zenDragRegion.isHidden = true
         content.addSubview(zenDragRegion)
 
-        // Last in, so it lies over the bottom of the editor rather than
-        // taking room from it: opening `:` never moves the text.
+        // Last in, so it lies over the bottom of the document rather than
+        // taking room from it: opening `:` never moves either pane.
         commandPane.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(commandPane)
+        workspace.addSubview(commandPane)
 
         NSLayoutConstraint.activate([
+            workspaceBackground.topAnchor.constraint(equalTo: workspace.topAnchor),
+            workspaceBackground.leadingAnchor.constraint(equalTo: workspace.leadingAnchor),
+            workspaceBackground.trailingAnchor.constraint(equalTo: workspace.trailingAnchor),
+            workspaceBackground.bottomAnchor.constraint(equalTo: workspace.bottomAnchor),
+
             background.topAnchor.constraint(equalTo: content.topAnchor),
             background.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             background.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             background.bottomAnchor.constraint(equalTo: content.bottomAnchor),
 
-            tabBar.topAnchor.constraint(equalTo: content.topAnchor),
+            tabBar.topAnchor.constraint(equalTo: workspace.topAnchor),
             tabBar.heightAnchor.constraint(equalToConstant: TabBarView.height),
 
-            searchField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            searchField.trailingAnchor.constraint(equalTo: workspace.trailingAnchor, constant: -12),
             searchField.centerYAnchor.constraint(equalTo: tabBar.centerYAnchor),
             searchField.widthAnchor.constraint(equalToConstant: 220),
 
+            workspaceSplit.leadingAnchor.constraint(equalTo: workspace.leadingAnchor),
+            workspaceSplit.trailingAnchor.constraint(equalTo: workspace.trailingAnchor),
             scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
 
             zenDragRegion.topAnchor.constraint(equalTo: content.topAnchor),
@@ -273,12 +301,12 @@ final class MainWindowController: NSWindowController {
             zenDragRegion.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             zenDragRegion.heightAnchor.constraint(equalToConstant: Layout.zenTopInset),
 
-            separator.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            separator.bottomAnchor.constraint(equalTo: content.bottomAnchor,
+            separator.leadingAnchor.constraint(equalTo: workspace.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: workspace.trailingAnchor),
+            separator.bottomAnchor.constraint(equalTo: workspace.bottomAnchor,
                                               constant: -Layout.statusBarHeight),
 
-            modeBadge.leadingAnchor.constraint(equalTo: content.leadingAnchor,
+            modeBadge.leadingAnchor.constraint(equalTo: workspace.leadingAnchor,
                                                constant: Layout.statusInset),
             modeBadge.centerYAnchor.constraint(equalTo: separator.bottomAnchor,
                                                constant: Layout.statusBarHeight / 2),
@@ -287,7 +315,7 @@ final class MainWindowController: NSWindowController {
                                                       constant: 8),
             pendingKeysLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
 
-            cursorLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor,
+            cursorLabel.trailingAnchor.constraint(equalTo: workspace.trailingAnchor,
                                                   constant: -Layout.statusInset),
             cursorLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
 
@@ -297,8 +325,8 @@ final class MainWindowController: NSWindowController {
         ])
 
         NSLayoutConstraint.activate([
-            commandPane.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            commandPane.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            commandPane.leadingAnchor.constraint(equalTo: workspace.leadingAnchor),
+            commandPane.trailingAnchor.constraint(equalTo: workspace.trailingAnchor),
             commandPane.heightAnchor.constraint(equalToConstant: VimCommandPane.height),
         ])
         // It sits on the footer, and on the bottom of the window in zen mode,
@@ -307,13 +335,13 @@ final class MainWindowController: NSWindowController {
             equalTo: statusSeparator.topAnchor
         )
         paneBottomToContent = commandPane.bottomAnchor.constraint(
-            equalTo: content.bottomAnchor
+            equalTo: workspace.bottomAnchor
         )
         paneBottomToStatus?.isActive = true
 
         // Centred in the footer, but only as far as the left and right
         // regions allow — hence the yielding priority.
-        let centred = statusLabel.centerXAnchor.constraint(equalTo: content.centerXAnchor)
+        let centred = statusLabel.centerXAnchor.constraint(equalTo: workspace.centerXAnchor)
         centred.priority = .defaultHigh
         centred.isActive = true
 
@@ -321,12 +349,12 @@ final class MainWindowController: NSWindowController {
             greaterThanOrEqualTo: pendingKeysLabel.trailingAnchor, constant: 12
         )
         countsLeadingToEdge = statusLabel.leadingAnchor.constraint(
-            greaterThanOrEqualTo: content.leadingAnchor, constant: Layout.statusInset
+            greaterThanOrEqualTo: workspace.leadingAnchor, constant: Layout.statusInset
         )
         applyFooterVisibility()
 
         tabBarTrailingToEdge = tabBar.trailingAnchor.constraint(
-            equalTo: content.trailingAnchor, constant: -8
+            equalTo: workspace.trailingAnchor, constant: -8
         )
         tabBarTrailingToSearch = tabBar.trailingAnchor.constraint(
             equalTo: searchField.leadingAnchor, constant: -8
@@ -334,7 +362,7 @@ final class MainWindowController: NSWindowController {
         tabBarTrailingToEdge?.isActive = true
 
         tabBarLeading = tabBar.leadingAnchor.constraint(
-            equalTo: content.leadingAnchor, constant: Layout.trafficLightInset
+            equalTo: workspace.leadingAnchor, constant: Layout.trafficLightInset
         )
         tabBarLeading?.isActive = true
 
@@ -345,16 +373,23 @@ final class MainWindowController: NSWindowController {
         )
         editorTrailing?.isActive = true
 
-        editorTopToTabBar = scrollView.topAnchor.constraint(equalTo: tabBar.bottomAnchor)
-        editorTopToPane = scrollView.topAnchor.constraint(
-            equalTo: content.topAnchor, constant: Layout.zenTopInset
-        )
-        editorBottomToStatus = scrollView.bottomAnchor.constraint(
+        workspaceSplitTopToTabBar = workspaceSplit.topAnchor.constraint(equalTo: tabBar.bottomAnchor)
+        workspaceSplitTopToPane = workspaceSplit.topAnchor.constraint(equalTo: workspace.topAnchor)
+        workspaceSplitBottomToStatus = workspaceSplit.bottomAnchor.constraint(
             equalTo: statusSeparator.topAnchor
         )
-        editorBottomToPane = scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor)
-        editorTopToTabBar?.isActive = true
-        editorBottomToStatus?.isActive = true
+        workspaceSplitBottomToPane = workspaceSplit.bottomAnchor.constraint(
+            equalTo: workspace.bottomAnchor
+        )
+        workspaceSplitTopToTabBar?.isActive = true
+        workspaceSplitBottomToStatus?.isActive = true
+
+        editorTopToContent = scrollView.topAnchor.constraint(equalTo: content.topAnchor)
+        editorTopToZenInset = scrollView.topAnchor.constraint(
+            equalTo: content.topAnchor, constant: Layout.zenTopInset
+        )
+        scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor).isActive = true
+        editorTopToContent?.isActive = true
 
         applyEditorInsets()
     }
@@ -393,15 +428,10 @@ final class MainWindowController: NSWindowController {
         ])
     }
 
-    /// A real sidebar item on the left, an inspector item on the right — both
-    /// give the native translucent material, the full-height look under the
-    /// titlebar, and animated collapsing for free.
-    private func rebuildSplitItems() {
-        let wasCollapsed = sidebarItem?.isCollapsed ?? !sidebarIsVisible
-        for item in splitViewController.splitViewItems {
-            splitViewController.removeSplitViewItem(item)
-        }
-
+    /// The editor and preview share a split below the one document tab strip.
+    /// Keeping this split inside the workspace is what stops its divider at
+    /// the bottom edge of the tabs.
+    private func buildWorkspaceSplitItems() {
         let editorItem = NSSplitViewItem(viewController: editorPane)
         editorItem.minimumThickness = 360
         editorItem.canCollapse = false
@@ -419,6 +449,25 @@ final class MainWindowController: NSWindowController {
         preview.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
         preview.isCollapsed = !previewIsVisible
 
+        workspaceSplitViewController.addSplitViewItem(editorItem)
+        workspaceSplitViewController.addSplitViewItem(preview)
+        previewItem = preview
+    }
+
+    /// A real sidebar item on the left, an inspector item on the right — both
+    /// give the native translucent material, the full-height look under the
+    /// titlebar, and animated collapsing for free. The document workspace is
+    /// one sibling, regardless of whether its preview is open.
+    private func rebuildSplitItems() {
+        let wasCollapsed = sidebarItem?.isCollapsed ?? !sidebarIsVisible
+        for item in splitViewController.splitViewItems {
+            splitViewController.removeSplitViewItem(item)
+        }
+
+        let workspaceItem = NSSplitViewItem(viewController: workspacePane)
+        workspaceItem.minimumThickness = 360
+        workspaceItem.canCollapse = false
+
         let side = preferences.sidebarSide
         let item = side == .left
             ? NSSplitViewItem(sidebarWithViewController: sidebarPane)
@@ -432,19 +481,16 @@ final class MainWindowController: NSWindowController {
         item.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
         item.isCollapsed = wasCollapsed
 
-        // The images stay outermost whichever edge they are on; the preview
-        // sits against the editor it belongs to.
+        // The images stay outermost whichever edge they are on. The preview
+        // remains nested inside the document workspace beside its editor.
         if side == .left {
             splitViewController.addSplitViewItem(item)
-            splitViewController.addSplitViewItem(editorItem)
-            splitViewController.addSplitViewItem(preview)
+            splitViewController.addSplitViewItem(workspaceItem)
         } else {
-            splitViewController.addSplitViewItem(editorItem)
-            splitViewController.addSplitViewItem(preview)
+            splitViewController.addSplitViewItem(workspaceItem)
             splitViewController.addSplitViewItem(item)
         }
         sidebarItem = item
-        previewItem = preview
         updateTabStripInset()
     }
 
@@ -965,6 +1011,8 @@ final class MainWindowController: NSWindowController {
         note.isDirty = false
         preferences.lastSaveDirectory = destination.deletingLastPathComponent()
         refreshTabs()
+        // Save As can change whether this tab is Markdown at all.
+        if note === currentNote { applyPreviewVisibility() }
         flushAll()
         return true
     }
@@ -1125,10 +1173,12 @@ extension MainWindowController {
             modeBadge, pendingKeysLabel, cursorLabel,
         ]
 
-        editorTopToTabBar?.isActive = !enabled
-        editorTopToPane?.isActive = enabled
-        editorBottomToStatus?.isActive = !enabled
-        editorBottomToPane?.isActive = enabled
+        workspaceSplitTopToTabBar?.isActive = !enabled
+        workspaceSplitTopToPane?.isActive = enabled
+        workspaceSplitBottomToStatus?.isActive = !enabled
+        workspaceSplitBottomToPane?.isActive = enabled
+        editorTopToContent?.isActive = !enabled
+        editorTopToZenInset?.isActive = enabled
         // The footer goes; the pane does not — `:` has to work in zen mode.
         paneBottomToStatus?.isActive = !enabled
         paneBottomToContent?.isActive = enabled
@@ -1446,15 +1496,20 @@ extension MainWindowController {
         (previewIsVisible, markdownPreview.renderedText)
     }
 
-    /// Whether the tab in front asks for the pane — what the View menu's
-    /// checkmark says, whether or not zen is hiding it at this moment.
-    var showsMarkdownPreview: Bool { currentNote?.showsPreview ?? false }
+    /// Whether the front tab is eligible for the preview command.
+    var canShowMarkdownPreview: Bool { currentNote?.supportsMarkdownPreview ?? false }
+
+    /// What the View menu's checkmark says. A remembered preference on a file
+    /// that is not `.md` is deliberately ignored.
+    var showsMarkdownPreview: Bool {
+        canShowMarkdownPreview && (currentNote?.showsPreview ?? false)
+    }
 
     /// ⇧⌘P. The pane belongs to the tab, not to the app: a Markdown note
     /// keeps its preview — across relaunches, through the session — while the
     /// next ⌘T opens without one.
     func toggleMarkdownPreview() {
-        guard let note = currentNote else { return }
+        guard let note = currentNote, note.supportsMarkdownPreview else { return }
         note.showsPreview.toggle()
         applyPreviewVisibility(animated: true)
         renderMarkdownPreview()

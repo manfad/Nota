@@ -142,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if menuItem.action == #selector(toggleMarkdownPreview(_:)) {
             menuItem.state =
                 (windowController?.showsMarkdownPreview ?? false) ? .on : .off
+            return windowController?.canShowMarkdownPreview ?? false
         }
         return true
     }

@@ -49,6 +49,12 @@ final class Note {
         return untitledName ?? UntitledNaming.base
     }
 
+    /// Only saved `.md` files have a rendered companion. Jot still edits any
+    /// text file, but other formats always keep the full workspace for source.
+    var supportsMarkdownPreview: Bool {
+        fileURL?.pathExtension.caseInsensitiveCompare("md") == .orderedSame
+    }
+
     /// The note as it is written to the cache and to the user's file: plain
     /// text, with each image collapsed back to its `![](jot://…)` token.
     var text: String { NoteText.serialize(storage) }
