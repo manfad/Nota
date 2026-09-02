@@ -161,7 +161,7 @@ final class JotTests: XCTestCase {
 
         // Four label/control rows, laid out in one grid.
         let grid = window?.contentView?.subviews.compactMap { $0 as? NSGridView }.first
-        XCTAssertEqual(grid?.numberOfRows, 11)
+        XCTAssertEqual(grid?.numberOfRows, 10)
         XCTAssertEqual(grid?.numberOfColumns, 2)
 
         // Font popup offers the four designs plus "Other…".
@@ -179,13 +179,13 @@ final class JotTests: XCTestCase {
         )
 
         // Row labels, right-aligned in the first column.
-        let labels = (0..<10).compactMap {
+        let labels = (0..<9).compactMap {
             (grid?.cell(atColumnIndex: 0, rowIndex: $0).contentView as? NSTextField)?.stringValue
         }
         XCTAssertEqual(
             labels,
             ["Font", "Size", "Line spacing", "Padding", "Gutter", "Status bar",
-             "Image sidebar", "Markdown", "Vim mode", "Summon"]
+             "Image sidebar", "Vim mode", "Summon"]
         )
     }
 
@@ -286,12 +286,12 @@ final class JotTests: XCTestCase {
         XCTAssertEqual(try assetFileCount(assets), 1)
         XCTAssertTrue(ids[0].hasSuffix(".png"))
 
-        // Copying the lone chip out offers Jot's own flavour first, then the
-        // image ones — the file URL, the bare picture — then RTFD and plain
-        // text. Jot -> Jot still takes `.jotNote`; everyone else gets a picture.
+        // Copying it out offers Jot's own flavour, RTFD, the bare picture and
+        // plain text — in that order, so Jot and rich-text apps take the
+        // flavour that keeps the words around the image.
         view.setSelectedRange(NSRange(location: 0, length: storage.length))
         let types = view.writablePasteboardTypes
-        XCTAssertEqual(types, [.jotNote, .fileURL, .png, .tiff, .rtfd, .string])
+        XCTAssertEqual(types, [.jotNote, .rtfd, .png, .tiff, .string])
 
         let out = makePasteboard()
         out.clearContents()
@@ -448,9 +448,7 @@ final class JotTests: XCTestCase {
 
         // The chip alone, as a click on it selects it.
         view.setSelectedRange(NSRange(location: 4, length: 1))
-        XCTAssertEqual(
-            view.writablePasteboardTypes, [.jotNote, .fileURL, .png, .tiff, .rtfd, .string]
-        )
+        XCTAssertEqual(view.writablePasteboardTypes, [.jotNote, .rtfd, .png, .tiff, .string])
 
         // And the whole line around it, as a triple click takes it.
         for range in [NSRange(location: 4, length: 1), NSRange(location: 0, length: 12)] {
@@ -484,93 +482,6 @@ final class JotTests: XCTestCase {
         }
     }
 
-    /// A lone chip is the picture itself, so it also carries where that picture
-    /// lives: a terminal or Finder paste gets the asset's path, which is how
-    /// Claude Code picks the image up. Prose around the chip would make the
-    /// path a lie, so that copy keeps offering pixels only.
-    @MainActor
-    func testALoneCopiedChipCarriesItsFileURL() throws {
-        _ = NSApplication.shared
-        let assets = AssetStore(directory: try makeTemporaryDirectory())
-        let view = makeTextView(assets: assets)
-        let id = try XCTUnwrap(assets.importImageData(makePNGData(), preferredExtension: "png"))
-        try XCTUnwrap(view.textStorage).setAttributedString(NoteText.render(
-            "asd \(NoteText.token(for: id)) asdasd",
-            attributes: [.font: NSFont.systemFont(ofSize: 13)], assets: assets
-        ))
-
-        // Words around the chip: the picture goes, the path does not.
-        view.setSelectedRange(NSRange(location: 0, length: 12))
-        XCTAssertEqual(view.writablePasteboardTypes, [.jotNote, .rtfd, .png, .tiff, .string])
-        XCTAssertFalse(view.writeSelection(to: makePasteboard(), type: .fileURL))
-
-        // The chip on its own: image flavours first, Jot's own still leading.
-        view.setSelectedRange(NSRange(location: 4, length: 1))
-        let types = view.writablePasteboardTypes
-        XCTAssertEqual(types, [.jotNote, .fileURL, .png, .tiff, .rtfd, .string])
-
-        let board = makePasteboard()
-        board.clearContents()
-        board.declareTypes(types, owner: nil)
-        XCTAssertTrue(view.writeSelection(to: board, types: types))
-
-        // The path is the asset's own file, and it comes back as a real URL —
-        // the string flavour alone is enough, the pasteboard promotes it.
-        XCTAssertEqual(board.string(forType: .fileURL), assets.url(for: id).absoluteString)
-        let urls = board.readObjects(forClasses: [NSURL.self]) as? [URL] ?? []
-        XCTAssertEqual(urls.map(\.lastPathComponent), [id])
-        XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(urls.first).path))
-
-        // The belt-and-braces write left the other flavours alone.
-        XCTAssertTrue(Set(types).isSubset(of: Set(board.types ?? [])))
-        XCTAssertEqual(board.string(forType: .jotNote), NoteText.token(for: id))
-        XCTAssertNotNil(board.data(forType: .png))
-
-        // Jot -> Jot still re-links: its own flavour wins, no second file.
-        let second = makeTextView(assets: assets)
-        let chosen = second.preferredPasteboardType(
-            from: board.types ?? [], restrictedToTypesFrom: second.readablePasteboardTypes
-        )
-        XCTAssertEqual(chosen, .jotNote)
-        XCTAssertTrue(second.readSelection(from: board, type: try XCTUnwrap(chosen)))
-        XCTAssertEqual(attachmentIDs(in: try XCTUnwrap(second.textStorage)), [id])
-        XCTAssertEqual(try assetFileCount(assets), 1)
-    }
-
-    /// What an outside app hands back after taking the file URL: the path and
-    /// nothing else. It names a file the store already owns, so it re-links to
-    /// that asset rather than copying it in beside itself.
-    @MainActor
-    func testPastingAFileURLFromInsideTheAssetStoreRelinksRatherThanDuplicating() throws {
-        _ = NSApplication.shared
-        let assets = AssetStore(directory: try makeTemporaryDirectory())
-        let view = makeTextView(assets: assets)
-        let id = try XCTUnwrap(assets.importImageData(makePNGData(), preferredExtension: "png"))
-
-        let board = makePasteboard()
-        board.clearContents()
-        board.declareTypes([.fileURL], owner: nil)
-        board.setString(assets.url(for: id).absoluteString, forType: .fileURL)
-
-        XCTAssertEqual(
-            view.preferredPasteboardType(
-                from: board.types ?? [], restrictedToTypesFrom: view.readablePasteboardTypes
-            ),
-            .fileURL
-        )
-        XCTAssertTrue(view.readSelection(from: board, type: .fileURL))
-        XCTAssertEqual(attachmentIDs(in: try XCTUnwrap(view.textStorage)), [id])
-        XCTAssertEqual(try assetFileCount(assets), 1)
-
-        // A file from anywhere else is still a real import.
-        let outside = assets.directory.deletingLastPathComponent()
-            .appendingPathComponent("outside-\(UUID().uuidString).png")
-        try makePNGData().write(to: outside)
-        defer { try? FileManager.default.removeItem(at: outside) }
-        XCTAssertNotEqual(assets.importFile(at: outside), id)
-        XCTAssertEqual(try assetFileCount(assets), 2)
-    }
-
     /// One `public.png` cannot say which of two pictures is meant, so a
     /// selection holding both goes out as text and RTFD only.
     @MainActor
@@ -591,9 +502,7 @@ final class JotTests: XCTestCase {
 
         // Either one on its own is unambiguous again.
         view.setSelectedRange(NSRange(location: 0, length: 1))
-        XCTAssertEqual(
-            view.writablePasteboardTypes, [.jotNote, .fileURL, .png, .tiff, .rtfd, .string]
-        )
+        XCTAssertEqual(view.writablePasteboardTypes, [.jotNote, .rtfd, .png, .tiff, .string])
     }
 
     /// Copying prose stays prose: no image flavours, and still no RTFD.
@@ -1324,14 +1233,6 @@ final class JotTests: XCTestCase {
         return found
     }
 
-    /// The split view lives under the window's root controller, not as it —
-    /// the tab strip is above it and belongs to the window.
-    @MainActor
-    private func splitViewController(of window: NSWindow) -> NSSplitViewController? {
-        window.contentViewController?.children
-            .compactMap { $0 as? NSSplitViewController }.first
-    }
-
     /// The first view of a kind anywhere under another.
     @MainActor
     private func descendant<T: NSView>(of view: NSView, ofType type: T.Type) -> T? {
@@ -1375,7 +1276,9 @@ final class JotTests: XCTestCase {
 
         // The split view survives the round trip intact: the editor, the
         // preview and the image sidebar, the last two collapsed.
-        XCTAssertEqual(splitViewController(of: window)?.splitViewItems.count, 3)
+        XCTAssertEqual(
+            (window.contentViewController as? NSSplitViewController)?.splitViewItems.count, 3
+        )
     }
 
     // MARK: - Sidebar utility row
@@ -1423,18 +1326,16 @@ final class JotTests: XCTestCase {
 
     // MARK: - Gutter separator
 
-    @MainActor
     func testTheSidebarNeverResizesTheWindow() throws {
         _ = NSApplication.shared
         let directory = try makeTemporaryDirectory()
         let controller = MainWindowController(store: SessionStore(directory: directory))
         let window = try XCTUnwrap(controller.window)
-        let split = try XCTUnwrap(splitViewController(of: window))
-        // Every pane that can collapse — sidebar, editor and preview: reading
-        // mode collapses the editor itself — gives up room to its siblings
-        // rather than letting the window change its frame.
+        let split = try XCTUnwrap(window.contentViewController as? NSSplitViewController)
+        // Every pane that can collapse — sidebar and preview — makes the
+        // editor give up room rather than the window change its frame.
         let collapsible = split.splitViewItems.filter(\.canCollapse)
-        XCTAssertEqual(collapsible.count, 3)
+        XCTAssertEqual(collapsible.count, 2)
         for item in collapsible {
             XCTAssertEqual(item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView)
         }

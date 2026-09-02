@@ -1,14 +1,17 @@
 import AppKit
 
-/// The rendered pane beside the editor: a read-only text view showing what
-/// `MarkdownRenderer` made of the note. It starts right under the window's tab
-/// strip — no band of its own, and no title.
+/// The rendered pane beside the editor: a header band matching the tab strip,
+/// and under it a read-only text view showing what `MarkdownRenderer` made of
+/// the note.
 ///
 /// It is a view of the note, never a second place to type in it. Clicking a
 /// block does not put a caret here — it sends you to that block in the editor,
 /// which is the only place a note is ever edited.
 final class MarkdownPreviewView: NSView {
 
+    static let title = "Markdown Preview"
+
+    private let header = PreviewHeaderView()
     private let scrollView = NSScrollView()
     private let textView: PreviewTextView
 
@@ -26,33 +29,6 @@ final class MarkdownPreviewView: NSView {
     /// the pane, so a resize is a reason to render again.
     var onWidthChange: (() -> Void)?
     private var renderedWidth: CGFloat = 0
-
-    /// Run with a printable keystroke that arrived here, in reading mode,
-    /// where there is no editor on screen to take it. Returning `true` means
-    /// the pane must not do anything else with it — the editor is coming back
-    /// and the key is going there.
-    var onPrintableKey: ((NSEvent) -> Bool)? {
-        didSet { textView.onPrintableKey = onPrintableKey }
-    }
-
-    /// Run with a ⌘F (or another find action) aimed at the pane. Same
-    /// contract: `true` means it has been passed on to the editor.
-    var onFindAction: ((Any?) -> Bool)? {
-        didSet { textView.onFindAction = onFindAction }
-    }
-
-    /// Whether the pane takes the keyboard. Only in reading mode, where it is
-    /// the only thing on screen: in split the caret stays in the editor.
-    var takesKeyboard: Bool {
-        get { textView.takesKeyboard }
-        set { textView.takesKeyboard = newValue }
-    }
-
-    /// Puts the keyboard in the pane — reading mode's answer to `focusEditor`.
-    @discardableResult
-    func focus(in window: NSWindow?) -> Bool {
-        window?.makeFirstResponder(textView) ?? false
-    }
 
     /// Matched to the editor's own padding, so the two columns of text start
     /// the same distance from their edges.
@@ -101,6 +77,11 @@ final class MarkdownPreviewView: NSView {
         ]
         textView.onClick = { [weak self] index in self?.clicked(at: index) }
 
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.title = Self.title
+        header.leadingInset = horizontalInset
+        addSubview(header)
+
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
@@ -111,7 +92,14 @@ final class MarkdownPreviewView: NSView {
         addSubview(scrollView)
 
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: topAnchor),
+            // Pinned to the very top, not the safe area: the band has to line
+            // up with the tab strip across the divider, title bar and all.
+            header.topAnchor.constraint(equalTo: topAnchor),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor),
+            header.heightAnchor.constraint(equalToConstant: TabBarView.height),
+
+            scrollView.topAnchor.constraint(equalTo: header.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -144,6 +132,8 @@ final class MarkdownPreviewView: NSView {
     var renderedText: String { textView.string }
 
     var renderedContent: NSAttributedString { textView.attributedString() }
+
+    var headerTitle: String { header.title }
 
     /// One rectangle per fenced code block, in the text view's coordinates.
     var codeBoxRects: [NSRect] { textView.codeBoxRects }
@@ -248,6 +238,50 @@ final class MarkdownPreviewView: NSView {
         textView.textContainerInset = NSSize(
             width: horizontalInset, height: Self.verticalInset
         )
+        header.leadingInset = horizontalInset
+    }
+}
+
+// MARK: - The header band
+
+/// The pane's top band. It is the tab strip's opposite number across the
+/// divider, so it takes the same height and the same paper the strip sits on,
+/// and says what the pane is rather than sitting there empty.
+private final class PreviewHeaderView: NSView {
+    var title: String = "" {
+        didSet {
+            guard title != oldValue else { return }
+            needsDisplay = true
+        }
+    }
+
+    var leadingInset: CGFloat = 20 {
+        didSet {
+            guard leadingInset != oldValue else { return }
+            needsDisplay = true
+        }
+    }
+
+    /// The band is chrome, so dragging it moves the window the way the strip
+    /// beside it does.
+    override var mouseDownCanMoveWindow: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.textBackgroundColor.setFill()
+        dirtyRect.fill()
+
+        NSColor.separatorColor.setFill()
+        NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]
+        let size = (title as NSString).size(withAttributes: attributes)
+        (title as NSString).draw(
+            at: NSPoint(x: leadingInset, y: (bounds.height - size.height) / 2),
+            withAttributes: attributes
+        )
     }
 }
 
@@ -255,18 +289,12 @@ final class MarkdownPreviewView: NSView {
 
 /// The pane's text view.
 ///
-/// A click here is a jump to a block, not a place to type, and the caret
-/// stays in the editor. Dragging to select is given up for that — a link
-/// still opens, and everything else reports the block it landed in.
-///
-/// It takes the keyboard in reading mode only, where the editor is collapsed
-/// and something has to answer the arrow keys; a printable key or a find is
-/// handed straight back to the window, which brings the editor out again.
+/// It never becomes first responder: a click here is a jump to a block, not a
+/// place to type, and the caret must stay in the editor. Dragging to select
+/// is given up for that — a link still opens, and everything else reports the
+/// block it landed in.
 private final class PreviewTextView: NSTextView {
     var onClick: ((Int) -> Void)?
-    var onPrintableKey: ((NSEvent) -> Bool)?
-    var onFindAction: ((Any?) -> Bool)?
-    var takesKeyboard = false
 
     /// The rendered range of the block being pointed at, if any.
     var highlightedRange: NSRange? {
@@ -276,44 +304,7 @@ private final class PreviewTextView: NSTextView {
         }
     }
 
-    override var acceptsFirstResponder: Bool { takesKeyboard }
-
-    /// The arrows, page keys and Home/End are the pane's own — they walk the
-    /// render. Anything you could type into a note is the editor's, and the
-    /// window swaps the editor back in before the key lands.
-    override func keyDown(with event: NSEvent) {
-        if isPrintable(event), onPrintableKey?(event) == true { return }
-        super.keyDown(with: event)
-    }
-
-    /// A character the note could hold, typed without ⌘ or ⌃. Return and tab
-    /// count; the arrows and the function keys do not — their code points sit
-    /// in Unicode's private-use area.
-    private func isPrintable(_ event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard !modifiers.contains(.command), !modifiers.contains(.control),
-              !modifiers.contains(.function),
-              let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first
-        else { return false }
-        if scalar == "\r" || scalar == "\t" { return true }
-        return scalar.value >= 0x20 && !(0xF700...0xF8FF).contains(scalar.value)
-    }
-
-    /// ⌘F walks the responder chain to whatever is focused; in reading mode
-    /// that is the pane, which has no find bar of its own to open.
-    override func performTextFinderAction(_ sender: Any?) {
-        if onFindAction?(sender) == true { return }
-        super.performTextFinderAction(sender)
-    }
-
-    /// Without this the menu item is disabled — the pane's scroll view has no
-    /// find bar — and ⌘F never reaches `performTextFinderAction` at all.
-    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
-        if item.action == #selector(performTextFinderAction(_:)), onFindAction != nil {
-            return true
-        }
-        return super.validateUserInterfaceItem(item)
-    }
+    override var acceptsFirstResponder: Bool { false }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)

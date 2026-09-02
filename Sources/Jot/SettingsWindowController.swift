@@ -25,9 +25,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         checkboxWithTitle: "Gutter separator", target: nil, action: nil
     )
     private let sidebarSidePopUp = NSPopUpButton()
-    private let readingModeCheckbox = NSButton(
-        checkboxWithTitle: "Open Markdown files in reading mode", target: nil, action: nil
-    )
     private let vimModeCheckbox = NSButton(checkboxWithTitle: "Vim mode", target: nil, action: nil)
     private let footerCheckboxes: [(TextStats.Segment, NSButton)] = [
         (.words, NSButton(checkboxWithTitle: "Words", target: nil, action: nil)),
@@ -125,9 +122,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         gutterRow.orientation = .horizontal
         gutterRow.spacing = 10
 
-        readingModeCheckbox.target = self
-        readingModeCheckbox.action = #selector(readingModeChanged)
-
         vimModeCheckbox.target = self
         vimModeCheckbox.action = #selector(vimModeChanged)
 
@@ -168,7 +162,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             [label("Gutter"), gutterRow],
             [label("Status bar"), footerGrid],
             [label("Image sidebar"), sidebarSidePopUp],
-            [label("Markdown"), readingModeCheckbox],
             [label("Vim mode"), vimModeCheckbox],
             [label("Summon"), hotKeyRow],
             [label(""), hotKeyWarning],
@@ -239,7 +232,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         for (segment, checkbox) in footerCheckboxes {
             checkbox.state = enabled.contains(segment) ? .on : .off
         }
-        readingModeCheckbox.state = preferences.opensMarkdownInReadingMode ? .on : .off
         vimModeCheckbox.state = preferences.vimMode ? .on : .off
         hotKeyField.shortcut = preferences.hotKey
 
@@ -314,10 +306,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         guard let raw = sender.selectedItem?.representedObject as? String,
               let option = LineSpacingOption(rawValue: raw) else { return }
         preferences.lineSpacing = option
-    }
-
-    @objc private func readingModeChanged(_ sender: NSButton) {
-        preferences.opensMarkdownInReadingMode = sender.state == .on
     }
 
     @objc private func sidebarSideChanged(_ sender: NSPopUpButton) {

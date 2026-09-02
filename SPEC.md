@@ -23,34 +23,12 @@
 - Settings (⌘,): font family, size, line spacing, editor padding, vim mode, hotkey.
 - Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` · `N pt` beside gear.
 
-## Markdown preview — three modes (⇧⌘P cycles, View menu; per tab, remembered in the session)
-- **Editor** (default), **Split**, **Reading**. ⇧⌘P cycles editor → split → reading → editor; ⌥⇧⌘P jumps to reading and
-  back out to the editor. The View menu keeps "Markdown Preview" (checkmarked in split and reading) and adds
-  "Reading Mode" (checkmarked in reading). Both checkmarks are the front tab's.
-- Split: a read-only rendered pane beside the editor (trailing side, resizable, 50% default, min 240pt); the image sidebar
-  stays outermost. Reading: the editor collapses and the render takes its column. Either way the window keeps its frame —
-  the panes share the room out between them. Works for any note.
-- Mode control: three segments — `pencil` / `rectangle.split.2x1` / `book`, tool tips naming the state and its keys —
-  floating over the top-trailing corner of whichever column is on screen, 8pt under the strip's hairline and 12pt off the
-  trailing edge. It sits over the text rather than in a row of its own: nothing is pushed down for it, and the text
-  starts at the strip's bottom edge. On a small rounded plate in the editor background with a `separatorColor` hairline,
-  radius concentric with the control's; idle segments in `secondaryLabelColor`, the selected one in the standard filled
-  look. Hover only: it fades in (opacity, ≤150ms, no movement) when the pointer is anywhere in the top 44pt of the
-  column and fades out when it leaves; while it is away the band takes no clicks, so the text under it stays reachable.
-  It follows the front tab, and clicking a segment sets the mode. In editor and split modes it is over the editor
-  column; in reading that column is collapsed, so it is over the preview column instead. ⌘F's find bar opens in the same
-  corner and takes it for as long as the bar is up. Markdown tabs only — extension `md` / `markdown`, and untitled
-  notes, which save as `.md`; other tabs never show it, and ⇧⌘P / ⌥⇧⌘P still work there: the pane is for any note.
-- Getting back to the text from reading: click a block (→ split, caret on that block), type a printable character (→ split,
-  the key lands in the editor), or ⌘F (→ split, find bar). Arrow and page keys stay in the render and scroll it — the
-  keyboard belongs to the render in reading mode, and to the editor in the other two.
-- Zen: in split the pane is chrome and goes, leaving the text; in reading it is the note, so zen leaves the render alone
-  with no chrome and no editor. Either way the tab's mode is back when zen ends.
-- Per tab, not per app: ⇧⌘P sets the mode of the tab in front only, and switching tabs lays out for the tab you land on —
-  a new ⌘T tab starts in the editor. The mode rides in `session.json`, so each tab comes back the way it was left
-  (a session written when the pane was a yes/no comes back split where it was open).
-- Settings "Open Markdown files in reading mode" (default off): opening a `.md` / `.markdown` file opens that tab in
-  reading. Session restore ignores it — the tab's saved mode wins.
+## Markdown preview (⇧⌘P, View menu, checkmark; per tab, remembered in the session)
+- A read-only rendered pane beside the editor (trailing side, resizable split, 50% default, min 240pt); the image sidebar
+  stays outermost. Works for any note. Hidden in zen (it is chrome); back when zen ends. Focus stays in the editor.
+- Per tab, not per app: ⇧⌘P opens the pane for the tab in front only, and switching tabs opens or collapses it for the
+  tab you land on — a new ⌘T tab and a freshly opened file start without it. The flag rides in `session.json`, so each
+  tab comes back the way it was left. The View menu's checkmark is the front tab's.
 - Native: Foundation's Markdown parser (`AttributedString(markdown:)`, full interpretation) + Jot's own block styling.
   No WebView, no dependencies, no theming. Same font family/size as the editor; headings scale from it (H1 ×1.6 … H6 ×1.0,
   semibold); lists indented with `•` / `1.`; block quotes with a leading hairline bar in secondaryLabelColor; code spans
@@ -58,7 +36,8 @@
   monospaced rows (best effort); links underlined in labelColor (monochrome), clickable; emphasis/strong/strike.
 - `Image N` chips render as the actual pictures from the asset store, scaled to the pane width; remote images are not
   fetched (the alt text shows instead).
-- No header: the pane is the render and nothing else. It starts right under the tab strip, keeping its leading inset.
+- Header: the pane's top band (same height/background/hairline as the tab strip beside it) carries the title
+  "Markdown Preview" — SF 11pt medium, secondaryLabelColor, leading inset = editor padding — so the band is never empty.
 - Live: re-rendered ~150 ms after typing stops; the pane keeps its relative scroll position.
 - Block sync (both ways). Every rendered block (heading, paragraph, list item, quote, code block, table, rule, image)
   knows its source range. Clicking a block selects it — a quiet band, labelColor @ 6%, full pane width — scrolls the
@@ -67,7 +46,7 @@
   lit at a time; the band clears when the text changes under it. No proportional scroll following any more.
 
 ## Zen mode
-- ⌥⌘Z toggles: tab strip, traffic lights, mode control, status bar, line-number gutter, and image sidebar all hide; only the text remains
+- ⌥⌘Z toggles: tab strip, traffic lights, status bar, line-number gutter, and image sidebar all hide; only the text remains
   (same font/width, padding grows to 40pt). ⌘ shortcuts still work (⌘T, ⌘W, ⌘P, ⌘B forces the sidebar back for that note).
   Remembered per session; combine with ⌃⌘F for full screen if wanted.
 
@@ -75,20 +54,15 @@
 - Stored as originals in `<support>/assets/<uuid>.<ext>`; token in text `![](jot://<uuid>.<ext>)`.
 - Inline: always a text chip `Image N`, numbered in document order, renumbered live. Clicking one selects the chip itself, so ⌘C
   copies the picture and ⌫ or typing replaces it; in vim the block caret sits on it instead. Dragging and ⇧-clicking select as usual.
-- Sidebar (native split pane, 150pt, side per Settings): starts under the tab strip with no band of its own; 104pt thumbnails with `Image N` captions. Auto-shows when the note has ≥1 image,
+- Sidebar (native split pane, 150pt, side per Settings): 104pt thumbnails with `Image N` captions. Auto-shows when the note has ≥1 image,
   hides when none; ⌘B toggles it manually for the session. Settings: sidebar side Left / Right (default Right). Click → select chip; double-click → open in Preview.
   Context menu: Copy Image / Save Image As… / Reveal in Finder. Bottom-pinned utility row with a Settings gear (leading edge).
 - ⌘A ⌘C carries images (RTFD) to other apps, and when the selection holds exactly one image the picture also goes
   as PNG/TIFF, so it pastes into terminals, browsers and Slack; two or more images offer no picture flavour.
-  A lone chip also carries its file URL, so a terminal or Finder paste gets the asset's path.
-  Jot→Jot paste prefers Jot's own flavour, re-linking without duplicating assets; a file URL from inside the
-  asset store re-links too.
+  Jot→Jot paste prefers Jot's own flavour, re-linking without duplicating assets.
 - Orphan assets are never auto-deleted.
 
 ## Tabs
-- One strip across the whole window, above the split view: traffic lights, the tabs, and the ⇧⌘F field at the trailing
-  end (12pt inset, tabs stopping 8pt short of it while it is open). Nothing else is in it. It is the window's drag
-  region, carries a hairline along its bottom, and all three columns — editor, preview, image sidebar — start under it.
 - Min readable width ~110pt, strip scrolls horizontally past that. ⌘P fuzzy tab switcher by title.
 - Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab.
 

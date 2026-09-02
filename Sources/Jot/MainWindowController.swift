@@ -1,7 +1,7 @@
 import AppKit
 
-/// The whole UI: a tab strip across the top of the window, one plain-text
-/// editor under it, a status line at the bottom.
+/// The whole UI: tab strip in the title bar, one plain-text editor, a status
+/// line at the bottom.
 ///
 /// There is a single `NSTextView`; switching tabs swaps that note's
 /// `NSTextStorage` and `UndoManager` into it, which is what keeps undo from
@@ -31,38 +31,19 @@ final class MainWindowController: NSWindowController {
     private let scrollView = FindBarScrollView()
     private var lineNumberRuler: LineNumberRulerView?
     private let tabBar = TabBarView()
-    /// The strip's paper and its hairline. The tabs and the ⇧⌘F field sit on
-    /// it, and it runs the whole width of the window above the split view.
-    private let tabStripBackground = TabStripBackgroundView()
     private lazy var imageSidebar = ImageSidebarView(topInset: 8)
-    /// Everything below the strip. The window's content is the root view, not
-    /// this, so the strip can span both columns.
     private let splitViewController = NSSplitViewController()
-    private let rootViewController = NSViewController()
     private let editorPane = NSViewController()
     private let sidebarPane = NSViewController()
     private var sidebarItem: NSSplitViewItem?
     private let previewPane = NSViewController()
     private let markdownPreview = MarkdownPreviewView()
     private var previewItem: NSSplitViewItem?
-    private var editorItem: NSSplitViewItem?
     private var previewWorkItem: DispatchWorkItem?
-    /// The mode the layout is actually in — the tab in front says which one
-    /// it wants, zen mode says which of them it may have.
-    private var installedPreviewMode: PreviewMode = .off
-    /// Whether the render is on screen right now, in either of the two modes
-    /// that show it.
-    private var previewIsVisible: Bool { installedPreviewMode != .off }
-    /// The floating mode control, once per column: the editor's is the one on
-    /// screen in the editor and split modes, the preview's in reading, where
-    /// the editor column is collapsed and cannot hold one. Neither takes room
-    /// from the text — they hover over its top-trailing corner.
-    private lazy var editorModeOverlay = ModeControlOverlay(
-        target: self, action: #selector(previewModeControlChanged)
-    )
-    private lazy var previewModeOverlay = ModeControlOverlay(
-        target: self, action: #selector(previewModeControlChanged)
-    )
+    /// Whether the pane is on screen right now — the tab in front says
+    /// whether it is wanted, zen mode says whether it may be shown.
+    private var previewIsVisible = false
+    private var tabBarLeading: NSLayoutConstraint?
     private let statusSeparator = NSBox()
     private var editorTrailing: NSLayoutConstraint?
 
@@ -70,17 +51,10 @@ final class MainWindowController: NSWindowController {
     /// never persisted, so Jot always opens with its chrome.
     private(set) var isZenMode = false
     private let zenDragRegion = DragRegionView()
-    /// Where the editor's text starts: straight under the strip, or clear of
-    /// the traffic lights in zen. The mode control floats over it either way
-    /// and never pushes it down.
+    private var editorTopToTabBar: NSLayoutConstraint?
     private var editorTopToPane: NSLayoutConstraint?
-    private var editorTopToZen: NSLayoutConstraint?
     private var editorBottomToStatus: NSLayoutConstraint?
     private var editorBottomToPane: NSLayoutConstraint?
-    /// The split view hangs off the strip, and off the window's own top edge
-    /// in zen, where there is no strip to hang off.
-    private var splitTopToStrip: NSLayoutConstraint?
-    private var splitTopToRoot: NSLayoutConstraint?
     private var sidebarWorkItem: DispatchWorkItem?
     /// The chip most recently clicked, until the selection moves some other
     /// way — see `ChipHighlight`.
@@ -168,16 +142,13 @@ final class MainWindowController: NSWindowController {
 
         let pane = PaneView()
         editorPane.view = pane
-        // No inset of its own: the strip sits above the split view, so the
-        // thumbnails start under it the way both other columns do.
         sidebarPane.view = NSView()
-        // The window's content is the strip plus the split view under it, not
-        // the split view alone — that is what lets the strip span both columns
-        // while reading mode collapses one of them.
-        rootViewController.view = NSView()
-        window.contentViewController = rootViewController
+        // Keeps the thumbnails clear of the traffic lights when on the left.
+        sidebarPane.view.additionalSafeAreaInsets = NSEdgeInsets(
+            top: 8, left: 0, bottom: 0, right: 0
+        )
+        window.contentViewController = splitViewController
 
-        buildRoot()
         buildUI()
         // The counts are re-fitted once the two side regions have their
         // frames, which is the only moment their real widths are known.
@@ -198,25 +169,17 @@ final class MainWindowController: NSWindowController {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// The window's own layout: one tab strip across the top, and the split
-    /// view — editor, preview, image sidebar — filling everything under it.
-    /// The strip belongs to the window rather than to the editor column, so
-    /// reading mode can collapse that column without taking the tabs with it.
-    private func buildRoot() {
-        let root = rootViewController.view
-        root.wantsLayer = true
+    private func buildUI() {
+        let content = editorPane.view
+        content.wantsLayer = true
 
-        rootViewController.addChild(splitViewController)
-        let split = splitViewController.view
-        split.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(split)
-
-        tabStripBackground.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(tabStripBackground)
+        let background = BackgroundView()
+        background.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(background)
 
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         tabBar.delegate = self
-        root.addSubview(tabBar)
+        content.addSubview(tabBar)
 
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.controlSize = .small
@@ -226,67 +189,9 @@ final class MainWindowController: NSWindowController {
         searchField.isHidden = true
         searchField.sendsWholeSearchString = false
         searchField.sendsSearchStringImmediately = false
-        root.addSubview(searchField)
+        content.addSubview(searchField)
         searchResults.delegate = self
         tabPicker.delegate = self
-
-        // Last in, so it lies over whichever column zen has left on screen.
-        zenDragRegion.translatesAutoresizingMaskIntoConstraints = false
-        zenDragRegion.isHidden = true
-        root.addSubview(zenDragRegion)
-
-        NSLayoutConstraint.activate([
-            tabStripBackground.topAnchor.constraint(equalTo: root.topAnchor),
-            tabStripBackground.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            tabStripBackground.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            tabStripBackground.heightAnchor.constraint(equalToConstant: TabBarView.height),
-
-            // The tabs start clear of the traffic lights, which now sit over
-            // the strip whichever side the image sidebar is on.
-            tabBar.topAnchor.constraint(equalTo: root.topAnchor),
-            tabBar.heightAnchor.constraint(equalToConstant: TabBarView.height),
-            tabBar.leadingAnchor.constraint(
-                equalTo: root.leadingAnchor, constant: Layout.trafficLightInset
-            ),
-
-            searchField.trailingAnchor.constraint(
-                equalTo: root.trailingAnchor, constant: -12
-            ),
-            searchField.centerYAnchor.constraint(equalTo: tabBar.centerYAnchor),
-            searchField.widthAnchor.constraint(equalToConstant: 220),
-
-            split.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            split.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            split.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-
-            zenDragRegion.topAnchor.constraint(equalTo: root.topAnchor),
-            zenDragRegion.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            zenDragRegion.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            zenDragRegion.heightAnchor.constraint(equalToConstant: Layout.zenTopInset),
-        ])
-
-        // The strip ends 12pt off the trailing edge, and 8pt short of the
-        // ⇧⌘F field while that is open, so no tab ever runs under it.
-        tabBarTrailingToEdge = tabBar.trailingAnchor.constraint(
-            equalTo: root.trailingAnchor, constant: -12
-        )
-        tabBarTrailingToSearch = tabBar.trailingAnchor.constraint(
-            equalTo: searchField.leadingAnchor, constant: -8
-        )
-        tabBarTrailingToEdge?.isActive = true
-
-        splitTopToStrip = split.topAnchor.constraint(equalTo: tabStripBackground.bottomAnchor)
-        splitTopToRoot = split.topAnchor.constraint(equalTo: root.topAnchor)
-        splitTopToStrip?.isActive = true
-    }
-
-    private func buildUI() {
-        let content = editorPane.view
-        content.wantsLayer = true
-
-        let background = BackgroundView()
-        background.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(background)
 
         configureTextView()
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -297,9 +202,6 @@ final class MainWindowController: NSWindowController {
         scrollView.borderType = .noBorder
         scrollView.documentView = textView
         scrollView.findBarPosition = .aboveContent
-        scrollView.onFindBarVisibilityChange = { [weak self] _ in
-            self?.updateModeControlOverlays()
-        }
         content.addSubview(scrollView)
 
         let ruler = LineNumberRulerView(scrollView: scrollView, textView: textView)
@@ -342,6 +244,10 @@ final class MainWindowController: NSWindowController {
         cursorLabel.textColor = .secondaryLabelColor
         content.addSubview(cursorLabel)
 
+        zenDragRegion.translatesAutoresizingMaskIntoConstraints = false
+        zenDragRegion.isHidden = true
+        content.addSubview(zenDragRegion)
+
         // Last in, so it lies over the bottom of the editor rather than
         // taking room from it: opening `:` never moves the text.
         commandPane.translatesAutoresizingMaskIntoConstraints = false
@@ -353,7 +259,19 @@ final class MainWindowController: NSWindowController {
             background.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             background.bottomAnchor.constraint(equalTo: content.bottomAnchor),
 
+            tabBar.topAnchor.constraint(equalTo: content.topAnchor),
+            tabBar.heightAnchor.constraint(equalToConstant: TabBarView.height),
+
+            searchField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            searchField.centerYAnchor.constraint(equalTo: tabBar.centerYAnchor),
+            searchField.widthAnchor.constraint(equalToConstant: 220),
+
             scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+
+            zenDragRegion.topAnchor.constraint(equalTo: content.topAnchor),
+            zenDragRegion.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            zenDragRegion.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            zenDragRegion.heightAnchor.constraint(equalToConstant: Layout.zenTopInset),
 
             separator.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -407,6 +325,19 @@ final class MainWindowController: NSWindowController {
         )
         applyFooterVisibility()
 
+        tabBarTrailingToEdge = tabBar.trailingAnchor.constraint(
+            equalTo: content.trailingAnchor, constant: -8
+        )
+        tabBarTrailingToSearch = tabBar.trailingAnchor.constraint(
+            equalTo: searchField.leadingAnchor, constant: -8
+        )
+        tabBarTrailingToEdge?.isActive = true
+
+        tabBarLeading = tabBar.leadingAnchor.constraint(
+            equalTo: content.leadingAnchor, constant: Layout.trafficLightInset
+        )
+        tabBarLeading?.isActive = true
+
         // A small breathing gap so the scroller never touches the pane edge
         // (or the sidebar divider).
         editorTrailing = scrollView.trailingAnchor.constraint(
@@ -414,18 +345,17 @@ final class MainWindowController: NSWindowController {
         )
         editorTrailing?.isActive = true
 
-        editorTopToPane = scrollView.topAnchor.constraint(equalTo: content.topAnchor)
-        editorTopToZen = scrollView.topAnchor.constraint(
+        editorTopToTabBar = scrollView.topAnchor.constraint(equalTo: tabBar.bottomAnchor)
+        editorTopToPane = scrollView.topAnchor.constraint(
             equalTo: content.topAnchor, constant: Layout.zenTopInset
         )
         editorBottomToStatus = scrollView.bottomAnchor.constraint(
             equalTo: statusSeparator.topAnchor
         )
         editorBottomToPane = scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor)
-        editorTopToPane?.isActive = true
+        editorTopToTabBar?.isActive = true
         editorBottomToStatus?.isActive = true
 
-        installModeOverlay(editorModeOverlay, over: content)
         applyEditorInsets()
     }
 
@@ -437,23 +367,11 @@ final class MainWindowController: NSWindowController {
         imageSidebar.onSettings = { [weak self] in self?.openSettings(nil) }
         container.addSubview(imageSidebar)
         NSLayoutConstraint.activate([
-            // Straight under the strip, like both the other columns: there is
-            // no titlebar over this any more, so no band to keep clear of it.
-            imageSidebar.topAnchor.constraint(equalTo: container.topAnchor),
+            imageSidebar.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
             imageSidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             imageSidebar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             imageSidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-    }
-
-    @objc private func previewModeControlChanged(_ sender: NSSegmentedControl) {
-        let modes = PreviewMode.allCases
-        guard modes.indices.contains(sender.selectedSegment) else { return }
-        setPreviewMode(modes[sender.selectedSegment])
-        // Reading mode hands the column over to the other overlay, and the
-        // pointer is already on it: it comes up without waiting to be entered
-        // again, so the control does not blink out from under the cursor.
-        visibleModeControlOverlay.setRevealed(true, animated: false)
     }
 
     private func buildPreviewPane() {
@@ -466,38 +384,12 @@ final class MainWindowController: NSWindowController {
         markdownPreview.onBlockClick = { [weak self] source in
             self?.goToSource(source)
         }
-        // Reading mode has no editor on screen: a key you could type into the
-        // note brings it back first, and the key lands there.
-        markdownPreview.onPrintableKey = { [weak self] event in
-            self?.leaveReadingMode(for: { $0.keyDown(with: event) }) ?? false
-        }
-        markdownPreview.onFindAction = { [weak self] sender in
-            self?.leaveReadingMode(for: { $0.performTextFinderAction(sender) }) ?? false
-        }
         container.addSubview(markdownPreview)
         NSLayoutConstraint.activate([
             markdownPreview.topAnchor.constraint(equalTo: container.topAnchor),
             markdownPreview.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             markdownPreview.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             markdownPreview.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-        installModeOverlay(previewModeOverlay, over: container)
-    }
-
-    /// The hover band across the top of a column, laid over whatever the
-    /// column is showing. It is added last so it is the topmost thing there,
-    /// and it hands every click but the control's own back to what is under
-    /// it.
-    private func installModeOverlay(_ overlay: ModeControlOverlay, over container: NSView) {
-        overlay.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(overlay)
-        NSLayoutConstraint.activate([
-            overlay.topAnchor.constraint(equalTo: container.topAnchor),
-            overlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            overlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            overlay.heightAnchor.constraint(
-                equalToConstant: ModeControlOverlay.hoverBandHeight
-            ),
         ])
     }
 
@@ -510,14 +402,9 @@ final class MainWindowController: NSWindowController {
             splitViewController.removeSplitViewItem(item)
         }
 
-        let editor = NSSplitViewItem(viewController: editorPane)
-        editor.minimumThickness = 360
-        // Reading mode collapses the editor and gives the whole column to the
-        // render. Same behaviour as the pane's: the siblings share the room
-        // out and the window keeps the size it had.
-        editor.canCollapse = true
-        editor.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
-        editor.isCollapsed = installedPreviewMode == .reading
+        let editorItem = NSSplitViewItem(viewController: editorPane)
+        editorItem.minimumThickness = 360
+        editorItem.canCollapse = false
 
         // A plain item, not an inspector: the preview is the note's other
         // half rather than chrome about it, so it takes the paper background
@@ -530,7 +417,7 @@ final class MainWindowController: NSWindowController {
         // the other way round, toggling the pane on and off after a zoom
         // leaves the window narrower than it started.
         preview.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
-        preview.isCollapsed = installedPreviewMode == .off
+        preview.isCollapsed = !previewIsVisible
 
         let side = preferences.sidebarSide
         let item = side == .left
@@ -549,16 +436,24 @@ final class MainWindowController: NSWindowController {
         // sits against the editor it belongs to.
         if side == .left {
             splitViewController.addSplitViewItem(item)
-            splitViewController.addSplitViewItem(editor)
+            splitViewController.addSplitViewItem(editorItem)
             splitViewController.addSplitViewItem(preview)
         } else {
-            splitViewController.addSplitViewItem(editor)
+            splitViewController.addSplitViewItem(editorItem)
             splitViewController.addSplitViewItem(preview)
             splitViewController.addSplitViewItem(item)
         }
         sidebarItem = item
         previewItem = preview
-        editorItem = editor
+        updateTabStripInset()
+    }
+
+    /// The strip clears the traffic lights only when they sit over the editor
+    /// pane — with a left sidebar showing, they are over the sidebar instead.
+    private func updateTabStripInset() {
+        let leftSidebarShowing =
+            preferences.sidebarSide == .left && !(sidebarItem?.isCollapsed ?? true)
+        tabBarLeading?.constant = leftSidebarShowing ? 12 : Layout.trafficLightInset
     }
 
     private func configureTextView() {
@@ -686,8 +581,7 @@ final class MainWindowController: NSWindowController {
             rebuildSplitItems()
         }
         refreshImages(force: true)
-        applyPreviewMode()
-        updateModeControlOverlays()
+        applyPreviewVisibility()
         renderMarkdownPreview()
         vimEngine.isEnabled = preferences.vimMode
         applyFooterVisibility()
@@ -755,7 +649,7 @@ final class MainWindowController: NSWindowController {
         note.selectionLocation = max(0, min(tab.selection, note.storage.length))
         // A session written before the pane was per-tab says nothing, and
         // those tabs come back without it.
-        note.previewMode = tab.previewMode ?? .off
+        note.showsPreview = tab.showsPreview ?? false
         return note
     }
 
@@ -798,28 +692,20 @@ final class MainWindowController: NSWindowController {
         let location = max(0, min(note.selectionLocation, note.storage.length))
         textView.setSelectedRange(NSRange(location: location, length: 0))
         textView.scrollRangeToVisible(textView.selectedRange())
+        window?.makeFirstResponder(textView)
         lineNumberRuler?.refresh()
-        // The mode belongs to the tab, so switching tabs opens, splits or
-        // collapses for the tab you land on. Not animated: the tab's other
-        // half is simply there or not, the way its text is, rather than
-        // sliding in behind the note you asked for. It comes before the
-        // keyboard is handed out — in reading mode the editor is collapsed
-        // and cannot take it.
-        applyPreviewMode(animated: false)
-        updatePreviewModeControl()
-        updateModeControlOverlays()
-        focusForPreviewMode()
+        // The pane belongs to the tab, so switching tabs opens or closes it.
+        // Not animated: the tab's other half is simply there or not, the way
+        // its text is, rather than sliding in behind the note you asked for.
+        applyPreviewVisibility(animated: false)
         renderMarkdownPreview()
     }
 
-    /// Also re-asks whether the tab in front is Markdown: ⌘S is where an
-    /// untitled note gets a name, and a `.txt` has no mode control.
     private func refreshTabs() {
         tabBar.setItems(
             notes.map { TabBarItem(title: $0.title, isDirty: $0.isDirty) },
             selectedIndex: selectedIndex
         )
-        updateModeControlOverlays()
     }
 
     private func updateStatus() {
@@ -1130,16 +1016,6 @@ final class MainWindowController: NSWindowController {
             return
         }
         addTab(fileURL: target, text: opened.text, format: opened.format)
-        // The setting is about opening files, not about restoring them: a tab
-        // coming back from the session keeps the mode it was left in.
-        if preferences.opensMarkdownInReadingMode, Self.isMarkdown(target) {
-            setPreviewMode(.reading)
-        }
-    }
-
-    /// Markdown by extension, the way the save panel spells it.
-    static func isMarkdown(_ url: URL) -> Bool {
-        ["md", "markdown"].contains(url.pathExtension.lowercased())
     }
 
     private func presentFailure(_ message: String, _ error: Error?, detail: String? = nil) {
@@ -1245,15 +1121,12 @@ extension MainWindowController {
         isZenMode = enabled
 
         let chrome: [NSView] = [
-            tabBar, tabStripBackground, statusSeparator, statusLabel,
+            tabBar, statusSeparator, statusLabel,
             modeBadge, pendingKeysLabel, cursorLabel,
         ]
 
-        // The strip goes, so the columns start at the window's own top edge;
-        // the mode control goes with it, in `updateModeControlOverlays`.
-        splitTopToStrip?.isActive = false
-        splitTopToRoot?.isActive = false
-        (enabled ? splitTopToRoot : splitTopToStrip)?.isActive = true
+        editorTopToTabBar?.isActive = !enabled
+        editorTopToPane?.isActive = enabled
         editorBottomToStatus?.isActive = !enabled
         editorBottomToPane?.isActive = enabled
         // The footer goes; the pane does not — `:` has to work in zen mode.
@@ -1328,12 +1201,6 @@ private final class FindBarScrollView: NSScrollView {
         didSet { FindBarScrollView.removeFocusRing(from: findBarView) }
     }
 
-    /// Run when ⌘F's bar opens or closes. The bar takes the top of the editor,
-    /// which is where the mode control floats, so the window controller sends
-    /// the control away for as long as the bar is up.
-    var onFindBarVisibilityChange: ((Bool) -> Void)?
-    private var wasFindBarVisible = false
-
     /// A few of the bar's own decorations (its buttons' and segments' title
     /// labels are `NSTextField`s too) are only realized once the bar lays
     /// itself out, which happens after `findBarView` is first set — so the
@@ -1343,20 +1210,6 @@ private final class FindBarScrollView: NSScrollView {
     override func layout() {
         super.layout()
         FindBarScrollView.removeFocusRing(from: findBarView)
-        reportFindBarVisibility()
-    }
-
-    /// `tile` is where the scroll view re-arranges its own parts, which is
-    /// what showing and hiding the bar does — `layout` is not called for it.
-    override func tile() {
-        super.tile()
-        reportFindBarVisibility()
-    }
-
-    private func reportFindBarVisibility() {
-        guard isFindBarVisible != wasFindBarVisible else { return }
-        wasFindBarVisible = isFindBarVisible
-        onFindBarVisibilityChange?(isFindBarVisible)
     }
 
     /// Walks the bar's whole subview tree and turns off the focus ring on
@@ -1588,145 +1441,41 @@ extension MainWindowController: TabPickerPanelDelegate {
 
 extension MainWindowController {
 
-    /// Whether the render is up, what it is showing, and which mode the tab
-    /// in front is in — for the tests.
-    var previewState: (isVisible: Bool, renderedText: String, mode: PreviewMode) {
-        (previewIsVisible, markdownPreview.renderedText, previewMode)
+    /// Whether the pane is up, and what it is showing — for the tests.
+    var previewState: (isVisible: Bool, renderedText: String) {
+        (previewIsVisible, markdownPreview.renderedText)
     }
 
-    /// What the tab in front asks for — what the View menu's checkmarks say,
-    /// whether or not zen is hiding the chrome at this moment.
-    var previewMode: PreviewMode { currentNote?.previewMode ?? .off }
+    /// Whether the tab in front asks for the pane — what the View menu's
+    /// checkmark says, whether or not zen is hiding it at this moment.
+    var showsMarkdownPreview: Bool { currentNote?.showsPreview ?? false }
 
-    /// ⇧⌘P. Off → split → reading → off. The mode belongs to the tab, not to
-    /// the app: a Markdown note keeps it — across relaunches, through the
-    /// session — while the next ⌘T opens in the editor.
+    /// ⇧⌘P. The pane belongs to the tab, not to the app: a Markdown note
+    /// keeps its preview — across relaunches, through the session — while the
+    /// next ⌘T opens without one.
     func toggleMarkdownPreview() {
-        setPreviewMode(previewMode.next)
-    }
-
-    /// ⌥⇧⌘P. Straight to the render, and straight back out of it.
-    func toggleReadingMode() {
-        setPreviewMode(previewMode == .reading ? .off : .reading)
-    }
-
-    /// The one way the mode ever changes: the menu, ⇧⌘P, the row's control,
-    /// a block click and a keystroke in reading mode all come through here.
-    func setPreviewMode(_ mode: PreviewMode) {
         guard let note = currentNote else { return }
-        note.previewMode = mode
-        applyPreviewMode(animated: true)
+        note.showsPreview.toggle()
+        applyPreviewVisibility(animated: true)
         renderMarkdownPreview()
-        updatePreviewModeControl()
         flush()
-        focusForPreviewMode()
+        // The pane is read, not typed in: whatever it does to the layout, the
+        // caret stays where it was.
+        focusEditor()
     }
 
-    /// What the layout may show: the tab asks, zen answers. Zen keeps the
-    /// text alone, so the pane beside the editor is chrome and goes; reading
-    /// mode is not a pane beside anything — zen there is the render alone,
-    /// which is the whole point of asking for it.
-    private var effectivePreviewMode: PreviewMode {
-        guard isZenMode else { return previewMode }
-        return previewMode == .reading ? .reading : .off
-    }
-
-    /// Collapses and expands the two items to match. Leaving zen brings back
-    /// whatever the tab asks for.
-    private func applyPreviewMode(animated: Bool = true) {
-        let mode = effectivePreviewMode
-        guard mode != installedPreviewMode else { return }
-        installedPreviewMode = mode
+    /// The tab says whether the pane is wanted; zen says whether it may be
+    /// shown. Leaving zen brings back whatever the tab asks for.
+    private func applyPreviewVisibility(animated: Bool = true) {
+        let shouldShow = showsMarkdownPreview && !isZenMode
+        guard shouldShow != previewIsVisible else { return }
+        previewIsVisible = shouldShow
         // There is nothing to animate in a window nobody is looking at, and
         // an animation still in flight when the split items are rebuilt under
         // it — the sidebar changing sides — takes AppKit with it.
-        let live = animated && window?.isVisible == true
-        let preview = live ? previewItem?.animator() : previewItem
-        let editor = live ? editorItem?.animator() : editorItem
-        // Whichever item is about to hold the column is expanded first: the
-        // two are never both collapsed, even for an instant.
-        if mode == .reading {
-            preview?.isCollapsed = false
-            editor?.isCollapsed = true
-        } else {
-            editor?.isCollapsed = false
-            preview?.isCollapsed = mode == .off
-        }
-        markdownPreview.takesKeyboard = mode == .reading
-        updateModeControlOverlays()
-    }
-
-    /// The render is read, not typed in — so the keyboard stays in the editor,
-    /// except in reading mode, where the editor is not on screen to hold it.
-    private func focusForPreviewMode() {
-        if installedPreviewMode == .reading {
-            markdownPreview.focus(in: window)
-        } else {
-            focusEditor()
-        }
-    }
-
-    /// The overlay whose control the reader can actually reach — the editor
-    /// column's in the editor and split modes, the preview column's in
-    /// reading, where the editor column is collapsed and is not on screen to
-    /// hold one.
-    var visibleModeControlOverlay: ModeControlOverlay {
-        installedPreviewMode == .reading ? previewModeOverlay : editorModeOverlay
-    }
-
-    /// The control in that overlay. The two are kept in step, so either
-    /// answers for the other; this is the one on screen, which is what a test
-    /// asking about the layout wants.
-    var previewModeControl: NSSegmentedControl { visibleModeControlOverlay.modeControl }
-
-    /// Both overlays' controls follow the tab in front — a tab switch, ⇧⌘P, a
-    /// block click, a keystroke in reading mode, a restored session. The tints
-    /// go with the selection: the idle segments are the quiet ones.
-    private func updatePreviewModeControl() {
-        let index = PreviewMode.allCases.firstIndex(of: previewMode) ?? 0
-        for overlay in [editorModeOverlay, previewModeOverlay] {
-            if overlay.modeControl.selectedSegment != index {
-                overlay.modeControl.selectedSegment = index
-            }
-            overlay.applySegmentTints()
-        }
-    }
-
-    /// A Markdown tab is one whose file is spelled `.md` or `.markdown`, and
-    /// an untitled one, which ⌘S saves as `.md` by default.
-    private var currentNoteIsMarkdown: Bool {
-        guard let note = currentNote else { return false }
-        guard let fileURL = note.fileURL else { return true }
-        return Self.isMarkdown(fileURL)
-    }
-
-    /// Which column the mode control hovers over, if either does. Only a
-    /// Markdown tab has one at all, zen has none, and reading mode moves it
-    /// across the divider — the editor column is collapsed there. The ⌘F bar
-    /// takes the editor's away while it is up: it opens above the text, right
-    /// where the control floats, and its own buttons must stay clickable.
-    fileprivate func updateModeControlOverlays() {
-        let available = currentNoteIsMarkdown && !isZenMode
-        let onPreview = available && installedPreviewMode == .reading
-        editorModeOverlay.setAvailable(available && !onPreview && !scrollView.isFindBarVisible)
-        previewModeOverlay.setAvailable(onPreview)
-
-        // Deactivated before activated: two tops on one view, even for an
-        // instant, is an unsatisfiable layout.
-        editorTopToPane?.isActive = false
-        editorTopToZen?.isActive = false
-        (isZenMode ? editorTopToZen : editorTopToPane)?.isActive = true
-    }
-
-    /// Reading mode's way back to the text: the editor comes out from under
-    /// the render, and whatever asked for it — a typed character, a ⌘F —
-    /// happens there. `false` when there was no reading mode to leave, which
-    /// leaves the pane to do its own thing with the event.
-    private func leaveReadingMode(for action: (JotTextView) -> Void) -> Bool {
-        guard previewMode == .reading else { return false }
-        setPreviewMode(.split)
-        action(textView)
-        return true
+        let target = animated && window?.isVisible == true
+            ? previewItem?.animator() : previewItem
+        target?.isCollapsed = !shouldShow
     }
 
     /// Debounced, like the cache write: a burst of keystrokes re-renders once,
@@ -1763,9 +1512,6 @@ extension MainWindowController {
     /// of the source it came from and show it.
     private func goToSource(_ source: NSRange) {
         guard let note = currentNote else { return }
-        // Clicking a block in reading mode is asking for the text behind it,
-        // so the editor comes back beside the render with the caret on it.
-        if previewMode == .reading { setPreviewMode(.split) }
         let location = max(0, min(source.location, note.storage.length))
         // A jump is a move, not a typing session: vim comes back to normal
         // mode for it, the way `gg` or a mark would leave you.
@@ -1877,6 +1623,7 @@ extension MainWindowController {
 
         sidebarIsVisible = shouldShow
         sidebarItem?.animator().isCollapsed = !shouldShow
+        updateTabStripInset()
     }
 
     /// Called when a chip is clicked: bring the sidebar out if it is away.
@@ -2245,20 +1992,5 @@ private final class BackgroundView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.textBackgroundColor.setFill()
         dirtyRect.fill()
-    }
-}
-
-/// What the tabs sit on, right across the window: the same paper as the
-/// columns below, a hairline dividing it from them, and the whole of it
-/// draggable, since it is where the title bar used to be.
-private final class TabStripBackgroundView: NSView {
-    override var mouseDownCanMoveWindow: Bool { true }
-
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.textBackgroundColor.setFill()
-        dirtyRect.fill()
-
-        NSColor.separatorColor.setFill()
-        NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
     }
 }

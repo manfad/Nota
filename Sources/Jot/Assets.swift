@@ -206,25 +206,9 @@ final class AssetStore {
         return store(png, extension: "png")
     }
 
-    /// A file that already lives in the store is not imported again: a chip
-    /// dragged out to Finder and back, or an outside app handing our own path
-    /// over, re-links to the asset it already is instead of copying it.
     func importFile(at url: URL) -> String? {
-        if let existing = storedAssetID(at: url) { return existing }
         guard let data = try? Data(contentsOf: url) else { return nil }
         return importImageData(data, preferredExtension: url.pathExtension)
-    }
-
-    /// The asset a URL names when it points inside this store's directory.
-    /// Symlinks are resolved on both sides — a temporary directory is reached
-    /// through one on macOS, so the raw paths would never match.
-    private func storedAssetID(at url: URL) -> String? {
-        let assetID = url.lastPathComponent
-        let parent = url.deletingLastPathComponent().resolvingSymlinksInPath().path
-        guard parent == directory.resolvingSymlinksInPath().path, exists(assetID) else {
-            return nil
-        }
-        return assetID
     }
 
     /// Pulls the bytes out of an attachment that came from another app.
