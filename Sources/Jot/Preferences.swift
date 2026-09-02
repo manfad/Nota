@@ -102,6 +102,7 @@ final class Preferences {
         static let lineNumbers = "showsLineNumbers"
         static let gutterSeparator = "showsGutterSeparator"
         static let sidebarSide = "sidebarSide"
+        static let markdownReadingMode = "opensMarkdownInReadingMode"
         static let vimMode = "vimMode"
         static let footerWords = "footerShowsWords"
         static let footerCharacters = "footerShowsCharacters"
@@ -204,6 +205,18 @@ final class Preferences {
         set {
             guard newValue != sidebarSide else { return }
             defaults.set(newValue.rawValue, forKey: Key.sidebarSide)
+            announce()
+        }
+    }
+
+    /// Whether a `.md` or `.markdown` file opens as the render rather than as
+    /// text. Off: opening a file is opening it to edit unless you say
+    /// otherwise. Restoring a session ignores this — the tab's own mode wins.
+    var opensMarkdownInReadingMode: Bool {
+        get { defaults.object(forKey: Key.markdownReadingMode) as? Bool ?? false }
+        set {
+            guard newValue != opensMarkdownInReadingMode else { return }
+            defaults.set(newValue, forKey: Key.markdownReadingMode)
             announce()
         }
     }

@@ -23,12 +23,27 @@
 - Settings (⌘,): font family, size, line spacing, editor padding, vim mode, hotkey.
 - Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` · `N pt` beside gear.
 
-## Markdown preview (⇧⌘P, View menu, checkmark; per tab, remembered in the session)
-- A read-only rendered pane beside the editor (trailing side, resizable split, 50% default, min 240pt); the image sidebar
-  stays outermost. Works for any note. Hidden in zen (it is chrome); back when zen ends. Focus stays in the editor.
-- Per tab, not per app: ⇧⌘P opens the pane for the tab in front only, and switching tabs opens or collapses it for the
-  tab you land on — a new ⌘T tab and a freshly opened file start without it. The flag rides in `session.json`, so each
-  tab comes back the way it was left. The View menu's checkmark is the front tab's.
+## Markdown preview — three modes (⇧⌘P cycles, View menu; per tab, remembered in the session)
+- **Editor** (default), **Split**, **Reading**. ⇧⌘P cycles editor → split → reading → editor; ⌥⇧⌘P jumps to reading and
+  back out to the editor. The View menu keeps "Markdown Preview" (checkmarked in split and reading) and adds
+  "Reading Mode" (checkmarked in reading). Both checkmarks are the front tab's.
+- Split: a read-only rendered pane beside the editor (trailing side, resizable, 50% default, min 240pt); the image sidebar
+  stays outermost. Reading: the editor collapses and the render takes its column. Either way the window keeps its frame —
+  the panes share the room out between them. Works for any note.
+- Mode control in the tab strip: a small three-segment control at the trailing end (12pt inset, centred on the strip),
+  `pencil` / `rectangle.split.2x1` / `book` as monochrome template symbols, tool tips naming the state and its keys. The
+  ⇧⌘F field opens 8pt to its leading side; the tabs stop 8pt short of whichever is leading-most and scroll past it.
+  It follows the front tab, and clicking a segment sets the mode.
+- Getting back to the text from reading: click a block (→ split, caret on that block), type a printable character (→ split,
+  the key lands in the editor), or ⌘F (→ split, find bar). Arrow and page keys stay in the render and scroll it — the
+  keyboard belongs to the render in reading mode, and to the editor in the other two.
+- Zen: in split the pane is chrome and goes, leaving the text; in reading it is the note, so zen leaves the render alone
+  with no chrome and no editor. Either way the tab's mode is back when zen ends.
+- Per tab, not per app: ⇧⌘P sets the mode of the tab in front only, and switching tabs lays out for the tab you land on —
+  a new ⌘T tab starts in the editor. The mode rides in `session.json`, so each tab comes back the way it was left
+  (a session written when the pane was a yes/no comes back split where it was open).
+- Settings "Open Markdown files in reading mode" (default off): opening a `.md` / `.markdown` file opens that tab in
+  reading. Session restore ignores it — the tab's saved mode wins.
 - Native: Foundation's Markdown parser (`AttributedString(markdown:)`, full interpretation) + Jot's own block styling.
   No WebView, no dependencies, no theming. Same font family/size as the editor; headings scale from it (H1 ×1.6 … H6 ×1.0,
   semibold); lists indented with `•` / `1.`; block quotes with a leading hairline bar in secondaryLabelColor; code spans

@@ -1,5 +1,47 @@
 import AppKit
 
+/// What a tab does with the Markdown render: nothing, beside the editor, or
+/// instead of it. The case order is the order ⇧⌘P cycles them in, and the
+/// order the tab strip's segments sit in.
+enum PreviewMode: String, Codable, CaseIterable {
+    case off, split, reading
+
+    /// The next one round the ring — what ⇧⌘P moves to.
+    var next: PreviewMode {
+        let all = Self.allCases
+        let index = all.firstIndex(of: self) ?? 0
+        return all[(index + 1) % all.count]
+    }
+
+    /// The segment's picture in the tab strip.
+    var symbolName: String {
+        switch self {
+        case .off: "pencil"
+        case .split: "rectangle.split.2x1"
+        case .reading: "book"
+        }
+    }
+
+    /// What the segment is called — the tool tip's first half, and the label
+    /// VoiceOver reads.
+    var controlTitle: String {
+        switch self {
+        case .off: "Editor"
+        case .split: "Split"
+        case .reading: "Reading"
+        }
+    }
+
+    /// The tool tip: the state, then the keys that get to it.
+    var controlToolTip: String {
+        switch self {
+        case .off: controlTitle + "  ⇧⌘P"
+        case .split: controlTitle + "  ⇧⌘P"
+        case .reading: controlTitle + "  ⌥⇧⌘P"
+        }
+    }
+}
+
 /// One tab. Each note owns its own text storage and undo manager, so undo
 /// never bleeds between tabs — switching tabs swaps both into the single
 /// shared text view.
@@ -18,10 +60,10 @@ final class Note {
     /// note, so nothing about it is worth keeping.
     var isScratch: Bool = false
     var selectionLocation: Int = 0
-    /// Whether this tab wants the Markdown preview pane beside it. Per tab,
-    /// not per app: ⇧⌘P on a Markdown note must not follow you into the next
-    /// ⌘T. Off until asked for.
-    var showsPreview: Bool = false
+    /// What this tab does with the Markdown render — off, split or reading.
+    /// Per tab, not per app: ⇧⌘P on a Markdown note must not follow you into
+    /// the next ⌘T. Off until asked for.
+    var previewMode: PreviewMode = .off
     /// The shape the file was in when it was opened — encoding, byte-order
     /// mark, line endings — and the shape ⌘S puts back. A note that has never
     /// been a file starts out as UTF-8 with LF lines.
@@ -66,7 +108,7 @@ final class Note {
             // Only a real file has a shape worth keeping; an untitled note
             // comes back as the default whatever happened in between.
             format: fileURL == nil ? nil : format,
-            showsPreview: showsPreview
+            previewMode: previewMode
         )
     }
 }

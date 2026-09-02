@@ -607,15 +607,20 @@ final class MarkdownPreviewTests: XCTestCase {
         _ = NSApplication.shared
         let controller = try makeController()
         XCTAssertFalse(controller.previewState.isVisible, "off until asked for")
-        XCTAssertFalse(controller.showsMarkdownPreview, "and the checkmark is off with it")
+        XCTAssertEqual(controller.previewMode, .off, "and the checkmark is off with it")
 
         controller.toggleMarkdownPreview()
         XCTAssertTrue(controller.previewState.isVisible)
-        XCTAssertTrue(controller.showsMarkdownPreview)
+        XCTAssertEqual(controller.previewMode, .split)
+
+        // Reading is the third stop of the cycle, and the pane is still up.
+        controller.toggleMarkdownPreview()
+        XCTAssertTrue(controller.previewState.isVisible)
+        XCTAssertEqual(controller.previewMode, .reading)
 
         controller.toggleMarkdownPreview()
         XCTAssertFalse(controller.previewState.isVisible)
-        XCTAssertFalse(controller.showsMarkdownPreview)
+        XCTAssertEqual(controller.previewMode, .off)
     }
 
     /// ⇧⌘P on one tab is about that tab. Opening the pane on a Markdown note
@@ -628,7 +633,7 @@ final class MarkdownPreviewTests: XCTestCase {
 
         controller.newTab()
         XCTAssertFalse(controller.previewState.isVisible, "a new tab opens without it")
-        XCTAssertFalse(controller.showsMarkdownPreview)
+        XCTAssertEqual(controller.previewMode, .off)
         XCTAssertEqual(previewItem(of: controller)?.isCollapsed, true)
 
         controller.selectTab(at: 0)
@@ -638,10 +643,10 @@ final class MarkdownPreviewTests: XCTestCase {
         // And the other way round: turning it on in the second tab leaves the
         // first one alone.
         controller.selectTab(at: 1)
-        controller.toggleMarkdownPreview()
+        controller.setPreviewMode(.split)
         XCTAssertTrue(controller.previewState.isVisible)
         controller.selectTab(at: 0)
-        controller.toggleMarkdownPreview()
+        controller.setPreviewMode(.off)
         XCTAssertFalse(controller.previewState.isVisible)
         controller.selectTab(at: 1)
         XCTAssertTrue(controller.previewState.isVisible, "the second tab kept its own answer")
@@ -672,7 +677,7 @@ final class MarkdownPreviewTests: XCTestCase {
 
         do {
             let controller = try makeController(in: directory)
-            controller.toggleMarkdownPreview()
+            controller.setPreviewMode(.split)
             controller.newTab()
             XCTAssertFalse(controller.previewState.isVisible)
             controller.flushAll()
@@ -703,7 +708,7 @@ final class MarkdownPreviewTests: XCTestCase {
         )
 
         let state = try XCTUnwrap(SessionStore(directory: directory).load())
-        XCTAssertNil(state.tabs.first?.showsPreview)
+        XCTAssertNil(state.tabs.first?.previewMode)
     }
 
     @MainActor
@@ -743,11 +748,11 @@ final class MarkdownPreviewTests: XCTestCase {
         window.setFrame(frame, display: false)
         window.layoutIfNeeded()
 
-        controller.toggleMarkdownPreview()
+        controller.setPreviewMode(.split)
         window.layoutIfNeeded()
         XCTAssertEqual(window.frame, frame, "opening the pane neither moves nor resizes it")
 
-        controller.toggleMarkdownPreview()
+        controller.setPreviewMode(.off)
         window.layoutIfNeeded()
         XCTAssertEqual(window.frame, frame, "and closing it leaves the frame exactly as it was")
     }
@@ -814,12 +819,12 @@ final class MarkdownPreviewTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         controller.focusEditor()
 
-        controller.toggleMarkdownPreview()
+        controller.setPreviewMode(.split)
         XCTAssertTrue(
             window.firstResponder is JotTextView,
             "the pane is read, not typed in"
         )
-        controller.toggleMarkdownPreview()
+        controller.setPreviewMode(.off)
         XCTAssertTrue(window.firstResponder is JotTextView)
     }
 
@@ -861,7 +866,7 @@ final class MarkdownPreviewTests: XCTestCase {
 
         // The pane is per tab, so the second one has to ask for it too.
         controller.newTab()
-        controller.toggleMarkdownPreview()
+        controller.setPreviewMode(.split)
         XCTAssertEqual(controller.previewState.renderedText, "", "the new tab is empty")
 
         controller.selectTab(at: 0)
@@ -884,7 +889,7 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(controller.previewState.renderedText, "")
 
         // Turning it on renders what is already there.
-        controller.toggleMarkdownPreview()
+        controller.setPreviewMode(.split)
         XCTAssertEqual(controller.previewState.renderedText, "Unseen")
     }
 
@@ -920,7 +925,7 @@ final class MarkdownPreviewTests: XCTestCase {
             "a collapsed pane is not in the window at all"
         )
 
-        controller.toggleMarkdownPreview()
+        controller.setPreviewMode(.split)
         controller.window?.layoutIfNeeded()
         let preview = try previewView(of: controller)
         XCTAssertEqual(preview.headerTitle, "Markdown Preview")
@@ -1196,6 +1201,427 @@ final class MarkdownPreviewTests: XCTestCase {
         )
     }
 
+    // MARK: - Reading mode
+
+    /// ⌥⇧⌘P is the shortcut for the render on its own: straight to it from
+    /// wherever the tab was, and straight back out of it.
+    @MainActor
+    func testReadingModeJumpsStraightThereAndBackAgain() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+
+        controller.toggleReadingMode()
+        XCTAssertEqual(controller.previewMode, .reading)
+        XCTAssertTrue(controller.previewState.isVisible)
+
+        controller.toggleReadingMode()
+        XCTAssertEqual(controller.previewMode, .off, "and back to the text, not to the split")
+
+        // From the split it is one step in, one step out.
+        controller.setPreviewMode(.split)
+        controller.toggleReadingMode()
+        XCTAssertEqual(controller.previewMode, .reading)
+    }
+
+    /// Reading mode collapses the editor rather than the window: the render
+    /// takes the column the text had, and the frame is the frame it was.
+    @MainActor
+    func testReadingModeCollapsesTheEditorAndNeverTheWindow() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        let editor = try XCTUnwrap(editorItem(of: controller))
+
+        XCTAssertTrue(editor.canCollapse, "the editor has to be collapsible to get out of the way")
+        XCTAssertEqual(
+            editor.collapseBehavior, .preferResizingSiblingsWithFixedSplitView,
+            "the render takes the room the editor gives up; the window keeps its size"
+        )
+
+        let frame = NSRect(x: 120, y: 140, width: 1100, height: 620)
+        window.setFrame(frame, display: false)
+        window.layoutIfNeeded()
+
+        controller.setPreviewMode(.reading)
+        window.layoutIfNeeded()
+        XCTAssertEqual(editor.isCollapsed, true, "the text is not on screen in reading mode")
+        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
+        XCTAssertEqual(window.frame, frame, "going in neither moves nor resizes the window")
+
+        controller.setPreviewMode(.split)
+        window.layoutIfNeeded()
+        XCTAssertEqual(editor.isCollapsed, false, "and the editor is back beside the render")
+        XCTAssertEqual(window.frame, frame)
+
+        controller.setPreviewMode(.off)
+        window.layoutIfNeeded()
+        XCTAssertEqual(editor.isCollapsed, false)
+        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, true)
+        XCTAssertEqual(window.frame, frame, "and coming all the way out leaves it where it was")
+    }
+
+    /// The two panes are never both collapsed, not even for the instant a
+    /// mode change takes — that would leave the window showing nothing.
+    @MainActor
+    func testSomethingIsAlwaysOnScreenAsTheModesChange() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let editor = try XCTUnwrap(editorItem(of: controller))
+        let preview = try XCTUnwrap(previewItem(of: controller))
+
+        for mode in [PreviewMode.reading, .off, .reading, .split, .off] {
+            controller.setPreviewMode(mode)
+            XCTAssertFalse(
+                editor.isCollapsed && preview.isCollapsed,
+                "nothing to look at in \(mode.rawValue)"
+            )
+        }
+    }
+
+    /// In reading mode the keyboard belongs to the render — the editor is not
+    /// on screen to hold it — and it goes back the moment the editor is.
+    @MainActor
+    func testTheRenderTakesTheKeyboardOnlyInReadingMode() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+
+        controller.setPreviewMode(.reading)
+        XCTAssertFalse(
+            window.firstResponder is JotTextView,
+            "the editor is collapsed; it cannot be where the keys go"
+        )
+
+        controller.setPreviewMode(.split)
+        XCTAssertTrue(window.firstResponder is JotTextView, "the caret is back in the text")
+    }
+
+    /// Reading mode's way back to the text: type, and the editor is there
+    /// with the character you typed already in it.
+    @MainActor
+    func testAPrintableKeyInReadingModeBringsTheEditorBackAndTakesTheKey() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        let editor = try editorTextView(of: controller)
+
+        controller.setPreviewMode(.reading)
+        try type("x", into: controller)
+
+        XCTAssertEqual(controller.previewMode, .split, "typing is a request for the editor")
+        XCTAssertEqual(editor.string, "x", "and the key that asked for it is not swallowed")
+        XCTAssertTrue(window.firstResponder is JotTextView)
+    }
+
+    /// An arrow key is the render's own — it walks the page rather than
+    /// asking for the editor back.
+    @MainActor
+    func testAnArrowKeyInReadingModeStaysInTheRender() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        controller.setPreviewMode(.reading)
+
+        // 0xF701 is NSDownArrowFunctionKey — a private-use code point, not a
+        // character any note could hold.
+        try type("\u{F701}", into: controller, modifiers: .function)
+        XCTAssertEqual(controller.previewMode, .reading, "the render scrolls; the editor stays away")
+    }
+
+    /// ⌘F is a request to search the note, and the note is searched in the
+    /// editor — so reading mode hands the find on rather than swallowing it.
+    @MainActor
+    func testCommandFInReadingModeBringsTheEditorBackAndOpensTheFindBar() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        controller.setPreviewMode(.reading)
+        controller.window?.layoutIfNeeded()
+        let preview = try previewView(of: controller)
+        let rendered = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+
+        let find = NSMenuItem(title: "Find…", action: nil, keyEquivalent: "f")
+        find.tag = NSTextFinder.Action.showFindInterface.rawValue
+        XCTAssertTrue(
+            rendered.validateUserInterfaceItem(find),
+            "the menu item has to stay enabled or ⌘F never arrives here"
+        )
+        rendered.performTextFinderAction(find)
+
+        XCTAssertEqual(controller.previewMode, .split, "the search happens in the text")
+        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, false)
+    }
+
+    /// Clicking a block in reading mode is asking for the text behind it, so
+    /// the editor comes back beside the render with the caret on that block.
+    @MainActor
+    func testClickingABlockInReadingModeBringsTheEditorBackOnThatBlock() throws {
+        _ = NSApplication.shared
+        let controller = try makeControllerShowingPreview()
+        let editor = try editorTextView(of: controller)
+        editor.insertText(
+            "# Title\n\nFirst paragraph.\n\nSecond paragraph.",
+            replacementRange: editor.selectedRange()
+        )
+        waitForDebounce()
+
+        controller.setPreviewMode(.reading)
+        try clickPreview(of: controller, on: "Second paragraph.")
+
+        XCTAssertEqual(controller.previewMode, .split, "the text is what was asked for")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 27, length: 0))
+        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, false)
+    }
+
+    /// The mode is the tab's, all three of them: switching tabs lays out for
+    /// the tab you land on, un-animated, the way its text simply appears.
+    @MainActor
+    func testSwitchingTabsAppliesTheModeOfTheTabYouLandOn() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        controller.setPreviewMode(.split)
+        controller.newTab()
+        controller.setPreviewMode(.reading)
+        controller.newTab()
+        XCTAssertEqual(controller.previewMode, .off, "a new tab opens in the editor")
+
+        controller.selectTab(at: 1)
+        XCTAssertEqual(controller.previewMode, .reading)
+        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, true)
+        XCTAssertEqual(controller.previewModeControl.selectedSegment, 2)
+
+        controller.selectTab(at: 0)
+        XCTAssertEqual(controller.previewMode, .split)
+        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, false)
+        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
+        XCTAssertEqual(controller.previewModeControl.selectedSegment, 1)
+
+        controller.selectTab(at: 2)
+        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, true)
+        XCTAssertEqual(controller.previewModeControl.selectedSegment, 0)
+    }
+
+    /// The mode rides in `session.json`, so a tab comes back reading if that
+    /// is how it was left.
+    @MainActor
+    func testEachTabComesBackFromTheSessionInItsOwnMode() throws {
+        _ = NSApplication.shared
+        let directory = try makeTemporaryDirectory()
+
+        do {
+            let controller = try makeController(in: directory)
+            controller.setPreviewMode(.reading)
+            controller.newTab()
+            controller.setPreviewMode(.split)
+            controller.flushAll()
+        }
+
+        let relaunched = try makeController(in: directory)
+        XCTAssertEqual(relaunched.previewMode, .split, "the tab it opens on")
+        relaunched.selectTab(at: 0)
+        XCTAssertEqual(relaunched.previewMode, .reading)
+        XCTAssertEqual(editorItem(of: relaunched)?.isCollapsed, true)
+        XCTAssertEqual(relaunched.previewModeControl.selectedSegment, 2)
+    }
+
+    /// The pane used to be a yes/no. Those sessions still decode, and a tab
+    /// that had the pane open comes back split rather than losing it.
+    func testASessionWrittenWhenThePaneWasAYesOrNoComesBackSplit() throws {
+        let directory = try makeTemporaryDirectory()
+        let open = UUID()
+        let closed = UUID()
+        let json = """
+        {"fontSize":13,"selectedTabID":"\(open.uuidString)","tabs":[\
+        {"id":"\(open.uuidString)","isDirty":false,"selection":0,"showsPreview":true},\
+        {"id":"\(closed.uuidString)","isDirty":false,"selection":0,"showsPreview":false}]}
+        """
+        try json.write(
+            to: directory.appendingPathComponent("session.json"),
+            atomically: true, encoding: .utf8
+        )
+
+        let state = try XCTUnwrap(SessionStore(directory: directory).load())
+        XCTAssertEqual(state.tabs.map(\.previewMode), [.split, .off])
+    }
+
+    /// Round trip: what is written is the new key, and it reads back the same.
+    func testTheModeRoundTripsThroughTheSessionFile() throws {
+        let directory = try makeTemporaryDirectory()
+        let store = SessionStore(directory: directory)
+        let tab = SessionTab(
+            id: UUID(), path: nil, untitledName: "Untitled", isDirty: false,
+            selection: 0, format: nil, previewMode: .reading
+        )
+        store.save(SessionState(tabs: [tab], selectedTabID: tab.id, fontSize: 13))
+
+        let written = try String(
+            contentsOf: directory.appendingPathComponent("session.json"), encoding: .utf8
+        )
+        XCTAssertTrue(written.contains("\"previewMode\" : \"reading\""))
+        XCTAssertFalse(written.contains("showsPreview"), "the old key is not written back")
+        XCTAssertEqual(try XCTUnwrap(store.load()).tabs, [tab])
+    }
+
+    /// Zen in reading mode is the render on its own — the chrome goes, the
+    /// editor stays away, and the page is all that is left.
+    @MainActor
+    func testZenInReadingModeLeavesOnlyTheRender() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        controller.setPreviewMode(.reading)
+
+        controller.toggleZenMode()
+        XCTAssertTrue(controller.previewState.isVisible, "the render is the note here, not chrome")
+        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
+        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, true)
+
+        controller.toggleZenMode()
+        XCTAssertEqual(previewItem(of: controller)?.isCollapsed, false)
+        XCTAssertEqual(editorItem(of: controller)?.isCollapsed, true)
+    }
+
+    // MARK: - The mode control
+
+    @MainActor
+    func testTheModeControlSitsAtTheTrailingEndOfTheTabStrip() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        let content = try XCTUnwrap(window.contentView)
+        let control = controller.previewModeControl
+        let strip = try XCTUnwrap(descendant(of: content, ofType: TabBarView.self))
+        let search = try XCTUnwrap(descendant(of: content, ofType: NSSearchField.self))
+        window.layoutIfNeeded()
+
+        XCTAssertEqual(control.segmentCount, 3)
+        XCTAssertEqual(control.controlSize, .small)
+        XCTAssertEqual(control.trackingMode, .selectOne)
+        XCTAssertEqual(control.segmentStyle, .rounded)
+        // Measured off the alignment rect, which is what the constraints
+        // line up — a rounded bezel draws a point or two outside it.
+        let box = control.alignmentRect(forFrame: control.frame)
+        XCTAssertEqual(
+            box.maxX, content.bounds.maxX - 12, accuracy: 1.5,
+            "the same trailing inset the ⇧⌘F field keeps"
+        )
+        XCTAssertEqual(box.midY, strip.frame.midY, accuracy: 0.5, "centred on the strip")
+        XCTAssertEqual(
+            strip.frame.maxX, box.minX - 8, accuracy: 0.5,
+            "the tabs stop 8pt short of it, so none ever runs under it"
+        )
+        // The field is hidden until ⇧⌘F, but it is laid out all the same: it
+        // opens to the control's leading side rather than displacing it.
+        XCTAssertEqual(search.frame.maxX, box.minX - 8, accuracy: 0.5)
+
+        for (index, mode) in PreviewMode.allCases.enumerated() {
+            XCTAssertTrue(
+                control.image(forSegment: index)?.isTemplate ?? false,
+                "\(mode.rawValue) is monochrome, like everything else in the strip"
+            )
+            XCTAssertEqual(control.toolTip(forSegment: index), mode.controlToolTip)
+        }
+    }
+
+    /// The selected segment is the tab's mode, and clicking one sets it.
+    @MainActor
+    func testTheModeControlTracksTheModeAndSetsIt() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        let control = controller.previewModeControl
+        XCTAssertEqual(control.selectedSegment, 0)
+
+        controller.toggleMarkdownPreview()
+        XCTAssertEqual(control.selectedSegment, 1, "⇧⌘P moves the control with it")
+        controller.toggleMarkdownPreview()
+        XCTAssertEqual(control.selectedSegment, 2)
+
+        control.selectedSegment = 0
+        control.performClick(nil)
+        XCTAssertEqual(controller.previewMode, .off)
+        XCTAssertTrue(window.firstResponder is JotTextView, "and the keys go back to the text")
+
+        control.selectedSegment = 2
+        control.performClick(nil)
+        XCTAssertEqual(controller.previewMode, .reading)
+        XCTAssertFalse(window.firstResponder is JotTextView, "the render has the keys now")
+    }
+
+    /// It is chrome: it goes away with the strip it sits in.
+    @MainActor
+    func testTheModeControlHidesWithTheTabStripInZen() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let strip = try XCTUnwrap(
+            descendant(of: try XCTUnwrap(controller.window?.contentView), ofType: TabBarView.self)
+        )
+
+        controller.toggleZenMode()
+        waitForDebounce()
+        XCTAssertTrue(strip.isHidden)
+        XCTAssertTrue(controller.previewModeControl.isHidden, "it goes with the strip")
+
+        controller.toggleZenMode()
+        XCTAssertFalse(controller.previewModeControl.isHidden, "and comes back with it")
+    }
+
+    // MARK: - Opening Markdown files
+
+    /// The Settings switch is about Markdown, and about opening: a `.txt` is
+    /// text, and a restored tab keeps whatever mode it was left in.
+    @MainActor
+    func testTheSettingOpensMarkdownFilesInReadingMode() throws {
+        _ = NSApplication.shared
+        let previous = Preferences.shared.opensMarkdownInReadingMode
+        defer { Preferences.shared.opensMarkdownInReadingMode = previous }
+
+        let directory = try makeTemporaryDirectory()
+        let markdown = directory.appendingPathComponent("notes.md")
+        let text = directory.appendingPathComponent("notes.txt")
+        try "# Heading".write(to: markdown, atomically: true, encoding: .utf8)
+        try "plain".write(to: text, atomically: true, encoding: .utf8)
+
+        Preferences.shared.opensMarkdownInReadingMode = false
+        let off = try makeController()
+        off.open(url: markdown)
+        XCTAssertEqual(off.previewMode, .off, "off by default: a file opens to be edited")
+
+        Preferences.shared.opensMarkdownInReadingMode = true
+        let on = try makeController()
+        on.open(url: markdown)
+        XCTAssertEqual(on.previewMode, .reading)
+        XCTAssertEqual(editorItem(of: on)?.isCollapsed, true)
+
+        on.open(url: text)
+        XCTAssertEqual(on.previewMode, .off, "a .txt is not Markdown")
+
+        on.newTab()
+        XCTAssertEqual(on.previewMode, .off, "and ⌘T is not opening a file at all")
+    }
+
+    /// Session restore is not opening a file: the tab's own mode wins over
+    /// the setting, however the file is spelled.
+    @MainActor
+    func testRestoringASessionIgnoresTheOpenInReadingModeSetting() throws {
+        _ = NSApplication.shared
+        let previous = Preferences.shared.opensMarkdownInReadingMode
+        defer { Preferences.shared.opensMarkdownInReadingMode = previous }
+        Preferences.shared.opensMarkdownInReadingMode = true
+
+        let directory = try makeTemporaryDirectory()
+        let markdown = try makeTemporaryDirectory().appendingPathComponent("notes.md")
+        try "# Heading".write(to: markdown, atomically: true, encoding: .utf8)
+
+        do {
+            let controller = try makeController(in: directory)
+            controller.open(url: markdown)
+            XCTAssertEqual(controller.previewMode, .reading)
+            controller.setPreviewMode(.off)
+            controller.flushAll()
+        }
+
+        let relaunched = try makeController(in: directory)
+        XCTAssertEqual(relaunched.previewMode, .off, "closed is how it was left")
+    }
+
     // MARK: - Helpers
 
     @MainActor
@@ -1218,7 +1644,7 @@ final class MarkdownPreviewTests: XCTestCase {
     @MainActor
     private func makeControllerShowingPreview() throws -> MainWindowController {
         let controller = try makeController()
-        controller.toggleMarkdownPreview()
+        controller.setPreviewMode(.split)
         controller.window?.layoutIfNeeded()
         return controller
     }
@@ -1236,6 +1662,33 @@ final class MarkdownPreviewTests: XCTestCase {
         of controller: MainWindowController
     ) throws -> NSSplitViewController {
         try XCTUnwrap(controller.window?.contentViewController as? NSSplitViewController)
+    }
+
+    /// The item holding the editor — the one reading mode collapses.
+    @MainActor
+    private func editorItem(of controller: MainWindowController) -> NSSplitViewItem? {
+        try? splitViewController(of: controller).splitViewItems.first {
+            descendant(of: $0.viewController.view, ofType: JotTextView.self) != nil
+        }
+    }
+
+    /// A real key press aimed at whatever the window has focused — how a
+    /// keystroke reaches the render in reading mode.
+    @MainActor
+    private func type(
+        _ characters: String, into controller: MainWindowController,
+        modifiers: NSEvent.ModifierFlags = []
+    ) throws {
+        let window = try XCTUnwrap(controller.window)
+        let responder = try XCTUnwrap(window.firstResponder as? NSView)
+        let event = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: modifiers,
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: characters, charactersIgnoringModifiers: characters,
+            isARepeat: false, keyCode: 0
+        ))
+        responder.keyDown(with: event)
     }
 
     @MainActor

@@ -161,7 +161,7 @@ final class JotTests: XCTestCase {
 
         // Four label/control rows, laid out in one grid.
         let grid = window?.contentView?.subviews.compactMap { $0 as? NSGridView }.first
-        XCTAssertEqual(grid?.numberOfRows, 10)
+        XCTAssertEqual(grid?.numberOfRows, 11)
         XCTAssertEqual(grid?.numberOfColumns, 2)
 
         // Font popup offers the four designs plus "Other…".
@@ -179,13 +179,13 @@ final class JotTests: XCTestCase {
         )
 
         // Row labels, right-aligned in the first column.
-        let labels = (0..<9).compactMap {
+        let labels = (0..<10).compactMap {
             (grid?.cell(atColumnIndex: 0, rowIndex: $0).contentView as? NSTextField)?.stringValue
         }
         XCTAssertEqual(
             labels,
             ["Font", "Size", "Line spacing", "Padding", "Gutter", "Status bar",
-             "Image sidebar", "Vim mode", "Summon"]
+             "Image sidebar", "Markdown", "Vim mode", "Summon"]
         )
     }
 
@@ -1332,10 +1332,11 @@ final class JotTests: XCTestCase {
         let controller = MainWindowController(store: SessionStore(directory: directory))
         let window = try XCTUnwrap(controller.window)
         let split = try XCTUnwrap(window.contentViewController as? NSSplitViewController)
-        // Every pane that can collapse — sidebar and preview — makes the
-        // editor give up room rather than the window change its frame.
+        // Every pane that can collapse — sidebar, editor and preview: reading
+        // mode collapses the editor itself — gives up room to its siblings
+        // rather than letting the window change its frame.
         let collapsible = split.splitViewItems.filter(\.canCollapse)
-        XCTAssertEqual(collapsible.count, 2)
+        XCTAssertEqual(collapsible.count, 3)
         for item in collapsible {
             XCTAssertEqual(item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView)
         }

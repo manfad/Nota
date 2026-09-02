@@ -180,10 +180,42 @@ struct SessionTab: Codable, Equatable {
     /// Latin-1 file is still one after a relaunch. `nil` for a note with no
     /// file, and for a session written before Jot remembered any of this.
     var format: TextFileFormat?
-    /// Whether the tab had the Markdown preview pane open. `nil` in a session
+    /// Which of the three Markdown modes the tab was in. `nil` in a session
     /// written before the pane was a per-tab thing — those tabs come back
     /// without it.
-    var showsPreview: Bool?
+    var previewMode: PreviewMode?
+
+    /// Named, so the old yes/no key is decoded without being written back.
+    enum CodingKeys: String, CodingKey {
+        case id, path, untitledName, isDirty, selection, format, previewMode
+    }
+
+    private enum LegacyKeys: String, CodingKey {
+        case showsPreview
+    }
+}
+
+extension SessionTab {
+    /// Written before reading mode existed, the pane was a `showsPreview`
+    /// yes/no — and yes meant the pane beside the editor. Reading those files
+    /// back as `.split` is what keeps an upgrade from quietly closing panes.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        path = try container.decodeIfPresent(String.self, forKey: .path)
+        untitledName = try container.decodeIfPresent(String.self, forKey: .untitledName)
+        isDirty = try container.decode(Bool.self, forKey: .isDirty)
+        selection = try container.decode(Int.self, forKey: .selection)
+        format = try container.decodeIfPresent(TextFileFormat.self, forKey: .format)
+        if let mode = try container.decodeIfPresent(PreviewMode.self, forKey: .previewMode) {
+            previewMode = mode
+        } else {
+            let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+            previewMode = try legacy
+                .decodeIfPresent(Bool.self, forKey: .showsPreview)
+                .map { $0 ? .split : .off }
+        }
+    }
 }
 
 struct SessionState: Codable, Equatable {
