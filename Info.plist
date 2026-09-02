@@ -3,13 +3,15 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Jot</string>
+    <string>Nota</string>
     <key>CFBundleDisplayName</key>
-    <string>Jot</string>
+    <string>Nota</string>
     <key>CFBundleIdentifier</key>
-    <string>com.manfad.jot</string>
+    <string>com.manfad.nota</string>
     <key>CFBundleExecutable</key>
-    <string>Jot</string>
+    <string>Nota</string>
+    <key>CFBundleIconFile</key>
+    <string>Nota</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
@@ -20,7 +22,7 @@
     <string>14.0</string>
     <key>CFBundleDocumentTypes</key>
     <array>
-        <!-- Everything the system already knows is text or source. Jot is an
+        <!-- Everything the system already knows is text or source. Nota is an
              editor for all of it, ranked Alternate so it offers itself in
              "Open With" without taking anything over. -->
         <dict>

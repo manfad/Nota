@@ -2,16 +2,16 @@
 import PackageDescription
 
 let package = Package(
-    name: "Jot",
+    name: "Nota",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "Jot",
-            path: "Sources/Jot"
+            name: "Nota",
+            path: "Sources/Nota"
         ),
         .testTarget(
-            name: "JotTests",
-            dependencies: ["Jot"]
+            name: "NotaTests",
+            dependencies: ["Nota"]
         ),
     ],
     swiftLanguageVersions: [.v5]

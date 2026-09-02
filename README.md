@@ -1,4 +1,4 @@
-# Jot
+# Nota
 
 A small native macOS notepad — Notepad++ habits in a Notes.app body. One window,
 a tab strip in the title bar, a plain-text editor, a thin status line. AppKit,
@@ -10,7 +10,7 @@ highlighting.
 
 ## The cache model
 
-1. Every tab is continuously mirrored to `~/Library/Application Support/Jot/` —
+1. Every tab is continuously mirrored to `~/Library/Application Support/Nota/` —
    `session.json` for the tab list, cursor, font size, `cache/<uuid>.txt` for
    each tab's text, and `assets/` for inline images. Writes are atomic (temp
    file + rename).
@@ -26,16 +26,28 @@ highlighting.
    from the Dock is instant. Nothing ever prompts you on close or quit — the
    only prompt is closing a single dirty tab.
 
+### Coming from Jot
+
+The app used to be called Jot, and the first launch under the new name carries
+everything across by itself:
+
+- `~/Library/Application Support/Jot/` is renamed to `.../Nota/` in one move —
+  notes, cache and assets together, nothing copied and nothing left behind.
+- Settings move from the `com.manfad.jot` defaults domain to `com.manfad.nota`.
+- Image tokens were `![](jot://<uuid>.<ext>)` and are now `![](nota://…)`.
+  Both are read, always, so saved `.md` files keep rendering; a file that goes
+  through the editor gets the new spelling on its next save.
+
 ## Images
 
 Paste a screenshot, paste an image file, or drag a png/jpg/gif in from the
 Finder and it appears inline. Nothing about the file format changes: the image
-bytes go to `~/Library/Application Support/Jot/assets/<uuid>.<ext>` and the note
+bytes go to `~/Library/Application Support/Nota/assets/<uuid>.<ext>` and the note
 itself gets a plain-text token where the picture sits.
 
 ```
 Here is the crash:
-![](jot://5f3c1a9e-….png)
+![](nota://5f3c1a9e-….png)
 and here is the fix.
 ```
 
@@ -63,7 +75,7 @@ the Finder.
 An asset that has gone missing still gets a chip, reading `Image 1 — missing`,
 and keeps its token, so nothing is silently lost.
 
-Copying inside Jot moves images between tabs by reference — no second copy of
+Copying inside Nota moves images between tabs by reference — no second copy of
 the file is made. Copying out gives other apps an RTFD flavour carrying the
 image bytes, so Notes, Mail and Pages receive the picture, while anything
 asking for plain text gets the words with the tokens stripped out. Word and
@@ -71,8 +83,8 @@ character counts ignore images entirely.
 
 **Assets are never deleted automatically**, not even when you delete the image
 from a note or close the tab. A `.txt` you saved somewhere else may still point
-at one, and Jot has no way to know about those files. Prune
-`~/Library/Application Support/Jot/assets/` by hand if it ever grows.
+at one, and Nota has no way to know about those files. Prune
+`~/Library/Application Support/Nota/assets/` by hand if it ever grows.
 
 ## Shortcuts
 
@@ -93,7 +105,7 @@ at one, and Jot has no way to know about those files. Prune
 | ⌘P | Go to tab (fuzzy match on title) |
 | ⌘B | Show / hide the image sidebar |
 | ⌥⌘Z | Zen mode |
-| ⌥Space | Summon: show or hide Jot from anywhere |
+| ⌥Space | Summon: show or hide Nota from anywhere |
 | ⌥⌘I | Pin the image sidebar open or shut |
 | ⌘Z / ⇧⌘Z | Undo / redo — history is per tab |
 | ⌘Q | Quit |
@@ -117,7 +129,7 @@ On by default, off in Settings.
 bar and line-number gutter all fade out over 150ms, the sidebar collapses, and
 the text gets a 40pt margin. Every ⌘ shortcut still works — ⌘T and ⌘W without a
 visible strip, ⌘B to bring the sidebar back for the note you are on. The top
-28pt still drags the window. It is a per-session state: Jot always launches
+28pt still drags the window. It is a per-session state: Nota always launches
 with its chrome.
 
 ## Settings
@@ -134,16 +146,16 @@ tabs immediately — nothing needs a restart, and the font size stays in step wi
 ## Build and run
 
 ```sh
-./build.sh      # swift build -c release, assembles and ad-hoc signs Jot.app
-open Jot.app
+./build.sh      # swift build -c release, assembles and ad-hoc signs Nota.app
+open Nota.app
 swift test      # unit tests for the pure logic
 ```
 
-Set `JOT_SUPPORT_DIR` to point the cache at a scratch directory — handy for
+Set `NOTA_SUPPORT_DIR` to point the cache at a scratch directory — handy for
 exercising a real launch without touching the notes you are working on:
 
 ```sh
-JOT_SUPPORT_DIR=/tmp/jot-test ./Jot.app/Contents/MacOS/Jot
+NOTA_SUPPORT_DIR=/tmp/nota-test ./Nota.app/Contents/MacOS/Nota
 ```
 
 Requires macOS 14+ (the native sidebar and inspector split items) and a

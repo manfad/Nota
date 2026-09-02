@@ -1,4 +1,4 @@
-# Jot — product spec (decided 2026-09-01)
+# Nota — product spec (decided 2026-09-01)
 
 "Notepad++ in a Notes.app body." Native macOS, AppKit, SwiftPM, no dependencies.
 
@@ -6,7 +6,7 @@
 - **Tabs are the notes.** An open tab is the unit; the cache dir is the truth until ⌘S.
   Closed tabs are gone (after the Save / Don't Save / Cancel prompt; Don't Save = ⌘D).
 - Files are plain text of any kind — .md .txt .xml .json .css .js .html .yaml .toml .csv .log .ini .sh .py .swift and
-  anything else that is text (Notepad++ model). Jot registers as an editor for text/source types (Finder "Open With",
+  anything else that is text (Notepad++ model). Nota registers as an editor for text/source types (Finder "Open With",
   drag onto the Dock icon, drop onto the window). No syntax highlighting. Not .docx / .rtf / binaries.
 - Editing a named file only updates the cache; disk changes on ⌘S only. A named file keeps its extension, encoding
   (UTF-8 / UTF-16 / Latin-1 / Windows-1252 detected on open) and line endings (LF / CRLF) on save.
@@ -62,7 +62,7 @@
   way it was left (a session written when the pane was a yes/no comes back split where it was open).
 - Settings "Open Markdown files in reading mode" (default off): opening a `.md` file opens that tab in reading. Session
   restore ignores it — the tab's saved mode wins.
-- Native: Foundation's Markdown parser (`AttributedString(markdown:)`, full interpretation) + Jot's own block styling.
+- Native: Foundation's Markdown parser (`AttributedString(markdown:)`, full interpretation) + Nota's own block styling.
   No WebView, no dependencies, no theming. Same font family/size as the editor; headings scale from it (H1 ×1.6 … H6 ×1.0,
   semibold); lists indented with `•` / `1.`; block quotes with a leading hairline bar in secondaryLabelColor; code spans
   and fenced blocks in the monospaced system font on labelColor @ 5%; thematic break = hairline; tables as aligned
@@ -83,7 +83,9 @@
   Remembered per session; combine with ⌃⌘F for full screen if wanted.
 
 ## Images
-- Stored as originals in `<support>/assets/<uuid>.<ext>`; token in text `![](jot://<uuid>.<ext>)`.
+- Stored as originals in `<support>/assets/<uuid>.<ext>`; token in text `![](nota://<uuid>.<ext>)`.
+  Reading also accepts `![](jot://…)`, the scheme used before the app was renamed, so existing notes keep their pictures;
+  only `nota://` is ever written, so a file brought through the editor is updated on its next save.
 - Inline: always a text chip `Image N`, numbered in document order, renumbered live. Clicking one selects the chip itself, so ⌘C
   copies the picture and ⌫ or typing replaces it; in vim the block caret sits on it instead. Dragging and ⇧-clicking select as usual.
 - Sidebar (native split pane, 150pt, side per Settings): 104pt thumbnails with `Image N` captions. Auto-shows when the note has ≥1 image,
@@ -91,7 +93,7 @@
   Context menu: Copy Image / Save Image As… / Reveal in Finder. Bottom-pinned utility row with a Settings gear (leading edge).
 - ⌘A ⌘C carries images (RTFD) to other apps, and when the selection holds exactly one image the picture also goes
   as PNG/TIFF, so it pastes into terminals, browsers and Slack; two or more images offer no picture flavour.
-  Jot→Jot paste prefers Jot's own flavour, re-linking without duplicating assets.
+  Nota→Nota paste prefers Nota's own flavour, re-linking without duplicating assets.
 - Plain-text flavour (what a terminal actually receives): each image becomes `![Image N](<absolute asset path>)` by default, so
   an agent reading the paste can open the picture itself; Settings ("Copy images as:") can switch this back to a bare
   U+FFFC placeholder character per image, the old behaviour.
@@ -120,7 +122,7 @@
 - Ex commands: :w [name], :q (closes the tab), :q!, :wq, :x, :N, :s / :%s with g i flags, :noh,
   :tabnew, :tabn, :tabp, :e path. Unknown → "Not an editor command" in the status bar.
 - ⌘ shortcuts keep working in every mode.
-- Config file `~/.config/jot/vimrc` (vimscript subset): `map`/`noremap` and the n/i/v/o variants,
+- Config file `~/.config/nota/vimrc` (vimscript subset): `map`/`noremap` and the n/i/v/o variants,
   `unmap`, `let mapleader`, `<leader>`, `<C-x>` `<S-x>` `<A-x>` `<CR>` `<Esc>` `<Space>` key notation,
   `set`/`set no` for ignorecase smartcase incsearch hlsearch wrap number relativenumber scrolloff tabstop shiftwidth expandtab,
   `"` comments. Reloaded on save (file watcher) and via `:source`. Parse errors show line number in the status bar.
