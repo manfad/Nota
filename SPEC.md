@@ -108,6 +108,8 @@
 
 ## Tabs
 - Min readable width ~110pt, strip scrolls horizontally past that. A + pinned at the trailing end of the strip opens a new tab (same as ⌘T); overflowing tabs scroll in the remaining space. ⌘P fuzzy tab switcher by title.
+- The selected tab is always fully in view: a narrower window or a switch scrolls the strip to keep it, and only a trackpad scroll can move it out.
+- Tabs reorder by drag: the dragged tab rides the pointer and its neighbours slide into the gap; the order is the session's order.
 - Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab.
 
 ## Summon
@@ -155,3 +157,33 @@
 - The split slide can feel laggy with word wrap on: every frame narrows the editor, and the text view re-wraps the
   whole note to the new width as it goes. Fix candidates: freeze the editor's container width for the slide the way the
   render's is frozen, or slide a snapshot of the editor and re-wrap once on landing.
+
+## Todo (in rough priority)
+1. **LaTeX in the Markdown render.** `$…$` inline and `$$…$$` / ```` ```math ```` blocks. Same rules as the rest of the
+   render: no WebView, no dependency (so no KaTeX / MathJax / iosMath). Nota's own layout of a TeX subset into attributed
+   text: Greek and symbols by Unicode, `^` `_` as real super/subscript, `\frac` stacked with a hairline, `\sqrt` with a vinculum,
+   `\sum` `\int` `\prod` with limits, `\left(` `\right)` sized delimiters, `\text{}`, `\mathbf` `\mathit`, spacing `\,` `\;`
+   `\quad`. Anything the subset does not know renders as the raw TeX in the code-span style — never a broken render, never a
+   blank. Display math is its own block for block sync (click → source, caret → block lit). Cursor left of an unbalanced
+   `$` while typing must not swallow the rest of the note as math: a `$` closes only on the same line, `$$` within the block.
+   Fallback while unimplemented: leave `$…$` untouched as text (today Foundation's parser may eat the underscores).
+2. **External changes to an open file.** A named tab watches its file (DispatchSource on the fd); when it changes on disk
+   and the tab is clean, reload silently; when dirty, mark the tab and offer Reload / Keep mine on the next focus
+   (Notepad++ "file has been modified" without the modal storm). Missing file → the existing dirty behaviour.
+3. **Encoding and line endings in the status bar.** `UTF-8 · LF` at the right of the counts; click either for a menu that
+   converts (UTF-8 / UTF-16 / Latin-1 / Windows-1252; LF / CRLF). Conversion marks the tab dirty; ⌘S writes the new shape.
+4. **Go to line.** ⌘L opens a one-line pane (the vim command pane's chrome) taking `N` or `N:M`; `:N` already does it in vim.
+5. **File › Open Recent** (NSDocumentController's list, cleared from the same submenu) and tab reorder by drag in the strip.
+6. **Task lists** in the render: `- [ ]` / `- [x]` as real checkboxes, ticking one rewrites the source character; counted
+   `3 / 7 done` in the footer for a `.md` that has any.
+7. **Print / PDF of the render.** ⌥⌘P prints the reading layout (⌘P is the tab switcher); Export as PDF… in File, same
+   layout, page margins from the render's inset. Plain-text tabs print the text with line numbers if the gutter is on.
+8. **Line operations** the Notepad++ hands expect outside vim mode: ⌥↑ / ⌥↓ move line, ⇧⌥↓ duplicate, ⌘D duplicate/select-next,
+   ⌘/ toggle a `#`/`//` comment by extension, Tab / ⇧Tab indent a selection, ⌘] ⌘[ likewise.
+9. **Big files.** Open a 100 MB log and a 200k-line CSV without the gutter, the chip scan or the word count freezing the
+   run loop: count on a background queue, chip scan only the visible range, gutter numbers by line-index table.
+10. **Headings outline.** `@` in the ⌘P switcher lists the front `.md` tab's headings; choosing one puts the caret there
+    and, in split/reading, scrolls the render to the block.
+11. **Ship it.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on another Mac
+    without the Gatekeeper dance; `Nota.app.zip` as the release artifact next to the tag.
+12. Fix the word-wrap re-flow lag in the split slide (Known issues above).

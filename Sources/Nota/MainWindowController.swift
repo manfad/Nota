@@ -1179,6 +1179,26 @@ final class MainWindowController: NSWindowController {
         flush()
     }
 
+    /// A tab dragged along the strip. `index` and `newIndex` are the same
+    /// indices ⌘1–9, ⌃Tab, `gt`/`gT` and `:tabn`/`:tabp` already use — all of
+    /// them index `notes` directly — so once it is reordered here, every one
+    /// of those follows for free.
+    func moveTab(from index: Int, to newIndex: Int) {
+        guard notes.indices.contains(index), notes.indices.contains(newIndex),
+              index != newIndex else { return }
+        // The dragged tab is usually the selected one (mouse-down selects
+        // it), but handle the general case: keep pointing at whichever note
+        // was selected before the move, by identity, not by index.
+        let selectedNote = currentNote
+        let note = notes.remove(at: index)
+        notes.insert(note, at: newIndex)
+        if let selectedNote {
+            selectedIndex = notes.firstIndex { $0 === selectedNote } ?? selectedIndex
+        }
+        refreshTabs()
+        flush()
+    }
+
     func closeTab(at index: Int) {
         guard notes.indices.contains(index) else { return }
         let note = notes[index]
@@ -2617,6 +2637,10 @@ extension MainWindowController: TabBarViewDelegate {
 
     func tabBarDidRequestNewTab(_ bar: TabBarView) {
         newTab()
+    }
+
+    func tabBar(_ bar: TabBarView, didMove index: Int, to newIndex: Int) {
+        moveTab(from: index, to: newIndex)
     }
 }
 

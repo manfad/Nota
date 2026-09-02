@@ -1492,6 +1492,51 @@ final class MarkdownPreviewTests: XCTestCase {
         }
     }
 
+    /// `moveTab` is what a completed drag calls. The note itself moves, not
+    /// just whatever was at that index; selection follows the note that was
+    /// selected (the general case — a drag usually selects the tab it moves,
+    /// since mouse-down already does that, but the model has to hold either
+    /// way); ⌘1–9, ⌃Tab, `gt`/`gT` and `:tabn`/`:tabp` all index `notes`
+    /// directly, so they pick up the new order for free; and the order
+    /// survives a relaunch.
+    @MainActor
+    func testMovingATabReordersNotesKeepsSelectionAndPersists() throws {
+        _ = NSApplication.shared
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeController(in: directory) // tab 0: note.md
+        controller.open(url: try makeMarkdownFile(named: "second.md")) // tab 1
+        controller.open(url: try makeMarkdownFile(named: "third.md")) // tab 2
+        controller.selectTab(at: 1) // "second.md" — not the tab about to move
+
+        let window = try XCTUnwrap(controller.window)
+        let tabBar = try XCTUnwrap(
+            descendant(of: try XCTUnwrap(window.contentView), ofType: TabBarView.self)
+        )
+        tabBar.layoutSubtreeIfNeeded()
+        XCTAssertEqual(tabBar.titlesForTesting, ["note.md", "second.md", "third.md"])
+
+        controller.moveTab(from: 0, to: 2)
+        tabBar.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(tabBar.titlesForTesting, ["second.md", "third.md", "note.md"],
+                       "note.md moved, not just index 0's content")
+        XCTAssertEqual(controller.selectedTabIndex, 0, "selection followed \"second.md\", now first")
+        XCTAssertTrue(tabBar.isSelectedTabFullyVisible(), "the visibility rule holds after a drop too")
+
+        // ⌘1–9 (selectTab(at:)), ⌃Tab/⌃⇧Tab and gt/gT/:tabn/:tabp all read
+        // `notes` at the index they are given, so they already follow.
+        controller.selectNextTab()
+        XCTAssertEqual(controller.selectedTabIndex, 1, "next now means \"third.md\"")
+
+        controller.flushAll()
+        let persisted = try XCTUnwrap(SessionStore(directory: directory).load())
+        XCTAssertEqual(
+            persisted.tabs.map { ($0.path as NSString?)?.lastPathComponent },
+            ["second.md", "third.md", "note.md"],
+            "the reordered session survives a relaunch"
+        )
+    }
+
     // MARK: - Code boxes
 
     @MainActor

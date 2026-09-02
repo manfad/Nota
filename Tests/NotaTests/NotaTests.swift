@@ -1810,6 +1810,104 @@ final class NotaTests: XCTestCase {
         XCTAssertGreaterThan(hairline.height, 0)
     }
 
+    // MARK: - Tab bar
+
+    /// A narrower window or a switch always scrolls the selected tab fully
+    /// into view; only a manual trackpad scroll is allowed to move it out.
+    @MainActor
+    func testSelectedTabStaysInViewAcrossResizeAndSelection() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 600, height: TabBarView.height))
+        let tabs = (0..<4).map { TabBarItem(title: "Note \($0)", isDirty: false) }
+
+        bar.setItems(tabs, selectedIndex: 3)
+        bar.layoutSubtreeIfNeeded()
+        XCTAssertTrue(bar.isSelectedTabFullyVisible(), "last tab selected at full width")
+
+        // Narrowing the window past where the strip starts scrolling must
+        // not leave the selected tab stranded off the trailing edge.
+        bar.frame = NSRect(x: 0, y: 0, width: 300, height: TabBarView.height)
+        bar.layoutSubtreeIfNeeded()
+        XCTAssertTrue(bar.isSelectedTabFullyVisible(),
+                      "resize alone must re-anchor the selected tab")
+
+        // Selecting a different tab (e.g. the leading one) must scroll to it
+        // too, without needing an extra layout pass.
+        bar.setItems(tabs, selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+        XCTAssertTrue(bar.isSelectedTabFullyVisible(),
+                      "switching selection must re-anchor synchronously")
+    }
+
+    /// A completed drag reports `(from, to)` through the delegate; applying
+    /// that move the way `MainWindowController.moveTab` does and pushing it
+    /// back through `setItems` is what the strip then displays.
+    @MainActor
+    func testTabBarReportsAMoveAndReflectsTheNewOrderOnceApplied() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 600, height: TabBarView.height))
+        var tabs = (0..<4).map { TabBarItem(title: "Note \($0)", isDirty: false) }
+        bar.setItems(tabs, selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+
+        final class RecordingDelegate: TabBarViewDelegate {
+            var moved: (from: Int, to: Int)?
+            func tabBar(_ bar: TabBarView, didSelect index: Int) {}
+            func tabBar(_ bar: TabBarView, didRequestCloseAt index: Int) {}
+            func tabBarDidRequestNewTab(_ bar: TabBarView) {}
+            func tabBar(_ bar: TabBarView, didMove index: Int, to newIndex: Int) {
+                moved = (index, newIndex)
+            }
+        }
+        let recorder = RecordingDelegate()
+        bar.delegate = recorder
+
+        bar.moveTabForTesting(from: 0, to: 2)
+        let moved = try XCTUnwrap(recorder.moved)
+        XCTAssertEqual(moved.from, 0)
+        XCTAssertEqual(moved.to, 2)
+
+        // A no-op move reports nothing.
+        recorder.moved = nil
+        bar.moveTabForTesting(from: 1, to: 1)
+        XCTAssertNil(recorder.moved)
+
+        // Applying the reported move the way the delegate does, and pushing
+        // it back in, is what the strip is expected to show.
+        tabs.insert(tabs.remove(at: moved.from), at: moved.to)
+        bar.setItems(tabs, selectedIndex: moved.to)
+        bar.layoutSubtreeIfNeeded()
+        XCTAssertEqual(bar.titlesForTesting, ["Note 1", "Note 2", "Note 0", "Note 3"])
+        XCTAssertTrue(bar.isSelectedTabFullyVisible(), "the moved, still-selected tab stays in view")
+    }
+
+    /// A layout arriving mid-drag (a resize here) must not reset the dragged
+    /// tab's frame back to its plain-order slot — that would yank it out
+    /// from under the pointer. A tab count change mid-drag (⌘W closing a
+    /// tab) cancels the drag instead, since the session's slots would
+    /// otherwise be stale.
+    @MainActor
+    func testLayoutMidDragLeavesTheDraggedTabInPlaceAndACountChangeCancelsIt() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 600, height: TabBarView.height))
+        let tabs = (0..<4).map { TabBarItem(title: "Note \($0)", isDirty: false) }
+        bar.setItems(tabs, selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+
+        bar.beginDragForTesting(index: 1)
+        let xBeforeResize = try XCTUnwrap(bar.draggedTabXForTesting)
+
+        bar.frame = NSRect(x: 0, y: 0, width: 300, height: TabBarView.height)
+        bar.layoutSubtreeIfNeeded()
+        XCTAssertEqual(bar.draggedTabXForTesting, xBeforeResize,
+                       "a resize mid-drag must not move the dragged tab")
+
+        // ⌘W while dragging pushes a shorter item list — the drag can no
+        // longer trust its slots, so it is dropped rather than crashing.
+        bar.setItems(Array(tabs.dropLast()), selectedIndex: 0)
+        XCTAssertNil(bar.draggedTabXForTesting, "the count change cancelled the drag")
+    }
+
     // MARK: - Carried over from Jot
 
     /// Notes written before the rename hold `jot://` tokens. They still find

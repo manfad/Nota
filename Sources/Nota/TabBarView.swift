@@ -9,11 +9,13 @@ protocol TabBarViewDelegate: AnyObject {
     func tabBar(_ bar: TabBarView, didSelect index: Int)
     func tabBar(_ bar: TabBarView, didRequestCloseAt index: Int)
     func tabBarDidRequestNewTab(_ bar: TabBarView)
+    func tabBar(_ bar: TabBarView, didMove index: Int, to newIndex: Int)
 }
 
 /// The strip of tabs that sits in the title bar next to the traffic lights.
 /// Tabs keep a comfortable width until they run out of room, then shrink
-/// evenly down to a floor — no scrolling, no reordering.
+/// evenly down to a floor past that; they also reorder by dragging along
+/// the strip.
 final class TabBarView: NSView {
     weak var delegate: TabBarViewDelegate?
 
@@ -33,6 +35,17 @@ final class TabBarView: NSView {
     /// Tabs stop shrinking here; past it the strip scrolls instead.
     private static let minimumReadableWidth: CGFloat = 110
 
+    /// Drag-to-reorder tuning: how raised the dragged tab looks, how long a
+    /// slide/settle animation takes, the hot zone at either end of the
+    /// viewport that auto-scrolls, and how far each auto-scroll tick moves
+    /// the strip. The move-vs-click threshold itself lives on `TabItemView`,
+    /// the only place that needs it.
+    private static let draggedTabAlpha: CGFloat = 0.9
+    private static let dragAnimationDuration: TimeInterval = 0.15
+    private static let autoScrollEdge: CGFloat = 24
+    private static let autoScrollStep: CGFloat = 6
+    private static let autoScrollInterval: TimeInterval = 0.02
+
     private var items: [TabBarItem] = []
     private var selectedIndex = 0
     private var itemViews: [TabItemView] = []
@@ -40,6 +53,36 @@ final class TabBarView: NSView {
 
     /// How far the strip is scrolled when the tabs do not all fit.
     private var scrollOffset: CGFloat = 0
+
+    /// Re-anchoring the selected tab happens on selection change and on
+    /// viewport resize, but not on a manual trackpad scroll — these track
+    /// what `layout()` last saw so it can tell which case it is in.
+    private var lastViewportWidth: CGFloat?
+    private var lastAnchoredSelectedIndex: Int?
+    private var needsSelectedTabReveal = true
+
+    /// State for a tab currently being dragged along the strip. `nil` when
+    /// nothing is being dragged.
+    private struct DragSession {
+        /// Index of the dragged tab in `items`/`itemViews` — never changes
+        /// during the drag; only its visual slot does.
+        let originalIndex: Int
+        /// Where `originalIndex` currently sits in `visualOrder`.
+        var currentSlot: Int
+        /// Display order as the drag has rearranged it so far, as a
+        /// permutation of `items` indices. Never written back to `items` —
+        /// the delegate is told the final slot and owns the real reorder.
+        var visualOrder: [Int]
+        /// Readable widths snapshot at drag start, indexed like `items`.
+        let widths: [CGFloat]
+        let startPointerX: CGFloat
+        let startViewX: CGFloat
+        var lastPointerX: CGFloat
+    }
+
+    private var dragSession: DragSession?
+    private var dragAutoScrollTimer: Timer?
+    private var dragEscMonitor: Any?
 
     /// Empty strip is title-bar background, so dragging it moves the window.
     override var mouseDownCanMoveWindow: Bool { true }
@@ -65,11 +108,20 @@ final class TabBarView: NSView {
     }
 
     func setItems(_ items: [TabBarItem], selectedIndex: Int) {
+        // A tab closing (⌘W) or opening mid-drag changes the item count out
+        // from under `dragSession.visualOrder`, which is a permutation of
+        // indices sized for the old count — stale indices into it would be
+        // a crash waiting to happen, so the drag is simply abandoned first.
+        if dragSession != nil, items.count != itemViews.count {
+            cancelDrag()
+        }
         self.items = items
         self.selectedIndex = selectedIndex
+        // A pushed item list can change what is selected without changing
+        // the numeric index (e.g. a drag that shuffles tabs around the
+        // selected one) — always double-check visibility on the next pass.
+        needsSelectedTabReveal = true
         rebuild()
-        // Layout has to settle before the selected tab can be scrolled to.
-        DispatchQueue.main.async { [weak self] in self?.scrollSelectedTabIntoView() }
     }
 
     /// Trackpad and shift-wheel scrolling along the strip.
@@ -107,15 +159,53 @@ final class TabBarView: NSView {
         min(max(TabItemView.idealWidth(for: item), idealMinWidth), idealMaxWidth)
     }
 
+    /// Forces the next layout pass to re-anchor the selected tab, even if
+    /// neither the selection nor the viewport width has changed since the
+    /// last layout. Existing callers that expect an explicit nudge (e.g.
+    /// after `setItems`) keep working; the re-anchor itself now happens
+    /// synchronously inside `layout()`.
     func scrollSelectedTabIntoView() {
-        let viewport = tabsViewportWidth
-        guard itemViews.indices.contains(selectedIndex), contentWidth > viewport else { return }
-        let frame = itemViews[selectedIndex].frame
-        if frame.minX < 0 {
-            setScrollOffset(scrollOffset + frame.minX)
-        } else if frame.maxX > viewport {
-            setScrollOffset(scrollOffset + frame.maxX - viewport)
-        }
+        needsSelectedTabReveal = true
+        needsLayout = true
+    }
+
+    /// Test hook: whether the selected tab is on-screen, unhidden, and
+    /// entirely within the tabs viewport (never under the + button).
+    internal func isSelectedTabFullyVisible() -> Bool {
+        guard itemViews.indices.contains(selectedIndex) else { return false }
+        let view = itemViews[selectedIndex]
+        guard !view.isHidden else { return false }
+        let frame = view.frame
+        return frame.minX >= 0 && frame.maxX <= tabsViewportWidth
+    }
+
+    /// Test hook: the titles in their current display order.
+    internal var titlesForTesting: [String] { items.map(\.title) }
+
+    /// Test hook: starts a drag on `index`, as if the pointer had just
+    /// crossed the threshold there, without going through mouse events.
+    internal func beginDragForTesting(index: Int) {
+        guard itemViews.indices.contains(index) else { return }
+        let view = itemViews[index]
+        beginDrag(for: view, pointerX: view.frame.midX)
+    }
+
+    /// Test hook: the dragged tab's current x, or `nil` when nothing is
+    /// being dragged.
+    internal var draggedTabXForTesting: CGFloat? {
+        guard let session = dragSession else { return nil }
+        return itemViews[session.originalIndex].frame.minX
+    }
+
+    /// Test hook: performs the delegate call a completed drag would make —
+    /// `index` moved to `newIndex` — without going through mouse events or
+    /// the slide/settle animations. The delegate owns the actual reorder
+    /// (see `MainWindowController.moveTab`); this only exercises that the
+    /// strip reports moves correctly.
+    internal func moveTabForTesting(from index: Int, to newIndex: Int) {
+        guard itemViews.indices.contains(index), itemViews.indices.contains(newIndex),
+              index != newIndex else { return }
+        delegate?.tabBar(self, didMove: index, to: newIndex)
     }
 
     private func rebuild() {
@@ -126,6 +216,9 @@ final class TabBarView: NSView {
             let view = TabItemView()
             view.onSelect = { [weak self] tab in self?.select(tab) }
             view.onClose = { [weak self] tab in self?.close(tab) }
+            view.onDragStart = { [weak self] tab, pointerX in self?.beginDrag(for: tab, pointerX: pointerX) }
+            view.onDragMove = { [weak self] tab, pointerX in self?.updateDrag(for: tab, pointerX: pointerX) }
+            view.onDragEnd = { [weak self] tab, committed in self?.endDrag(for: tab, committed: committed) }
             addSubview(view, positioned: .below, relativeTo: newTabButton)
             itemViews.append(view)
         }
@@ -149,6 +242,241 @@ final class TabBarView: NSView {
         delegate?.tabBar(self, didRequestCloseAt: index)
     }
 
+    // MARK: - Drag to reorder
+
+    private func beginDrag(for view: TabItemView, pointerX: CGFloat) {
+        guard dragSession == nil, let index = itemViews.firstIndex(of: view) else { return }
+        dragSession = DragSession(
+            originalIndex: index,
+            currentSlot: index,
+            visualOrder: Array(itemViews.indices),
+            widths: items.map(Self.readableWidth),
+            startPointerX: pointerX,
+            startViewX: view.frame.minX,
+            lastPointerX: pointerX
+        )
+        // Above every sibling while it rides the pointer, and a touch
+        // translucent so it reads as lifted off the strip.
+        addSubview(view, positioned: .above, relativeTo: nil)
+        view.alphaValue = Self.draggedTabAlpha
+        startEscMonitor()
+    }
+
+    private func updateDrag(for view: TabItemView, pointerX: CGFloat) {
+        guard dragSession != nil else { return }
+        dragSession?.lastPointerX = pointerX
+        updateDragPositions(pointerX: pointerX)
+        updateAutoScroll(pointerX: pointerX)
+    }
+
+    /// Moves the dragged tab to follow the pointer and, whenever its
+    /// midpoint crosses a sibling's, swaps that sibling into the vacated
+    /// slot with a short animated slide.
+    private func updateDragPositions(pointerX: CGFloat) {
+        guard var session = dragSession, itemViews.indices.contains(session.originalIndex) else { return }
+        let viewport = tabsViewportWidth
+        let widths = session.widths
+        let draggedWidth = widths[session.originalIndex]
+        let proposedX = session.startViewX + (pointerX - session.startPointerX)
+        let clampedX = min(max(0, proposedX), max(0, viewport - draggedWidth))
+
+        let draggedView = itemViews[session.originalIndex]
+        var draggedFrame = draggedView.frame
+        draggedFrame.origin.x = clampedX
+        draggedView.frame = draggedFrame
+        let draggedMidX = clampedX + draggedWidth / 2
+
+        func slotX(_ slot: Int) -> CGFloat {
+            var x: CGFloat = 0
+            for i in 0..<slot { x += widths[session.visualOrder[i]] + Self.spacing }
+            return x
+        }
+
+        while session.currentSlot > 0 {
+            let neighborSlot = session.currentSlot - 1
+            let neighborOriginal = session.visualOrder[neighborSlot]
+            let neighborMidX = slotX(neighborSlot) - scrollOffset + widths[neighborOriginal] / 2
+            guard draggedMidX < neighborMidX else { break }
+            session.visualOrder.swapAt(neighborSlot, session.currentSlot)
+            session.currentSlot -= 1
+            animateSibling(itemViews[neighborOriginal], to: slotX(session.currentSlot + 1) - scrollOffset)
+        }
+        while session.currentSlot < session.visualOrder.count - 1 {
+            let neighborSlot = session.currentSlot + 1
+            let neighborOriginal = session.visualOrder[neighborSlot]
+            let neighborMidX = slotX(neighborSlot) - scrollOffset + widths[neighborOriginal] / 2
+            guard draggedMidX > neighborMidX else { break }
+            session.visualOrder.swapAt(session.currentSlot, neighborSlot)
+            session.currentSlot += 1
+            animateSibling(itemViews[neighborOriginal], to: slotX(session.currentSlot - 1) - scrollOffset)
+        }
+
+        dragSession = session
+    }
+
+    /// Starts, adjusts, or stops the auto-scroll timer for how close the
+    /// pointer is sitting to either edge of the viewport.
+    private func updateAutoScroll(pointerX: CGFloat) {
+        guard let session = dragSession else { return stopAutoScroll() }
+        let viewport = tabsViewportWidth
+        let total = session.widths.reduce(0, +) + Self.spacing * CGFloat(max(0, session.widths.count - 1))
+        let canScroll = total > viewport
+        let direction: CGFloat
+        if canScroll, pointerX < Self.autoScrollEdge {
+            direction = -1
+        } else if canScroll, pointerX > viewport - Self.autoScrollEdge {
+            direction = 1
+        } else {
+            direction = 0
+        }
+        guard direction != 0 else { return stopAutoScroll() }
+        guard dragAutoScrollTimer == nil else { return }
+        let timer = Timer(timeInterval: Self.autoScrollInterval, repeats: true) { [weak self] timer in
+            guard let self, self.dragAutoScrollTimer === timer, let session = self.dragSession else {
+                return timer.invalidate()
+            }
+            let viewport = self.tabsViewportWidth
+            let total = session.widths.reduce(0, +) + Self.spacing * CGFloat(max(0, session.widths.count - 1))
+            self.scrollOffset = min(max(0, self.scrollOffset + direction * Self.autoScrollStep),
+                                    max(0, total - viewport))
+            self.repositionSiblingsDuringDrag(session: session)
+            self.updateDragPositions(pointerX: session.lastPointerX)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        dragAutoScrollTimer = timer
+    }
+
+    private func stopAutoScroll() {
+        dragAutoScrollTimer?.invalidate()
+        dragAutoScrollTimer = nil
+    }
+
+    /// Snaps every non-dragged tab to its current slot as the strip
+    /// auto-scrolls under the pointer — a continuous scroll, not a slide,
+    /// so it is not animated.
+    private func repositionSiblingsDuringDrag(session: DragSession) {
+        var x = -scrollOffset
+        for slot in session.visualOrder {
+            if slot != session.originalIndex {
+                var frame = itemViews[slot].frame
+                frame.origin.x = x
+                itemViews[slot].frame = frame
+            }
+            x += session.widths[slot] + Self.spacing
+        }
+    }
+
+    /// The drag-aware half of `layout()`: places the + button's already
+    /// done by the caller, `scrollOffset` is clamped the same as always, but
+    /// positions come from the session rather than `items`' plain order —
+    /// the dragged tab is left exactly where the drag last put it (and is
+    /// never hidden), while its siblings go to their current `visualOrder`
+    /// slot, the same math `repositionSiblingsDuringDrag` already uses for
+    /// an auto-scroll tick.
+    private func layoutDuringDrag(_ session: DragSession) {
+        let viewport = tabsViewportWidth
+        let total = session.widths.reduce(0, +) + Self.spacing * CGFloat(max(0, session.widths.count - 1))
+        scrollOffset = min(max(0, scrollOffset), max(0, total - viewport))
+
+        repositionSiblingsDuringDrag(session: session)
+
+        var x: CGFloat = -scrollOffset
+        for slot in session.visualOrder {
+            let width = session.widths[slot]
+            if slot == session.originalIndex {
+                itemViews[slot].isHidden = false
+            } else {
+                itemViews[slot].isHidden = x + width < 0 || x >= viewport || x + width > viewport
+            }
+            x += width + Self.spacing
+        }
+    }
+
+    private func endDrag(for view: TabItemView, committed: Bool) {
+        guard let session = dragSession else { return }
+        stopAutoScroll()
+        stopEscMonitor()
+        dragSession = nil
+
+        if committed, session.currentSlot != session.originalIndex {
+            let targetX = slotX(session.currentSlot, order: session.visualOrder, widths: session.widths)
+                - scrollOffset
+            settle(view, to: targetX) { [weak self] in
+                guard let self else { return }
+                view.alphaValue = 1
+                self.restoreSubviewOrdering()
+                self.delegate?.tabBar(self, didMove: session.originalIndex, to: session.currentSlot)
+            }
+        } else {
+            // Nothing moved, or Esc cancelled it: every tab that slid
+            // during the drag animates back to where it started.
+            let identityOrder = Array(itemViews.indices)
+            for index in identityOrder {
+                let targetX = slotX(index, order: identityOrder, widths: session.widths) - scrollOffset
+                settle(itemViews[index], to: targetX, completion: index == session.originalIndex ? {
+                    view.alphaValue = 1
+                } : nil)
+            }
+            restoreSubviewOrdering()
+        }
+    }
+
+    private func cancelDrag() {
+        guard let session = dragSession else { return }
+        endDrag(for: itemViews[session.originalIndex], committed: false)
+    }
+
+    /// Sum of the widths (plus spacing) of every tab before `slot` in
+    /// `order` — the slot's un-scrolled x offset.
+    private func slotX(_ slot: Int, order: [Int], widths: [CGFloat]) -> CGFloat {
+        var x: CGFloat = 0
+        for i in 0..<slot { x += widths[order[i]] + Self.spacing }
+        return x
+    }
+
+    /// Animates a sibling sliding into the gap the dragged tab left —
+    /// short, and skipped under Reduce Motion.
+    private func animateSibling(_ view: NSView, to x: CGFloat) {
+        settle(view, to: x, completion: nil)
+    }
+
+    private func settle(_ view: NSView, to x: CGFloat, completion: (() -> Void)?) {
+        var frame = view.frame
+        frame.origin.x = x
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            view.frame = frame
+            completion?()
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = Self.dragAnimationDuration
+            view.animator().frame = frame
+        }, completionHandler: completion)
+    }
+
+    /// Restores the strip's normal subview stacking (tabs in index order,
+    /// all below the +) after a drag has brought one tab to the front.
+    private func restoreSubviewOrdering() {
+        for view in itemViews {
+            addSubview(view, positioned: .below, relativeTo: newTabButton)
+        }
+    }
+
+    private func startEscMonitor() {
+        stopEscMonitor()
+        dragEscMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.dragSession != nil else { return event }
+            guard event.keyCode == 53 else { return event } // Esc
+            self.cancelDrag()
+            return nil
+        }
+    }
+
+    private func stopEscMonitor() {
+        if let dragEscMonitor { NSEvent.removeMonitor(dragEscMonitor) }
+        dragEscMonitor = nil
+    }
+
     override func layout() {
         super.layout()
 
@@ -162,6 +490,17 @@ final class TabBarView: NSView {
 
         guard !itemViews.isEmpty else { return }
 
+        // A drag owns the strip's positions while it is underway: the
+        // dragged tab rides the pointer and its siblings sit at their
+        // `visualOrder` slot. A layout arriving mid-drag — a resize, a
+        // dirty-dot refresh from `setItems`, an autosave tick — must not
+        // fight that by resetting every frame back to `items`' plain order,
+        // which would yank the dragged tab out from under the pointer.
+        if let session = dragSession {
+            layoutDuringDrag(session)
+            return
+        }
+
         // Tabs never shrink below a readable width; once they no longer fit,
         // the strip scrolls rather than squeezing them into slivers. The +
         // stays pinned at the trailing edge, so they only use the leading
@@ -172,13 +511,41 @@ final class TabBarView: NSView {
         if total <= viewport { scrollOffset = 0 }
         scrollOffset = min(scrollOffset, max(0, total - viewport))
 
+        // Re-anchor the selected tab whenever the selection changed or the
+        // viewport was resized since the last layout — but not on a manual
+        // trackpad scroll, which is allowed to move it out of view. This
+        // runs before positioning the views so it can adjust `scrollOffset`
+        // in one pass, with no async round trip.
+        let selectionChanged = selectedIndex != lastAnchoredSelectedIndex
+        let viewportChanged = viewport != lastViewportWidth
+        if (selectionChanged || viewportChanged || needsSelectedTabReveal),
+           itemViews.indices.contains(selectedIndex) {
+            let selectedX = widths[0..<selectedIndex].reduce(0, +)
+                + Self.spacing * CGFloat(selectedIndex)
+            let selectedWidth = widths[selectedIndex]
+            let frameMinX = selectedX - scrollOffset
+            let frameMaxX = frameMinX + selectedWidth
+            if frameMaxX > viewport {
+                scrollOffset += frameMaxX - viewport
+            } else if frameMinX < 0 {
+                scrollOffset += frameMinX
+            }
+            scrollOffset = min(max(0, scrollOffset), max(0, total - viewport))
+        }
+        lastAnchoredSelectedIndex = selectedIndex
+        lastViewportWidth = viewport
+        needsSelectedTabReveal = false
+
         let y = (bounds.height - Self.tabHeight) / 2
         var x = -scrollOffset
         for (index, view) in itemViews.enumerated() {
             view.frame = NSRect(x: x, y: y, width: widths[index], height: Self.tabHeight)
             // Tabs scrolled off the edge should not be clickable, and a tab
-            // that would cross the + slot is not shown there either.
-            view.isHidden = x + widths[index] < 0 || x >= viewport || x + widths[index] > viewport
+            // that would cross the + slot is not shown there either — except
+            // the selected tab, which the re-anchoring above always keeps
+            // fully inside the viewport.
+            view.isHidden = index != selectedIndex
+                && (x + widths[index] < 0 || x >= viewport || x + widths[index] > viewport)
             x += widths[index] + Self.spacing
         }
     }
@@ -257,6 +624,15 @@ final class NewTabButton: NSButton {
 private final class TabItemView: NSView {
     var onSelect: ((TabItemView) -> Void)?
     var onClose: ((TabItemView) -> Void)?
+    /// Fired once, the moment a mouse-down turns into a drag (past the
+    /// threshold), with the pointer's x in the tab bar's own coordinates.
+    var onDragStart: ((TabItemView, CGFloat) -> Void)?
+    /// Fired on every subsequent drag, same coordinate space.
+    var onDragMove: ((TabItemView, CGFloat) -> Void)?
+    /// Fired on mouse-up once a drag was underway; `committed` is always
+    /// `true` here — Esc cancellation is handled by the bar itself, not a
+    /// mouse event on this view.
+    var onDragEnd: ((TabItemView, Bool) -> Void)?
 
     private static let font = NSFont.systemFont(ofSize: 12)
     private static let horizontalPadding: CGFloat = 10
@@ -264,12 +640,15 @@ private final class TabItemView: NSView {
     private static let slotTrailingPadding: CGFloat = 6
     private static let titleSlotGap: CGFloat = 4
     private static let crossFadeDuration: TimeInterval = 0.12
+    private static let dragThreshold: CGFloat = 4
 
     private var title = ""
     private var isDirty = false
     private var isSelected = false
     private var isHovered = false
     private var isHoveringClose = false
+    private var dragTrackingStart: NSPoint?
+    private var isDraggingTab = false
 
     private let dotView = DirtyDotView()
     private let closeButton = TabCloseButton()
@@ -377,8 +756,35 @@ private final class TabItemView: NSView {
         needsDisplay = true
     }
 
+    /// A plain click still selects, on mouse-down as it always has; a drag
+    /// only starts once the pointer has moved past the threshold, and rides
+    /// on top of whichever tab was just selected.
     override func mouseDown(with event: NSEvent) {
+        dragTrackingStart = event.locationInWindow
+        isDraggingTab = false
         onSelect?(self)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = dragTrackingStart else { return }
+        let location = event.locationInWindow
+        if !isDraggingTab {
+            guard abs(location.x - start.x) > Self.dragThreshold else { return }
+            isDraggingTab = true
+            if let barX = superview?.convert(location, from: nil).x {
+                onDragStart?(self, barX)
+            }
+        }
+        if let barX = superview?.convert(location, from: nil).x {
+            onDragMove?(self, barX)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        dragTrackingStart = nil
+        guard isDraggingTab else { return }
+        isDraggingTab = false
+        onDragEnd?(self, true)
     }
 
     /// Middle-click closes, the way it does in a browser.
