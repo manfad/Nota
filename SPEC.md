@@ -23,12 +23,45 @@
 - Settings (⌘,): font family, size, line spacing, editor padding, vim mode, hotkey.
 - Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` · `N pt` beside gear.
 
-## Markdown preview (⇧⌘P, View menu, checkmark; per tab, remembered in the session)
-- A read-only rendered pane beside the editor (trailing side, resizable split, 50% default, min 240pt); the image sidebar
-  stays outermost. Works for any note. Hidden in zen (it is chrome); back when zen ends. Focus stays in the editor.
-- Per tab, not per app: ⇧⌘P opens the pane for the tab in front only, and switching tabs opens or collapses it for the
-  tab you land on — a new ⌘T tab and a freshly opened file start without it. The flag rides in `session.json`, so each
-  tab comes back the way it was left. The View menu's checkmark is the front tab's.
+## Markdown preview — three modes (⇧⌘P cycles, View menu; per tab, remembered in the session)
+- **Editor** (default), **Split**, **Reading**. ⇧⌘P cycles editor → split → reading → editor; ⌥⇧⌘P jumps to reading and
+  back out to the editor. The View menu keeps "Markdown Preview" (checkmarked in split and reading) and adds
+  "Reading Mode" (checkmarked in reading). Both checkmarks are the front tab's.
+- Markdown files only: a note whose file is spelled `.md`, saved. Every other tab — an untitled note, a `.txt`, anything
+  not yet saved — has no render, no mode control, and both View items are disabled there, so ⇧⌘P and ⌥⇧⌘P do nothing.
+- Split: a read-only rendered pane beside the editor (trailing side, resizable, 50% default, min 240pt); the image sidebar
+  stays outermost. Reading: the editor collapses and the render takes its column. Either way the window keeps its frame —
+  the panes share the room out between them.
+- Shared chrome: the tab strip runs across the top of both columns and the status bar across the bottom of both, so the
+  editor/preview divider starts under the tabs and stops above the footer. The pane has no header of its own — it is the
+  render and nothing else, starting at the top of its column with the editor's own leading inset.
+- Mode control: three segments — `pencil` / `rectangle.split.2x1` / `book`, tool tips naming the state and its keys —
+  floating over the top-trailing corner of a column, 8pt under the strip and 12pt off the trailing edge, and nothing
+  behind it — the control's own rounded bezel is the whole of it, with no plate or hairline around that. There is one per
+  column: the editor's in editor and split modes, the preview's in split and reading. Split shows both, one in each
+  column's corner; the editor mode shows only the editor's, reading only the preview's, since the editor column is
+  collapsed there. Both drive the one mode the tab is in and stay in step. It sits over the text rather than in a row of
+  its own: nothing is pushed down for it, and the text starts at the strip's bottom edge. Idle segments in
+  `secondaryLabelColor`, the selected one in the standard filled look. Hover only: it fades in (opacity, ≤150ms, no
+  movement) when the pointer is anywhere in the top 44pt of that column and fades out when it leaves; while it is away
+  the band takes no clicks, so the text under it stays reachable. ⌘F's find bar opens in the editor's corner and takes
+  it for as long as the bar is up; the preview's is untouched.
+- Reading has no automatic exits. The only ways out are the mode control, ⇧⌘P / ⌥⇧⌘P and the View menu — nothing you do
+  to the page itself changes the mode. Clicking a block does nothing: no jump, no caret move, no block lit under it
+  (links still open). Typing a printable character does nothing either — there is no editor on screen for it to land in.
+  Arrow and page keys scroll the render, and ⌘F searches the render itself, opening the native find bar above it; that
+  bar takes the corner from the render's own mode control while it is up. The keyboard belongs to the render in reading
+  mode, and to the editor in the other two.
+- Zen takes the chrome and leaves the columns: the tab strip, status bar, gutter, image sidebar and both mode controls
+  go, and the mode the tab is in does not change. Split keeps both panes side by side, at the divider they were left at;
+  the editor mode is the text alone; reading is the render alone. In split each column's top edge is then the window's
+  own, so both take the same 28pt drop clear of the traffic-light zone, both carry a drag strip there, and both use zen's
+  wider 40pt margin, so the two bodies of text line up. Coming out of zen brings the chrome back and nothing else.
+- Per tab, not per app: ⇧⌘P sets the mode of the tab in front only, and switching tabs lays out for the tab you land on —
+  a new ⌘T tab and a freshly opened file start in the editor. The mode rides in `session.json`, so each tab comes back the
+  way it was left (a session written when the pane was a yes/no comes back split where it was open).
+- Settings "Open Markdown files in reading mode" (default off): opening a `.md` file opens that tab in reading. Session
+  restore ignores it — the tab's saved mode wins.
 - Native: Foundation's Markdown parser (`AttributedString(markdown:)`, full interpretation) + Jot's own block styling.
   No WebView, no dependencies, no theming. Same font family/size as the editor; headings scale from it (H1 ×1.6 … H6 ×1.0,
   semibold); lists indented with `•` / `1.`; block quotes with a leading hairline bar in secondaryLabelColor; code spans
@@ -36,18 +69,17 @@
   monospaced rows (best effort); links underlined in labelColor (monochrome), clickable; emphasis/strong/strike.
 - `Image N` chips render as the actual pictures from the asset store, scaled to the pane width; remote images are not
   fetched (the alt text shows instead).
-- Header: the pane's top band (same height/background/hairline as the tab strip beside it) carries the title
-  "Markdown Preview" — SF 11pt medium, secondaryLabelColor, leading inset = editor padding — so the band is never empty.
 - Live: re-rendered ~150 ms after typing stops; the pane keeps its relative scroll position.
 - Block sync (both ways). Every rendered block (heading, paragraph, list item, quote, code block, table, rule, image)
   knows its source range. Clicking a block selects it — a quiet band, labelColor @ 6%, full pane width — scrolls the
   editor so that source is visible and puts the caret at the block's first character (vim: normal mode, block caret on
-  it). Moving the caret in the editor lights the block it is in and scrolls the preview to keep it visible. One block
+  it) — in split only; reading takes no block clicks at all. Moving the caret in the editor lights the block it is in and scrolls the preview to keep it visible. One block
   lit at a time; the band clears when the text changes under it. No proportional scroll following any more.
 
 ## Zen mode
-- ⌥⌘Z toggles: tab strip, traffic lights, status bar, line-number gutter, and image sidebar all hide; only the text remains
-  (same font/width, padding grows to 40pt). ⌘ shortcuts still work (⌘T, ⌘W, ⌘P, ⌘B forces the sidebar back for that note).
+- ⌥⌘Z toggles: tab strip, traffic lights, status bar, line-number gutter, image sidebar and the Markdown mode controls all
+  hide; what is left is the note itself — the text (same font/width, padding grows to 40pt), or in split the text and the
+  render still side by side, or in reading the render alone. ⌘ shortcuts still work (⌘T, ⌘W, ⌘P, ⌘B forces the sidebar back for that note).
   Remembered per session; combine with ⌃⌘F for full screen if wanted.
 
 ## Images

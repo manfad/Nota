@@ -26,6 +26,9 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     )
     private let sidebarSidePopUp = NSPopUpButton()
     private let plainTextImageStylePopUp = NSPopUpButton()
+    private let readingModeCheckbox = NSButton(
+        checkboxWithTitle: "Open Markdown files in reading mode", target: nil, action: nil
+    )
     private let vimModeCheckbox = NSButton(checkboxWithTitle: "Vim mode", target: nil, action: nil)
     private let footerCheckboxes: [(TextStats.Segment, NSButton)] = [
         (.words, NSButton(checkboxWithTitle: "Words", target: nil, action: nil)),
@@ -126,6 +129,9 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         gutterRow.orientation = .horizontal
         gutterRow.spacing = 10
 
+        readingModeCheckbox.target = self
+        readingModeCheckbox.action = #selector(readingModeChanged)
+
         vimModeCheckbox.target = self
         vimModeCheckbox.action = #selector(vimModeChanged)
 
@@ -167,6 +173,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             [label("Status bar"), footerGrid],
             [label("Image sidebar"), sidebarSidePopUp],
             [label("Copy images as"), plainTextImageStylePopUp],
+            [label("Markdown"), readingModeCheckbox],
             [label("Vim mode"), vimModeCheckbox],
             [label("Summon"), hotKeyRow],
             [label(""), hotKeyWarning],
@@ -239,6 +246,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         for (segment, checkbox) in footerCheckboxes {
             checkbox.state = enabled.contains(segment) ? .on : .off
         }
+        readingModeCheckbox.state = preferences.opensMarkdownInReadingMode ? .on : .off
         vimModeCheckbox.state = preferences.vimMode ? .on : .off
         hotKeyField.shortcut = preferences.hotKey
 
@@ -319,6 +327,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         guard let raw = sender.selectedItem?.representedObject as? String,
               let side = SidebarSide(rawValue: raw) else { return }
         preferences.sidebarSide = side
+    }
+
+    @objc private func readingModeChanged(_ sender: NSButton) {
+        preferences.opensMarkdownInReadingMode = sender.state == .on
     }
 
     @objc private func plainTextImageStyleChanged(_ sender: NSPopUpButton) {

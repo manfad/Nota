@@ -45,10 +45,24 @@ final class MainWindowController: NSWindowController {
     private let previewPane = NSViewController()
     private let markdownPreview = MarkdownPreviewView()
     private var previewItem: NSSplitViewItem?
+    private var editorItem: NSSplitViewItem?
     private var previewWorkItem: DispatchWorkItem?
-    /// Whether the pane is on screen right now — the tab in front says
-    /// whether it is wanted, zen mode says whether it may be shown.
-    private var previewIsVisible = false
+    /// The mode the layout is actually in — the tab in front says which one
+    /// it wants, zen mode says which of them it may have.
+    private var installedPreviewMode: PreviewMode = .off
+    /// Whether the render is on screen right now, in either of the two modes
+    /// that show it.
+    private var previewIsVisible: Bool { installedPreviewMode != .off }
+    /// The floating mode control, once per column. In the editor mode only
+    /// the editor's is up; in split each column carries its own; in reading
+    /// the editor column is collapsed, so only the preview's is left. Neither
+    /// takes room from the text — they hover over its top-trailing corner.
+    private lazy var editorModeOverlay = ModeControlOverlay(
+        target: self, action: #selector(previewModeControlChanged)
+    )
+    private lazy var previewModeOverlay = ModeControlOverlay(
+        target: self, action: #selector(previewModeControlChanged)
+    )
     private var tabBarLeading: NSLayoutConstraint?
     private var workspaceSplitTopToTabBar: NSLayoutConstraint?
     private var workspaceSplitTopToPane: NSLayoutConstraint?
@@ -61,6 +75,13 @@ final class MainWindowController: NSWindowController {
     /// never persisted, so Jot always opens with its chrome.
     private(set) var isZenMode = false
     private let zenDragRegion = DragRegionView()
+    /// The render column's own drag band and top inset. Zen keeps the split,
+    /// so in zen there are two columns whose top edge is the window's own —
+    /// each needs somewhere to drag the window by, and neither should start
+    /// hard against the frame.
+    private let previewZenDragRegion = DragRegionView()
+    private var previewTopToPane: NSLayoutConstraint?
+    private var previewTopToZenInset: NSLayoutConstraint?
     private var editorTopToContent: NSLayoutConstraint?
     private var editorTopToZenInset: NSLayoutConstraint?
     private var sidebarWorkItem: DispatchWorkItem?
@@ -223,6 +244,9 @@ final class MainWindowController: NSWindowController {
         scrollView.borderType = .noBorder
         scrollView.documentView = textView
         scrollView.findBarPosition = .aboveContent
+        scrollView.onFindBarVisibilityChange = { [weak self] _ in
+            self?.updateModeControlOverlays()
+        }
         content.addSubview(scrollView)
 
         let ruler = LineNumberRulerView(scrollView: scrollView, textView: textView)
@@ -391,7 +415,40 @@ final class MainWindowController: NSWindowController {
         scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor).isActive = true
         editorTopToContent?.isActive = true
 
+        installModeOverlay(editorModeOverlay, over: content)
         applyEditorInsets()
+    }
+
+    /// The hover band across the top of a column, laid over whatever the
+    /// column is showing. It is added last so it is the topmost thing there,
+    /// and it hands every click but the control's own back to what is under
+    /// it.
+    private func installModeOverlay(_ overlay: ModeControlOverlay, over container: NSView) {
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(overlay)
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: container.topAnchor),
+            overlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            overlay.heightAnchor.constraint(
+                equalToConstant: ModeControlOverlay.hoverBandHeight
+            ),
+        ])
+    }
+
+    /// A segment clicked in either column's control.
+    @objc private func previewModeControlChanged(_ sender: NSSegmentedControl) {
+        let modes = PreviewMode.allCases
+        guard modes.indices.contains(sender.selectedSegment) else { return }
+        let clicked = [editorModeOverlay, previewModeOverlay]
+            .first { $0.modeControl === sender }
+        setPreviewMode(modes[sender.selectedSegment])
+        // The pointer is still on the control that was just clicked. If that
+        // column survived the mode change it stays up without waiting to be
+        // entered again; if it did not, the one that took its place does, so
+        // the control never blinks out from under the cursor.
+        let survivor = clicked.map { $0.isHidden ? visibleModeControlOverlay : $0 }
+        (survivor ?? visibleModeControlOverlay).setRevealed(true, animated: false)
     }
 
     private func buildSidebarPane() {
@@ -412,29 +469,59 @@ final class MainWindowController: NSWindowController {
     private func buildPreviewPane() {
         let container = previewPane.view
         markdownPreview.translatesAutoresizingMaskIntoConstraints = false
-        markdownPreview.horizontalInset = preferences.padding.inset
+        markdownPreview.horizontalInset = previewHorizontalInset
         markdownPreview.onWidthChange = { [weak self] in
             self?.scheduleMarkdownPreviewRender()
         }
         markdownPreview.onBlockClick = { [weak self] source in
             self?.goToSource(source)
         }
+        // ⌘F in reading mode opens a bar over the render, in the corner the
+        // render's own mode control floats in.
+        markdownPreview.onFindBarVisibilityChange = { [weak self] _ in
+            self?.updateModeControlOverlays()
+        }
         container.addSubview(markdownPreview)
+
+        previewZenDragRegion.translatesAutoresizingMaskIntoConstraints = false
+        previewZenDragRegion.isHidden = true
+        container.addSubview(previewZenDragRegion)
+
         NSLayoutConstraint.activate([
-            markdownPreview.topAnchor.constraint(equalTo: container.topAnchor),
             markdownPreview.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             markdownPreview.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             markdownPreview.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            previewZenDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
+            previewZenDragRegion.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            previewZenDragRegion.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            previewZenDragRegion.heightAnchor.constraint(equalToConstant: Layout.zenTopInset),
         ])
+
+        // Under the strip normally; clear of the traffic-light zone in zen,
+        // where there is no strip and the column runs to the window's edge —
+        // the same drop the editor beside it takes.
+        previewTopToPane = markdownPreview.topAnchor.constraint(equalTo: container.topAnchor)
+        previewTopToZenInset = markdownPreview.topAnchor.constraint(
+            equalTo: container.topAnchor, constant: Layout.zenTopInset
+        )
+        previewTopToPane?.isActive = true
+
+        installModeOverlay(previewModeOverlay, over: container)
     }
 
     /// The editor and preview share a split below the one document tab strip.
     /// Keeping this split inside the workspace is what stops its divider at
     /// the bottom edge of the tabs.
     private func buildWorkspaceSplitItems() {
-        let editorItem = NSSplitViewItem(viewController: editorPane)
-        editorItem.minimumThickness = 360
-        editorItem.canCollapse = false
+        let editor = NSSplitViewItem(viewController: editorPane)
+        editor.minimumThickness = 360
+        // Reading mode collapses the editor and gives the whole column to the
+        // render. Same behaviour as the pane's: the siblings share the room
+        // out and the window keeps the size it had.
+        editor.canCollapse = true
+        editor.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
+        editor.isCollapsed = installedPreviewMode == .reading
 
         // A plain item, not an inspector: the preview is the note's other
         // half rather than chrome about it, so it takes the paper background
@@ -449,9 +536,10 @@ final class MainWindowController: NSWindowController {
         preview.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
         preview.isCollapsed = !previewIsVisible
 
-        workspaceSplitViewController.addSplitViewItem(editorItem)
+        workspaceSplitViewController.addSplitViewItem(editor)
         workspaceSplitViewController.addSplitViewItem(preview)
         previewItem = preview
+        editorItem = editor
     }
 
     /// A real sidebar item on the left, an inspector item on the right — both
@@ -555,7 +643,7 @@ final class MainWindowController: NSWindowController {
     }
 
     private func applyTextAttributes() {
-        markdownPreview.horizontalInset = preferences.padding.inset
+        markdownPreview.horizontalInset = previewHorizontalInset
         textView.font = preferences.font()
         textView.textColor = .textColor
         textView.defaultParagraphStyle = defaultAttributes[.paragraphStyle] as? NSParagraphStyle
@@ -576,6 +664,13 @@ final class MainWindowController: NSWindowController {
     var horizontalTextInset: CGFloat {
         if isZenMode { return Layout.zenTextPadding }
         return isGutterVisible ? Self.gutterTextGap : preferences.padding.inset
+    }
+
+    /// The render's left and right margin. It has no gutter to make room for,
+    /// so it is simply the setting — and zen's wider one in zen, so that with
+    /// both columns on screen the two bodies of text line up.
+    var previewHorizontalInset: CGFloat {
+        isZenMode ? Layout.zenTextPadding : preferences.padding.inset
     }
 
     /// What the editor is typing with, for the tests.
@@ -627,7 +722,8 @@ final class MainWindowController: NSWindowController {
             rebuildSplitItems()
         }
         refreshImages(force: true)
-        applyPreviewVisibility()
+        applyPreviewMode()
+        updateModeControlOverlays()
         renderMarkdownPreview()
         vimEngine.isEnabled = preferences.vimMode
         applyFooterVisibility()
@@ -693,9 +789,9 @@ final class MainWindowController: NSWindowController {
         )
         note.isDirty = isDirty
         note.selectionLocation = max(0, min(tab.selection, note.storage.length))
-        // A session written before the pane was per-tab says nothing, and
-        // those tabs come back without it.
-        note.showsPreview = tab.showsPreview ?? false
+        // A session written before the mode was per-tab says nothing, and
+        // those tabs come back in the editor.
+        note.previewMode = tab.previewMode ?? .off
         return note
     }
 
@@ -738,20 +834,28 @@ final class MainWindowController: NSWindowController {
         let location = max(0, min(note.selectionLocation, note.storage.length))
         textView.setSelectedRange(NSRange(location: location, length: 0))
         textView.scrollRangeToVisible(textView.selectedRange())
-        window?.makeFirstResponder(textView)
         lineNumberRuler?.refresh()
-        // The pane belongs to the tab, so switching tabs opens or closes it.
-        // Not animated: the tab's other half is simply there or not, the way
-        // its text is, rather than sliding in behind the note you asked for.
-        applyPreviewVisibility(animated: false)
+        // The mode belongs to the tab, so switching tabs opens, splits or
+        // collapses for the tab you land on. Not animated: the tab's other
+        // half is simply there or not, the way its text is, rather than
+        // sliding in behind the note you asked for. It comes before the
+        // keyboard is handed out — in reading mode the editor is collapsed
+        // and cannot take it.
+        applyPreviewMode(animated: false)
+        updatePreviewModeControl()
+        updateModeControlOverlays()
+        focusForPreviewMode()
         renderMarkdownPreview()
     }
 
+    /// Also re-asks whether the tab in front is Markdown: ⌘S is where an
+    /// untitled note gets a name, and a `.txt` has no mode control.
     private func refreshTabs() {
         tabBar.setItems(
             notes.map { TabBarItem(title: $0.title, isDirty: $0.isDirty) },
             selectedIndex: selectedIndex
         )
+        updateModeControlOverlays()
     }
 
     private func updateStatus() {
@@ -1012,7 +1116,10 @@ final class MainWindowController: NSWindowController {
         preferences.lastSaveDirectory = destination.deletingLastPathComponent()
         refreshTabs()
         // Save As can change whether this tab is Markdown at all.
-        if note === currentNote { applyPreviewVisibility() }
+        if note === currentNote {
+            applyPreviewMode()
+            updateModeControlOverlays()
+        }
         flushAll()
         return true
     }
@@ -1064,6 +1171,11 @@ final class MainWindowController: NSWindowController {
             return
         }
         addTab(fileURL: target, text: opened.text, format: opened.format)
+        // The setting is about opening files, not about restoring them: a tab
+        // coming back from the session keeps the mode it was left in.
+        if preferences.opensMarkdownInReadingMode, Note.supportsMarkdownPreview(target) {
+            setPreviewMode(.reading)
+        }
     }
 
     private func presentFailure(_ message: String, _ error: Error?, detail: String? = nil) {
@@ -1179,10 +1291,15 @@ extension MainWindowController {
         workspaceSplitBottomToPane?.isActive = enabled
         editorTopToContent?.isActive = !enabled
         editorTopToZenInset?.isActive = enabled
+        // Split survives zen, so the render column takes the same drop and
+        // gets a drag band of its own rather than running to the frame.
+        previewTopToPane?.isActive = !enabled
+        previewTopToZenInset?.isActive = enabled
         // The footer goes; the pane does not — `:` has to work in zen mode.
         paneBottomToStatus?.isActive = !enabled
         paneBottomToContent?.isActive = enabled
         zenDragRegion.isHidden = !enabled
+        previewZenDragRegion.isHidden = !enabled
 
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             window?.standardWindowButton(button)?.isHidden = enabled
@@ -1239,41 +1356,6 @@ private final class PaneView: NSView {
 /// the title bar's own chrome is gone.
 private final class DragRegionView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
-}
-
-/// A plain `NSScrollView` whose only job is to strip the focus ring off the
-/// native find bar. `NSTextFinder` builds that bar lazily and installs it as
-/// `findBarView` the first time ⌘F is used, so `didSet` is the one hook that
-/// reliably sees it — whether it arrives via the menu, incremental search, or
-/// AppKit re-creating the bar later.
-private final class FindBarScrollView: NSScrollView {
-    override var findBarView: NSView? {
-        didSet { FindBarScrollView.removeFocusRing(from: findBarView) }
-    }
-
-    /// A few of the bar's own decorations (its buttons' and segments' title
-    /// labels are `NSTextField`s too) are only realized once the bar lays
-    /// itself out, which happens after `findBarView` is first set — so the
-    /// sweep repeats on every layout pass to catch those as well. Walking a
-    /// small, already-built tree is cheap, and setting a focus ring type that
-    /// is already off is a no-op.
-    override func layout() {
-        super.layout()
-        FindBarScrollView.removeFocusRing(from: findBarView)
-    }
-
-    /// Walks the bar's whole subview tree and turns off the focus ring on
-    /// every field in it, including the replace field — the same treatment
-    /// the ⌘P picker gives its own search field.
-    static func removeFocusRing(from view: NSView?) {
-        guard let view else { return }
-        if let field = view as? NSTextField {
-            field.focusRingType = .none
-        }
-        for subview in view.subviews {
-            removeFocusRing(from: subview)
-        }
-    }
 }
 
 /// The command pane: one line above the footer where `:` `/` `?` are typed,
@@ -1491,46 +1573,140 @@ extension MainWindowController: TabPickerPanelDelegate {
 
 extension MainWindowController {
 
-    /// Whether the pane is up, and what it is showing — for the tests.
-    var previewState: (isVisible: Bool, renderedText: String) {
-        (previewIsVisible, markdownPreview.renderedText)
+    /// Whether the render is up, what it is showing, and which mode the tab
+    /// in front is in — for the tests.
+    var previewState: (isVisible: Bool, renderedText: String, mode: PreviewMode) {
+        (previewIsVisible, markdownPreview.renderedText, previewMode)
     }
 
-    /// Whether the front tab is eligible for the preview command.
+    /// Whether the front tab has a render at all. Only a saved `.md` file
+    /// does; every other note keeps the whole window for its source.
     var canShowMarkdownPreview: Bool { currentNote?.supportsMarkdownPreview ?? false }
 
-    /// What the View menu's checkmark says. A remembered preference on a file
-    /// that is not `.md` is deliberately ignored.
-    var showsMarkdownPreview: Bool {
-        canShowMarkdownPreview && (currentNote?.showsPreview ?? false)
+    /// What the tab in front asks for — what the View menu's checkmarks say,
+    /// whether or not zen is hiding the chrome at this moment. A remembered
+    /// mode on a file that is not `.md` is deliberately ignored.
+    var previewMode: PreviewMode {
+        guard canShowMarkdownPreview else { return .off }
+        return currentNote?.previewMode ?? .off
     }
 
-    /// ⇧⌘P. The pane belongs to the tab, not to the app: a Markdown note
-    /// keeps its preview — across relaunches, through the session — while the
-    /// next ⌘T opens without one.
+    /// Whether the render is one of the two modes that show it.
+    var showsMarkdownPreview: Bool { previewMode != .off }
+
+    /// ⇧⌘P. Editor → split → reading → editor. The mode belongs to the tab,
+    /// not to the app: a Markdown note keeps it — across relaunches, through
+    /// the session — while the next ⌘T opens in the editor.
     func toggleMarkdownPreview() {
-        guard let note = currentNote, note.supportsMarkdownPreview else { return }
-        note.showsPreview.toggle()
-        applyPreviewVisibility(animated: true)
-        renderMarkdownPreview()
-        flush()
-        // The pane is read, not typed in: whatever it does to the layout, the
-        // caret stays where it was.
-        focusEditor()
+        setPreviewMode(previewMode.next)
     }
 
-    /// The tab says whether the pane is wanted; zen says whether it may be
-    /// shown. Leaving zen brings back whatever the tab asks for.
-    private func applyPreviewVisibility(animated: Bool = true) {
-        let shouldShow = showsMarkdownPreview && !isZenMode
-        guard shouldShow != previewIsVisible else { return }
-        previewIsVisible = shouldShow
+    /// ⌥⇧⌘P. Straight to the render, and straight back out of it.
+    func toggleReadingMode() {
+        setPreviewMode(previewMode == .reading ? .off : .reading)
+    }
+
+    /// The one way the mode ever changes: the menu, ⇧⌘P, either column's
+    /// control, a block click and a keystroke in reading mode all come
+    /// through here.
+    func setPreviewMode(_ mode: PreviewMode) {
+        guard let note = currentNote, note.supportsMarkdownPreview else { return }
+        note.previewMode = mode
+        applyPreviewMode(animated: true)
+        renderMarkdownPreview()
+        updatePreviewModeControl()
+        updateModeControlOverlays()
+        flush()
+        focusForPreviewMode()
+    }
+
+    /// Collapses and expands the two items to match the tab's mode.
+    ///
+    /// Zen has no say in it. Zen takes the chrome away — the strip, the
+    /// footer, the gutter, the thumbnails, both mode controls — but the
+    /// columns under it are the note, not chrome: split stays split, at the
+    /// divider it was left at, and the mode is untouched on the way back out.
+    private func applyPreviewMode(animated: Bool = true) {
+        let mode = previewMode
+        guard mode != installedPreviewMode else { return }
+        installedPreviewMode = mode
         // There is nothing to animate in a window nobody is looking at, and
         // an animation still in flight when the split items are rebuilt under
         // it — the sidebar changing sides — takes AppKit with it.
-        let target = animated && window?.isVisible == true
-            ? previewItem?.animator() : previewItem
-        target?.isCollapsed = !shouldShow
+        let live = animated && window?.isVisible == true
+        let preview = live ? previewItem?.animator() : previewItem
+        let editor = live ? editorItem?.animator() : editorItem
+        // Whichever item is about to hold the column is expanded first: the
+        // two are never both collapsed, even for an instant.
+        if mode == .reading {
+            preview?.isCollapsed = false
+            editor?.isCollapsed = true
+        } else {
+            editor?.isCollapsed = false
+            preview?.isCollapsed = mode == .off
+        }
+        markdownPreview.takesKeyboard = mode == .reading
+        // Reading is for reading: a click on the page stays on the page.
+        markdownPreview.sendsBlockClicks = mode != .reading
+        updateModeControlOverlays()
+    }
+
+    /// The render is read, not typed in — so the keyboard stays in the editor,
+    /// except in reading mode, where the editor is not on screen to hold it.
+    private func focusForPreviewMode() {
+        if installedPreviewMode == .reading {
+            markdownPreview.focus(in: window)
+        } else {
+            focusEditor()
+        }
+    }
+
+    /// Both overlays, for the tests: the editor column's and the preview
+    /// column's. Split has both up, one per column; the editor mode has only
+    /// the first, reading only the second.
+    var modeControlOverlays: (editor: ModeControlOverlay, preview: ModeControlOverlay) {
+        (editorModeOverlay, previewModeOverlay)
+    }
+
+    /// The overlay the mode control is reached through. The editor column's
+    /// while there is one on screen; in reading that column is collapsed, so
+    /// the preview column's is the only one left.
+    var visibleModeControlOverlay: ModeControlOverlay {
+        installedPreviewMode == .reading ? previewModeOverlay : editorModeOverlay
+    }
+
+    /// The control in that overlay. The two are kept in step, so either
+    /// answers for the other; this is the one the reader reaches first, which
+    /// is what a test asking about the layout wants.
+    var previewModeControl: NSSegmentedControl { visibleModeControlOverlay.modeControl }
+
+    /// Both overlays' controls follow the tab in front — a tab switch, ⇧⌘P, a
+    /// block click, a keystroke in reading mode, a restored session. The tints
+    /// go with the selection: the idle segments are the quiet ones.
+    private func updatePreviewModeControl() {
+        let index = PreviewMode.allCases.firstIndex(of: previewMode) ?? 0
+        for overlay in [editorModeOverlay, previewModeOverlay] {
+            if overlay.modeControl.selectedSegment != index {
+                overlay.modeControl.selectedSegment = index
+            }
+            overlay.applySegmentTints()
+        }
+    }
+
+    /// Which columns carry a control. Only a tab with a render has one at
+    /// all, and zen has none. Beyond that it is simply whether the column is
+    /// on screen: the editor's goes in reading, the preview's is there in
+    /// split and reading. Either column's ⌘F bar takes its own control away
+    /// while it is up — the bar opens above the content, right where the
+    /// control floats, and its own buttons must stay clickable.
+    fileprivate func updateModeControlOverlays() {
+        let available = canShowMarkdownPreview && !isZenMode
+        editorModeOverlay.setAvailable(
+            available && installedPreviewMode != .reading && !scrollView.isFindBarVisible
+        )
+        previewModeOverlay.setAvailable(
+            available && installedPreviewMode != .off && !markdownPreview.isFindBarVisible
+        )
     }
 
     /// Debounced, like the cache write: a burst of keystrokes re-renders once,

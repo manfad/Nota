@@ -161,7 +161,7 @@ final class JotTests: XCTestCase {
 
         // Four label/control rows, laid out in one grid.
         let grid = window?.contentView?.subviews.compactMap { $0 as? NSGridView }.first
-        XCTAssertEqual(grid?.numberOfRows, 11)
+        XCTAssertEqual(grid?.numberOfRows, 12)
         XCTAssertEqual(grid?.numberOfColumns, 2)
 
         // Font popup offers the four designs plus "Other…".
@@ -179,13 +179,13 @@ final class JotTests: XCTestCase {
         )
 
         // Row labels, right-aligned in the first column.
-        let labels = (0..<10).compactMap {
+        let labels = (0..<11).compactMap {
             (grid?.cell(atColumnIndex: 0, rowIndex: $0).contentView as? NSTextField)?.stringValue
         }
         XCTAssertEqual(
             labels,
             ["Font", "Size", "Line spacing", "Padding", "Gutter", "Status bar",
-             "Image sidebar", "Copy images as", "Vim mode", "Summon"]
+             "Image sidebar", "Copy images as", "Markdown", "Vim mode", "Summon"]
         )
     }
 
@@ -1607,8 +1607,9 @@ final class JotTests: XCTestCase {
         let controller = MainWindowController(store: SessionStore(directory: directory))
         let window = try XCTUnwrap(controller.window)
         let split = try XCTUnwrap(window.contentViewController as? NSSplitViewController)
-        // Every pane that can collapse — the outer sidebar and the preview
-        // nested in the document — makes its sibling give up room rather than
+        // Every pane that can collapse — the outer sidebar, and the editor
+        // and preview nested in the document, either of which reading and
+        // split modes collapse — makes its sibling give up room rather than
         // changing the window frame.
         let documentSplit = try XCTUnwrap(
             split.children.lazy
@@ -1618,7 +1619,7 @@ final class JotTests: XCTestCase {
         )
         let collapsible = (split.splitViewItems + documentSplit.splitViewItems)
             .filter(\.canCollapse)
-        XCTAssertEqual(collapsible.count, 2)
+        XCTAssertEqual(collapsible.count, 3)
         for item in collapsible {
             XCTAssertEqual(item.collapseBehavior, .preferResizingSiblingsWithFixedSplitView)
         }

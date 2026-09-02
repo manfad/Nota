@@ -9,7 +9,7 @@ import AppKit
 /// which is the only place a note is ever edited.
 final class MarkdownPreviewView: NSView {
 
-    private let scrollView = NSScrollView()
+    private let scrollView = FindBarScrollView()
     private let textView: PreviewTextView
 
     /// The block the reader last pointed at, or the one the caret is in.
@@ -26,6 +26,35 @@ final class MarkdownPreviewView: NSView {
     /// the pane, so a resize is a reason to render again.
     var onWidthChange: (() -> Void)?
     private var renderedWidth: CGFloat = 0
+
+    /// Run when the render's own ⌘F bar opens or closes. It takes the top of
+    /// the column, which is where the mode control floats.
+    var onFindBarVisibilityChange: ((Bool) -> Void)? {
+        didSet { scrollView.onFindBarVisibilityChange = onFindBarVisibilityChange }
+    }
+
+    /// Whether that bar is up.
+    var isFindBarVisible: Bool { scrollView.isFindBarVisible }
+
+    /// Whether a click on a block jumps to it in the editor. In split the
+    /// render is a map into the text beside it, so it does. In reading it is
+    /// the page being read and there is no editor on screen to jump to, so a
+    /// click there is just a click: no jump, and no band lit under it. A link
+    /// still opens either way — that is settled before this is asked.
+    var sendsBlockClicks = true
+
+    /// Whether the pane takes the keyboard. Only in reading mode, where it is
+    /// the only thing on screen: in split the caret stays in the editor.
+    var takesKeyboard: Bool {
+        get { textView.takesKeyboard }
+        set { textView.takesKeyboard = newValue }
+    }
+
+    /// Puts the keyboard in the pane — reading mode's answer to `focusEditor`.
+    @discardableResult
+    func focus(in window: NSWindow?) -> Bool {
+        window?.makeFirstResponder(textView) ?? false
+    }
 
     /// Matched to the editor's own padding, so the two columns of text start
     /// the same distance from their edges.
@@ -53,6 +82,10 @@ final class MarkdownPreviewView: NSView {
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = true
+        // Reading mode has no editor on screen, so ⌘F searches the page you
+        // are reading rather than fetching the text back to search that.
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
         textView.drawsBackground = true
         textView.backgroundColor = .textBackgroundColor
         textView.textContainerInset = NSSize(
@@ -81,6 +114,7 @@ final class MarkdownPreviewView: NSView {
         scrollView.backgroundColor = .textBackgroundColor
         scrollView.borderType = .noBorder
         scrollView.documentView = textView
+        scrollView.findBarPosition = .aboveContent
         addSubview(scrollView)
 
         NSLayoutConstraint.activate([
@@ -165,7 +199,9 @@ final class MarkdownPreviewView: NSView {
     }
 
     private func clicked(at index: Int) {
-        guard !blocksAreStale, let block = blockIndex(forRendered: index) else { return }
+        guard sendsBlockClicks, !blocksAreStale,
+              let block = blockIndex(forRendered: index)
+        else { return }
         setHighlight(block)
         onBlockClick?(blocks[block].source)
     }
@@ -228,12 +264,18 @@ final class MarkdownPreviewView: NSView {
 
 /// The pane's text view.
 ///
-/// It never becomes first responder: a click here is a jump to a block, not a
-/// place to type, and the caret must stay in the editor. Dragging to select
-/// is given up for that — a link still opens, and everything else reports the
-/// block it landed in.
+/// A click here is a jump to a block, not a place to type, and the caret
+/// stays in the editor. Dragging to select is given up for that — a link
+/// still opens, and everything else reports the block it landed in.
+///
+/// It takes the keyboard in reading mode only, where the editor is collapsed
+/// and something has to answer the arrow and page keys — and ⌘F, which opens
+/// a find bar over the render itself. Nothing here reaches back to the editor:
+/// reading mode is left through the mode control, ⇧⌘P / ⌥⇧⌘P or the View menu,
+/// and by nothing else.
 private final class PreviewTextView: NSTextView {
     var onClick: ((Int) -> Void)?
+    var takesKeyboard = false
 
     /// The rendered range of the block being pointed at, if any.
     var highlightedRange: NSRange? {
@@ -243,7 +285,7 @@ private final class PreviewTextView: NSTextView {
         }
     }
 
-    override var acceptsFirstResponder: Bool { false }
+    override var acceptsFirstResponder: Bool { takesKeyboard }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)

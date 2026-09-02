@@ -127,6 +127,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowController?.toggleMarkdownPreview()
     }
 
+    @objc private func toggleReadingMode(_ sender: Any?) {
+        windowController?.toggleReadingMode()
+    }
+
     /// The sidebar item is a verb, so its title flips with the state.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleImageSidebar(_:)) {
@@ -137,11 +141,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let zen = windowController?.isZenMode ?? false
             menuItem.title = zen ? "Exit Zen Mode" : "Zen Mode"
         }
-        // The preview is a place, not a verb: the title stays put and a
-        // checkmark says whether the tab in front has it open.
+        // The preview is a place, not a verb: the titles stay put and the
+        // checkmarks say which mode the tab in front is in. ⇧⌘P cycles
+        // through both places, so its mark is on in either of them. Neither
+        // item is offered on a tab that has no render to show.
+        let mode = windowController?.previewMode ?? .off
         if menuItem.action == #selector(toggleMarkdownPreview(_:)) {
-            menuItem.state =
-                (windowController?.showsMarkdownPreview ?? false) ? .on : .off
+            menuItem.state = mode == .off ? .off : .on
+            return windowController?.canShowMarkdownPreview ?? false
+        }
+        if menuItem.action == #selector(toggleReadingMode(_:)) {
+            menuItem.state = mode == .reading ? .on : .off
             return windowController?.canShowMarkdownPreview ?? false
         }
         return true
@@ -276,6 +286,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Show Images", #selector(toggleImageSidebar(_:)), key: "b", target: self),
             item("Markdown Preview", #selector(toggleMarkdownPreview(_:)), key: "p",
                  modifiers: [.command, .shift], target: self),
+            item("Reading Mode", #selector(toggleReadingMode(_:)), key: "p",
+                 modifiers: [.command, .shift, .option], target: self),
             item("Zen Mode", #selector(toggleZenMode(_:)), key: "z",
                  modifiers: [.command, .option], target: self),
         ])
