@@ -161,7 +161,7 @@ final class JotTests: XCTestCase {
 
         // Four label/control rows, laid out in one grid.
         let grid = window?.contentView?.subviews.compactMap { $0 as? NSGridView }.first
-        XCTAssertEqual(grid?.numberOfRows, 10)
+        XCTAssertEqual(grid?.numberOfRows, 11)
         XCTAssertEqual(grid?.numberOfColumns, 2)
 
         // Font popup offers the four designs plus "Other…".
@@ -179,13 +179,13 @@ final class JotTests: XCTestCase {
         )
 
         // Row labels, right-aligned in the first column.
-        let labels = (0..<9).compactMap {
+        let labels = (0..<10).compactMap {
             (grid?.cell(atColumnIndex: 0, rowIndex: $0).contentView as? NSTextField)?.stringValue
         }
         XCTAssertEqual(
             labels,
             ["Font", "Size", "Line spacing", "Padding", "Gutter", "Status bar",
-             "Image sidebar", "Vim mode", "Summon"]
+             "Image sidebar", "Copy images as", "Vim mode", "Summon"]
         )
     }
 
@@ -263,7 +263,42 @@ final class JotTests: XCTestCase {
         )
     }
 
+    func testPlaceholdingTokensLeavesAnObjectReplacementCharacterPerImage() throws {
+        let a = "aaaaaaaa-0000-0000-0000-000000000001.png"
+        let b = "bbbbbbbb-0000-0000-0000-000000000002.png"
+        let plain = "before \(NoteText.token(for: a)) middle \(NoteText.token(for: b)) after"
+
+        XCTAssertEqual(
+            NoteText.placeholdingTokens(plain),
+            "before \u{FFFC} middle \u{FFFC} after"
+        )
+    }
+
+    func testPathTokensWritesMarkdownImagesPointingAtTheAssetFiles() throws {
+        let assets = AssetStore(directory: try makeTemporaryDirectory())
+        let a = try XCTUnwrap(assets.importImageData(makePNGData(), preferredExtension: "png"))
+        let b = try XCTUnwrap(assets.importImageData(makePNGData(), preferredExtension: "png"))
+        let missing = "aaaaaaaa-0000-0000-0000-000000000009.png"
+        let plain = "before \(NoteText.token(for: a)) middle "
+            + "\(NoteText.token(for: b)) middle2 \(NoteText.token(for: missing)) after"
+
+        XCTAssertEqual(
+            NoteText.pathTokens(plain, assets: assets),
+            "before ![Image 1](\(assets.url(for: a).path)) middle "
+                + "![Image 2](\(assets.url(for: b).path)) middle2 \u{FFFC} after"
+        )
+
+        // No store at all: every image falls back to the marker.
+        let a2 = "aaaaaaaa-0000-0000-0000-000000000001.png"
+        let onlyToken = NoteText.token(for: a2)
+        XCTAssertEqual(NoteText.pathTokens(onlyToken, assets: nil), "\u{FFFC}")
+    }
+
     func testPasteImageThenCopyOffersEveryFlavour() throws {
+        let previousStyle = Preferences.shared.plainTextImageStyle
+        Preferences.shared.plainTextImageStyle = .marker
+        defer { Preferences.shared.plainTextImageStyle = previousStyle }
+
         let assets = AssetStore(directory: try makeTemporaryDirectory())
         let view = makeTextView(assets: assets)
 
@@ -303,7 +338,7 @@ final class JotTests: XCTestCase {
         // board, so check ours are present rather than that they are all there is.
         XCTAssertTrue(Set(types).isSubset(of: Set(out.types ?? [])))
         XCTAssertEqual(out.string(forType: .jotNote), NoteText.token(for: ids[0]))
-        XCTAssertEqual(out.string(forType: .string), "")
+        XCTAssertEqual(out.string(forType: .string), "\u{FFFC}")
 
         // The RTFD really carries the bytes, so other apps see an image.
         let rtfd = try XCTUnwrap(out.data(forType: .rtfd))
@@ -324,6 +359,241 @@ final class JotTests: XCTestCase {
         XCTAssertTrue(second.readSelection(from: out, type: .jotNote))
         XCTAssertEqual(attachmentIDs(in: try XCTUnwrap(second.textStorage)), ids)
         XCTAssertEqual(try assetFileCount(assets), 1)
+    }
+
+    /// The default plain-text flavour: a Markdown image pointing at the
+    /// asset's real path on disk, so pasting into a terminal agent leaves
+    /// something it can actually open.
+    @MainActor
+    func testCopyingWithDefaultPlainTextStyleWritesTheAssetPath() throws {
+        _ = NSApplication.shared
+        XCTAssertEqual(Preferences.shared.plainTextImageStyle, .path)
+
+        let assets = AssetStore(directory: try makeTemporaryDirectory())
+        let view = makeTextView(assets: assets)
+        let id = try XCTUnwrap(assets.importImageData(makePNGData(), preferredExtension: "png"))
+        let token = NoteText.token(for: id)
+        try XCTUnwrap(view.textStorage).setAttributedString(NoteText.render(
+            "hello \(token) world", attributes: [.font: NSFont.systemFont(ofSize: 13)],
+            assets: assets
+        ))
+        view.setSelectedRange(NSRange(location: 0, length: view.textStorage?.length ?? 0))
+
+        let board = makePasteboard()
+        board.clearContents()
+        board.declareTypes([.string], owner: nil)
+        XCTAssertTrue(view.writeSelection(to: board, type: .string))
+        XCTAssertEqual(
+            board.string(forType: .string),
+            "hello ![Image 1](\(assets.url(for: id).path)) world"
+        )
+    }
+
+    /// Copying text and a picture off a web page: a browser offers no RTF, so
+    /// `public.html` is the only flavour the picture is in at all.
+    @MainActor
+    func testPastingHTMLWithAnInlineImageKeepsTheWordsAndThePicture() throws {
+        _ = NSApplication.shared
+        let assets = AssetStore(directory: try makeTemporaryDirectory())
+        let view = makeTextView(assets: assets)
+        let png = makePNGData()
+        let html = """
+        <html><body><p>before \
+        <img src="data:image/png;base64,\(png.base64EncodedString())"> after</p></body></html>
+        """
+
+        try withGeneralPasteboard { board in
+            board.clearContents()
+            board.declareTypes([.html, .string], owner: nil)
+            board.setData(Data(html.utf8), forType: .html)
+            board.setString("before  after", forType: .string)
+
+            let chosen = view.preferredPasteboardType(
+                from: board.types ?? [], restrictedToTypesFrom: view.readablePasteboardTypes
+            )
+            XCTAssertEqual(chosen, .html)
+            XCTAssertTrue(view.readSelection(from: board, type: try XCTUnwrap(chosen)))
+        }
+
+        // The words survive, and the picture is a chip backed by a real file.
+        let storage = try XCTUnwrap(view.textStorage)
+        let ids = attachmentIDs(in: storage)
+        XCTAssertEqual(ids.count, 1)
+        XCTAssertTrue(assets.exists(ids[0]))
+        XCTAssertEqual(try assetFileCount(assets), 1)
+        XCTAssertTrue(storage.string.contains("before"))
+        XCTAssertTrue(storage.string.contains("after"))
+        // The importer closes the paragraph with a newline the copy never had.
+        XCTAssertFalse(storage.string.hasSuffix("\n"))
+    }
+
+    /// A text-only copy from a browser is left exactly as it was: the HTML
+    /// flavour has nothing to add, and going through the importer would cost
+    /// the copy its lists and its whitespace for nothing.
+    @MainActor
+    func testPastingHTMLWithoutAPictureStaysPlainText() throws {
+        _ = NSApplication.shared
+        let assets = AssetStore(directory: try makeTemporaryDirectory())
+        let view = makeTextView(assets: assets)
+        let html = "<html><body><ul><li>one</li><li>two</li></ul></body></html>"
+        let plain = "- one\n- two"
+
+        try withGeneralPasteboard { board in
+            board.clearContents()
+            board.declareTypes([.html, .string], owner: nil)
+            board.setData(Data(html.utf8), forType: .html)
+            board.setString(plain, forType: .string)
+
+            let chosen = view.preferredPasteboardType(
+                from: board.types ?? [], restrictedToTypesFrom: view.readablePasteboardTypes
+            )
+            XCTAssertEqual(chosen, .string)
+            XCTAssertTrue(view.readSelection(from: board, type: try XCTUnwrap(chosen)))
+        }
+
+        XCTAssertEqual(view.textStorage?.string, plain)
+        XCTAssertEqual(try assetFileCount(assets), 0)
+    }
+
+    /// The path that matters: a picture the importer would not load — here a
+    /// source relative to a page that is not on this machine — filled in from
+    /// the web archive's own subresources rather than dropped.
+    @MainActor
+    func testPastingAWebArchiveFillsInThePicturesTheImporterLeftEmpty() throws {
+        _ = NSApplication.shared
+        let assets = AssetStore(directory: try makeTemporaryDirectory())
+        let view = makeTextView(assets: assets)
+        let png = makePNGData()
+        // The second picture is one nothing can resolve: the importer would
+        // put its broken-picture icon there, and a chip pointing at that icon
+        // would be worse than no chip at all.
+        let html = """
+        <html><body><p>look <img src="a.png"> here \
+        <img src="notes://elsewhere/gone.png"></p></body></html>
+        """
+        let archive: [String: Any] = [
+            "WebMainResource": [
+                "WebResourceData": Data(html.utf8),
+                "WebResourceURL": "https://example.com/",
+                "WebResourceMIMEType": "text/html",
+                "WebResourceTextEncodingName": "UTF-8",
+            ],
+            "WebSubresources": [[
+                "WebResourceData": png,
+                "WebResourceURL": "https://example.com/a.png",
+                "WebResourceMIMEType": "image/png",
+            ]],
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: archive, format: .binary, options: 0
+        )
+
+        try withGeneralPasteboard { board in
+            board.clearContents()
+            board.declareTypes([.webArchive, .string], owner: nil)
+            board.setData(data, forType: .webArchive)
+            board.setString("look  here", forType: .string)
+
+            let chosen = view.preferredPasteboardType(
+                from: board.types ?? [], restrictedToTypesFrom: view.readablePasteboardTypes
+            )
+            XCTAssertEqual(chosen, .webArchive)
+            XCTAssertTrue(view.readSelection(from: board, type: try XCTUnwrap(chosen)))
+        }
+
+        let storage = try XCTUnwrap(view.textStorage)
+        let ids = attachmentIDs(in: storage)
+        XCTAssertEqual(ids.count, 1)
+        XCTAssertEqual(assets.data(for: ids[0]), png)
+        XCTAssertEqual(try assetFileCount(assets), 1)
+        XCTAssertTrue(storage.string.contains("look"))
+        XCTAssertTrue(storage.string.contains("here"))
+    }
+
+    /// The source list and what each source resolves to, without a view or a
+    /// pasteboard in the way. Nothing here goes near the network.
+    func testHTMLClipboardResolvesInlinePicturesAndDropsWhatItCannot() throws {
+        let png = makePNGData()
+        let html = """
+        <p>one <img src='data:image/png;base64,\(png.base64EncodedString())'> \
+        two <img src="notes://elsewhere/picture.png"> \
+        three <img src="page.png"></p>
+        """
+        let payload = HTMLClipboard.Payload(html: html)
+
+        XCTAssertTrue(HTMLClipboard.containsImage(html))
+        XCTAssertFalse(HTMLClipboard.containsImage("<p>no pictures here</p>"))
+
+        let sources = HTMLClipboard.imageSources(in: html)
+        XCTAssertEqual(sources.count, 3)
+        XCTAssertEqual(sources[1], "notes://elsewhere/picture.png")
+        XCTAssertEqual(sources[2], "page.png")
+
+        // A data URI is the picture itself, byte for byte, and says what it is.
+        let inline = try XCTUnwrap(HTMLClipboard.imageBytes(
+            forSource: sources[0], in: payload, fetch: { _ in nil }
+        ))
+        XCTAssertEqual(inline.data, png)
+        XCTAssertEqual(inline.preferredExtension, "png")
+
+        // A scheme that is not the web's, and a relative source with no page
+        // behind it, have nowhere to go — that one picture is dropped.
+        XCTAssertNil(HTMLClipboard.imageBytes(
+            forSource: sources[1], in: payload, fetch: { _ in nil }
+        ))
+        XCTAssertNil(HTMLClipboard.imageBytes(
+            forSource: sources[2], in: payload, fetch: { _ in nil }
+        ))
+
+        // An http source is fetched, and nothing else is.
+        var fetched: [URL] = []
+        let remote = try XCTUnwrap(HTMLClipboard.imageBytes(
+            forSource: "https://example.com/a.jpg", in: payload,
+            fetch: { url in
+                fetched.append(url)
+                return png
+            }
+        ))
+        XCTAssertEqual(fetched.map(\.absoluteString), ["https://example.com/a.jpg"])
+        XCTAssertEqual(remote.preferredExtension, "jpg")
+    }
+
+    /// Safari's flavour: the markup and the pictures in one property list, so
+    /// the bytes are already in hand and nothing has to be fetched.
+    func testWebArchiveCarriesTheMarkupAndItsPictures() throws {
+        let png = makePNGData()
+        let html = "<p>hi <img src=\"https://example.com/a.png\"></p>"
+        let archive: [String: Any] = [
+            "WebMainResource": [
+                "WebResourceData": Data(html.utf8),
+                "WebResourceURL": "https://example.com/",
+                "WebResourceMIMEType": "text/html",
+                "WebResourceTextEncodingName": "UTF-8",
+            ],
+            "WebSubresources": [[
+                "WebResourceData": png,
+                "WebResourceURL": "https://example.com/a.png",
+                "WebResourceMIMEType": "image/png",
+            ]],
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: archive, format: .binary, options: 0
+        )
+
+        let payload = try XCTUnwrap(HTMLClipboard.payload(from: data, type: .webArchive))
+        XCTAssertEqual(payload.html, html)
+
+        let source = try XCTUnwrap(HTMLClipboard.imageSources(in: payload.html).first)
+        let bytes = try XCTUnwrap(HTMLClipboard.imageBytes(
+            forSource: source, in: payload, fetch: { _ in nil }
+        ))
+        XCTAssertEqual(bytes.data, png)
+
+        // A relative source still finds the subresource it names.
+        let relative = try XCTUnwrap(HTMLClipboard.imageBytes(
+            forSource: "a.png", in: payload, fetch: { _ in nil }
+        ))
+        XCTAssertEqual(relative.data, png)
     }
 
     /// The bug: a click dropped a caret *beside* the chip, so the picture
@@ -381,6 +651,10 @@ final class JotTests: XCTestCase {
     @MainActor
     func testCopyingALineWithAChipPastesTheImageBackAndCarriesItsBytes() throws {
         _ = NSApplication.shared
+        let previousStyle = Preferences.shared.plainTextImageStyle
+        Preferences.shared.plainTextImageStyle = .marker
+        defer { Preferences.shared.plainTextImageStyle = previousStyle }
+
         let assets = AssetStore(directory: try makeTemporaryDirectory())
         let view = makeTextView(assets: assets)
         let png = makePNGData()
@@ -402,7 +676,7 @@ final class JotTests: XCTestCase {
             XCTAssertTrue(Set<NSPasteboard.PasteboardType>([.jotNote, .rtfd, .string])
                 .isSubset(of: Set(board.types ?? [])))
             XCTAssertEqual(board.string(forType: .jotNote), "hello \(token) world\n")
-            XCTAssertEqual(board.string(forType: .string), "hello  world\n")
+            XCTAssertEqual(board.string(forType: .string), "hello \u{FFFC} world\n")
 
             // Jot -> Jot: the chip comes back, still pointing at the one asset.
             let second = makeTextView(assets: assets)

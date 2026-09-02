@@ -25,6 +25,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         checkboxWithTitle: "Gutter separator", target: nil, action: nil
     )
     private let sidebarSidePopUp = NSPopUpButton()
+    private let plainTextImageStylePopUp = NSPopUpButton()
     private let vimModeCheckbox = NSButton(checkboxWithTitle: "Vim mode", target: nil, action: nil)
     private let footerCheckboxes: [(TextStats.Segment, NSButton)] = [
         (.words, NSButton(checkboxWithTitle: "Words", target: nil, action: nil)),
@@ -110,6 +111,9 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
              action: #selector(paddingChanged))
         fill(sidebarSidePopUp, with: SidebarSide.allCases.map { ($0.title, $0.rawValue) },
              action: #selector(sidebarSideChanged))
+        fill(plainTextImageStylePopUp,
+             with: PlainTextImageStyle.allCases.map { ($0.title, $0.rawValue) },
+             action: #selector(plainTextImageStyleChanged))
 
         lineNumbersCheckbox.target = self
         lineNumbersCheckbox.action = #selector(lineNumbersChanged)
@@ -162,6 +166,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             [label("Gutter"), gutterRow],
             [label("Status bar"), footerGrid],
             [label("Image sidebar"), sidebarSidePopUp],
+            [label("Copy images as"), plainTextImageStylePopUp],
             [label("Vim mode"), vimModeCheckbox],
             [label("Summon"), hotKeyRow],
             [label(""), hotKeyWarning],
@@ -185,6 +190,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             fontPopUp.widthAnchor.constraint(greaterThanOrEqualToConstant: 190),
             spacingPopUp.widthAnchor.constraint(equalTo: fontPopUp.widthAnchor),
             sidebarSidePopUp.widthAnchor.constraint(equalTo: fontPopUp.widthAnchor),
+            plainTextImageStylePopUp.widthAnchor.constraint(equalTo: fontPopUp.widthAnchor),
             paddingPopUp.widthAnchor.constraint(equalTo: fontPopUp.widthAnchor),
         ])
 
@@ -225,6 +231,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         select(spacingPopUp, raw: preferences.lineSpacing.rawValue)
         select(paddingPopUp, raw: preferences.padding.rawValue)
         select(sidebarSidePopUp, raw: preferences.sidebarSide.rawValue)
+        select(plainTextImageStylePopUp, raw: preferences.plainTextImageStyle.rawValue)
         lineNumbersCheckbox.state = preferences.showsLineNumbers ? .on : .off
         gutterSeparatorCheckbox.state = preferences.showsGutterSeparator ? .on : .off
         gutterSeparatorCheckbox.isEnabled = preferences.showsLineNumbers
@@ -312,6 +319,12 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         guard let raw = sender.selectedItem?.representedObject as? String,
               let side = SidebarSide(rawValue: raw) else { return }
         preferences.sidebarSide = side
+    }
+
+    @objc private func plainTextImageStyleChanged(_ sender: NSPopUpButton) {
+        guard let raw = sender.selectedItem?.representedObject as? String,
+              let style = PlainTextImageStyle(rawValue: raw) else { return }
+        preferences.plainTextImageStyle = style
     }
 
     @objc private func clearHotKey() {

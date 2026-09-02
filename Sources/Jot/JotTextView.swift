@@ -46,9 +46,13 @@ final class JotTextView: NSTextView {
 
     /// Read order. The first type the pasteboard also carries wins, so a copy
     /// from Jot never degrades to RTF or bare text.
-    private static let readPriority: [NSPasteboard.PasteboardType] = [
-        .jotNote, .fileURL, .png, .tiff, .rtfd, .rtf, .string,
-    ]
+    ///
+    /// The web flavours sit at the back, ahead of plain text alone: a browser
+    /// offers no RTF, so they are the only way a picture copied off a page
+    /// arrives at all — and they are taken only when there really is one, so
+    /// a text-only copy still lands as the `.string` it always did.
+    private static let readPriority: [NSPasteboard.PasteboardType] =
+        [.jotNote, .fileURL, .png, .tiff, .rtfd, .rtf] + HTMLClipboard.types + [.string]
 
     private static let dropPriority: [NSPasteboard.PasteboardType] = [
         .jotNote, .fileURL, .png, .tiff, .rtfd,
@@ -317,6 +321,18 @@ final class JotTextView: NSTextView {
         Self.readPriority
     }
 
+    /// The board a paste is being read from, so the HTML rule below can look
+    /// at the bytes: `preferredPasteboardType` is handed a list of type names
+    /// and nothing else. A paste always comes from the general pasteboard,
+    /// which is what the fallback is.
+    private var pasteboardBeingRead: NSPasteboard?
+
+    override func readSelection(from pboard: NSPasteboard) -> Bool {
+        pasteboardBeingRead = pboard
+        defer { pasteboardBeingRead = nil }
+        return super.readSelection(from: pboard)
+    }
+
     /// `NSTextView` asks this which flavour to take; the default picks by the
     /// pasteboard's order, and we want ours.
     override func preferredPasteboardType(
@@ -326,9 +342,22 @@ final class JotTextView: NSTextView {
         let allowed = allowedTypes ?? Self.readPriority
         for type in Self.readPriority
         where allowed.contains(type) && availableTypes.contains(type) {
+            // HTML is only worth taking for the pictures in it. Without one,
+            // the importer would cost the copy its lists, its code blocks and
+            // its whitespace to gain nothing, so the search carries on down
+            // to the plain text.
+            if HTMLClipboard.types.contains(type), !htmlCarriesImage(type) { continue }
             return type
         }
         return super.preferredPasteboardType(from: availableTypes, restrictedToTypesFrom: allowedTypes)
+    }
+
+    private func htmlCarriesImage(_ type: NSPasteboard.PasteboardType) -> Bool {
+        let pboard = pasteboardBeingRead ?? .general
+        guard let data = pboard.data(forType: type),
+              let payload = HTMLClipboard.payload(from: data, type: type)
+        else { return false }
+        return HTMLClipboard.containsImage(payload.html)
     }
 
     override func readSelection(
@@ -361,6 +390,13 @@ final class JotTextView: NSTextView {
                 : NSAttributedString(rtf: data, documentAttributes: nil)
             guard let foreign else { return false }
             return insert(importForeign(foreign))
+
+        case .html, .webArchive, .legacyWebArchive:
+            guard let data = pboard.data(forType: type),
+                  let payload = HTMLClipboard.payload(from: data, type: type),
+                  let foreign = HTMLClipboard.attributedString(from: payload)
+            else { return super.readSelection(from: pboard, type: type) }
+            return insert(importHTML(foreign, from: payload))
 
         case .string:
             guard let text = pboard.string(forType: .string) else { return false }
@@ -412,7 +448,10 @@ final class JotTextView: NSTextView {
             return pboard.setData(data, forType: type)
 
         case .string:
-            let plain = NoteText.strippingTokens(NoteText.serialize(selection))
+            let serialized = NoteText.serialize(selection)
+            let plain = Preferences.shared.plainTextImageStyle == .marker
+                ? NoteText.placeholdingTokens(serialized)
+                : NoteText.pathTokens(serialized, assets: assets)
             return pboard.setString(plain, forType: .string)
 
         default:
@@ -522,16 +561,43 @@ final class JotTextView: NSTextView {
         NoteText.render(plain, attributes: attributes, assets: assets)
     }
 
+    /// What the markup behind a foreign string says one of its pictures is.
+    ///
+    /// The HTML importer never admits that it failed: an `<img>` it could not
+    /// load comes back as an attachment all the same, carrying its own
+    /// broken-picture icon. So where the markup is there to be read, it is
+    /// the one that decides — and a source that resolves to nothing means no
+    /// picture rather than an icon of one.
+    private enum ForeignImage {
+        /// Nothing is known about it; the attachment's own bytes are all
+        /// there is. Every RTF and RTFD paste is this.
+        case fromAttachment
+        /// The markup names the picture, and these are its bytes.
+        case bytes(HTMLClipboard.ImageBytes)
+        /// The markup names it and there is no way to get it.
+        case unavailable
+    }
+
     /// Turns an attributed string from another app into Jot's own shape:
     /// attachments become assets, everything else becomes unstyled text.
-    private func importForeign(_ foreign: NSAttributedString) -> NSAttributedString {
+    ///
+    /// `imageSource` is asked about each attachment by its position among the
+    /// others, which is the only thing the markup and the imported string can
+    /// be matched on.
+    private func importForeign(
+        _ foreign: NSAttributedString,
+        imageSource: (Int) -> ForeignImage = { _ in .fromAttachment }
+    ) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let source = foreign.string as NSString
         let full = NSRange(location: 0, length: foreign.length)
+        var imageIndex = 0
 
         foreign.enumerateAttribute(.attachment, in: full) { value, range, _ in
             if let attachment = value as? NSTextAttachment {
-                guard let id = assets?.importForeignAttachment(attachment) else { return }
+                let index = imageIndex
+                imageIndex += 1
+                guard let id = assetID(for: attachment, as: imageSource(index)) else { return }
                 result.append(render(NoteText.token(for: id)))
             } else {
                 result.append(NSAttributedString(
@@ -540,6 +606,40 @@ final class JotTextView: NSTextView {
             }
         }
         return result
+    }
+
+    private func assetID(for attachment: NSTextAttachment, as image: ForeignImage) -> String? {
+        switch image {
+        case .fromAttachment:
+            return assets?.importForeignAttachment(attachment)
+        case .bytes(let bytes):
+            // The attachment is still the fallback for bytes the store will
+            // not take — an SVG, say, which the importer can draw and the
+            // asset store cannot read.
+            return assets?.importImageData(bytes.data, preferredExtension: bytes.preferredExtension)
+                ?? assets?.importForeignAttachment(attachment)
+        case .unavailable:
+            return nil
+        }
+    }
+
+    /// A fragment copied off a web page. Each picture comes from the markup's
+    /// own `<img src>` list — inline `data:` bytes, a web archive's
+    /// subresource, or the URL fetched — and a source that resolves to none
+    /// of those drops that one picture and keeps the words around it.
+    private func importHTML(
+        _ foreign: NSAttributedString, from payload: HTMLClipboard.Payload
+    ) -> NSAttributedString {
+        let sources = HTMLClipboard.imageSources(in: payload.html)
+        let trimmed = HTMLClipboard.trimmingTrailingWhitespace(foreign)
+        return importForeign(trimmed) { index in
+            // More attachments than sources means the two lists have come
+            // apart; the attachment is the better guess there.
+            guard index < sources.count else { return .fromAttachment }
+            guard let bytes = HTMLClipboard.imageBytes(forSource: sources[index], in: payload)
+            else { return .unavailable }
+            return .bytes(bytes)
+        }
     }
 
     /// Goes through `shouldChangeText`/`didChangeText` so the edit is undoable

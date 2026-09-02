@@ -113,4 +113,54 @@ enum NoteText {
             withTemplate: ""
         )
     }
+
+    /// Text with each image token replaced by U+FFFC OBJECT REPLACEMENT
+    /// CHARACTER — what the plain-text pasteboard flavor uses, so an image
+    /// pasted into a terminal or chat leaves the same marker a stock text
+    /// view would.
+    static func placeholdingTokens(_ plain: String) -> String {
+        guard let regex else { return plain }
+        return regex.stringByReplacingMatches(
+            in: plain,
+            range: NSRange(location: 0, length: (plain as NSString).length),
+            withTemplate: "\u{FFFC}"
+        )
+    }
+
+    /// Text with each image token replaced by a Markdown image pointing at
+    /// the asset's absolute path on disk — the default for the plain-text
+    /// pasteboard flavor, so an agent reading pasted text in a terminal can
+    /// still find the picture. Numbered 1-based in order of appearance. An
+    /// asset that is missing, or with no store to resolve it against, falls
+    /// back to the U+FFFC marker for that one image.
+    static func pathTokens(_ plain: String, assets: AssetStore?) -> String {
+        guard regex != nil else { return plain }
+        let source = plain as NSString
+        var result = ""
+        var cursor = 0
+        var imageNumber = 1
+
+        for match in matches(in: plain) {
+            if match.range.location > cursor {
+                result += source.substring(
+                    with: NSRange(location: cursor, length: match.range.location - cursor)
+                )
+            }
+            let assetID = source.substring(with: match.range(at: 1))
+            if let assets, assets.exists(assetID) {
+                result += "![Image \(imageNumber)](\(assets.url(for: assetID).path))"
+            } else {
+                result += "\u{FFFC}"
+            }
+            imageNumber += 1
+            cursor = match.range.location + match.range.length
+        }
+
+        if cursor < source.length {
+            result += source.substring(
+                with: NSRange(location: cursor, length: source.length - cursor)
+            )
+        }
+        return result
+    }
 }

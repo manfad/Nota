@@ -60,6 +60,13 @@
 - ⌘A ⌘C carries images (RTFD) to other apps, and when the selection holds exactly one image the picture also goes
   as PNG/TIFF, so it pastes into terminals, browsers and Slack; two or more images offer no picture flavour.
   Jot→Jot paste prefers Jot's own flavour, re-linking without duplicating assets.
+- Plain-text flavour (what a terminal actually receives): each image becomes `![Image N](<absolute asset path>)` by default, so
+  an agent reading the paste can open the picture itself; Settings ("Copy images as:") can switch this back to a bare
+  U+FFFC placeholder character per image, the old behaviour.
+- Pasting from a web page (Chrome, Safari, Notion, Obsidian…) reads `public.html` and Safari's web archive, which are the only
+  flavours a browser puts the pictures in. Taken only when the markup holds an `<img>`: a text-only copy still lands as plain
+  text, untouched. Each picture comes from the markup's own `src` — inline `data:` bytes, a web archive subresource, or the URL
+  fetched (5s) — and one that resolves to nothing is dropped, keeping the words around it.
 - Orphan assets are never auto-deleted.
 
 ## Tabs

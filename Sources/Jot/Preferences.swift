@@ -58,6 +58,19 @@ enum SidebarSide: String, CaseIterable {
     }
 }
 
+/// How an image token reads on the plain-text pasteboard flavor — the one a
+/// terminal or chat box actually receives.
+enum PlainTextImageStyle: String, CaseIterable {
+    case path, marker
+
+    var title: String {
+        switch self {
+        case .path: "File path"
+        case .marker: "Placeholder character"
+        }
+    }
+}
+
 enum EditorPaddingOption: String, CaseIterable {
     case compact, normal, wide
 
@@ -102,6 +115,7 @@ final class Preferences {
         static let lineNumbers = "showsLineNumbers"
         static let gutterSeparator = "showsGutterSeparator"
         static let sidebarSide = "sidebarSide"
+        static let plainTextImageStyle = "plainTextImageStyle"
         static let vimMode = "vimMode"
         static let footerWords = "footerShowsWords"
         static let footerCharacters = "footerShowsCharacters"
@@ -204,6 +218,21 @@ final class Preferences {
         set {
             guard newValue != sidebarSide else { return }
             defaults.set(newValue.rawValue, forKey: Key.sidebarSide)
+            announce()
+        }
+    }
+
+    /// How an image reads on the plain-text pasteboard flavor. A file path
+    /// lets an agent in a terminal find the picture; the marker matches what
+    /// a stock text view would have left.
+    var plainTextImageStyle: PlainTextImageStyle {
+        get {
+            defaults.string(forKey: Key.plainTextImageStyle)
+                .flatMap(PlainTextImageStyle.init) ?? .path
+        }
+        set {
+            guard newValue != plainTextImageStyle else { return }
+            defaults.set(newValue.rawValue, forKey: Key.plainTextImageStyle)
             announce()
         }
     }
