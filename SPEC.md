@@ -11,6 +11,11 @@
   except PDF, the one binary Nota opens, and it opens it as a viewer (see PDF).
 - Editing a named file only updates the cache; disk changes on ⌘S only. A named file keeps its extension, encoding
   (UTF-8 / UTF-16 / Latin-1 / Windows-1252 detected on open) and line endings (LF / CRLF) on save.
+- What a file *is* is read from its bytes first, not its name: `%PDF-` magic makes it a PDF, and otherwise whether
+  it decodes as text makes it a note, whatever it is called — a `report` or `config` with no extension opens
+  correctly, and a PDF named `notes` opens as a PDF. A file's name is only consulted when its bytes cannot say
+  (missing, unreadable, or a real binary). What a file is *rendered as* (Markdown vs. LaTeX) is the one exception —
+  that stays by extension, since it is the author's own word for it (see Markdown preview).
 - ⌘S default for a new note: `.md`, opens in the last-used folder; any extension typed in the panel is kept.
 - Window close = hide (app stays alive). Quit never prompts; everything restores.
 - Search: ⌘F native find bar (in note); ⇧⌘F across all open tabs. In vim mode `/` `?` are vim's own search, typed in the
@@ -107,9 +112,11 @@
   sentence, set in display style where it stands.
 
 ## PDF
-- A `.pdf` opens in a tab of its own and is read there. Entry points are the same as any other file's: ⌘O, a drag
-  onto the window or the Dock icon, Finder's "Open With" (declared `Viewer` / `Alternate`, so nothing is taken over),
-  and `:e path`. Opening one that is already open comes back to its tab.
+- A PDF opens in a tab of its own and is read there, whatever it is named — its magic bytes decide, not its
+  extension, so a PDF named `report` opens as one and a `.pdf` that is really a text file opens as text (see Model).
+  Entry points are the same as any other file's: ⌘O, a drag onto the window or the Dock icon, Finder's "Open With"
+  (declared `Viewer` / `Alternate`, so nothing is taken over), and `:e path`. Opening one that is already open comes
+  back to its tab.
 - The tab is locked in reading: the document takes the whole column, the editor stays collapsed, and there is no mode
   control in either corner. ⇧⌘P, ⌥⇧⌘P and both View items do nothing there and are disabled — a PDF has no Markdown
   render to have a mode about.

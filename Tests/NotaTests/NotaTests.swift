@@ -1483,7 +1483,7 @@ final class NotaTests: XCTestCase {
         let controller = MainWindowController(store: SessionStore(directory: directory))
         let window = try XCTUnwrap(controller.window)
         window.setContentSize(NSSize(width: 820, height: 560))
-        window.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFrontOffscreen()
         window.layoutIfNeeded()
 
         let content = try XCTUnwrap(window.contentView)

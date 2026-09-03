@@ -895,7 +895,7 @@ final class MainWindowController: NSWindowController {
         // Asked before the file is read: `TextFile.read` says no to a binary,
         // and a PDF read as a note that failed would come back as a dirty tab
         // of nothing at all.
-        if let fileURL, Note.isPDFFile(fileURL) {
+        if let fileURL, isPDFAtRestore(fileURL) {
             return makeRestoredPDFNote(from: tab, fileURL: fileURL)
         }
         var text = store.readText(for: tab.id) ?? ""
@@ -928,6 +928,20 @@ final class MainWindowController: NSWindowController {
         // those tabs come back in the editor.
         note.previewMode = tab.previewMode ?? .off
         return note
+    }
+
+    /// Whether a restored tab's file is a PDF: the bytes decide when the
+    /// file is still there, the same as `open(url:)` — so a session tab
+    /// named `report` that is really a PDF comes back as one. Once it is not
+    /// there to read at all, the name is what is left to go on, which is
+    /// what keeps a missing `.pdf`'s tab a PDF tab rather than an empty,
+    /// dirty text one.
+    private func isPDFAtRestore(_ url: URL) -> Bool {
+        switch FileSniff.classify(at: url) {
+        case .pdf: true
+        case .unreadable: Note.isPDFFile(url)
+        case .text, .binary: false
+        }
     }
 
     /// A PDF tab coming back. There is no cache behind it and nothing to be
@@ -1376,16 +1390,40 @@ final class MainWindowController: NSWindowController {
             selectTab(at: index)
             return
         }
-        // The one binary Nota opens, and it opens as a viewer: its own tab,
-        // locked in reading, with PDFKit drawing the pages.
-        if Note.isPDFFile(target) {
-            guard FileManager.default.fileExists(atPath: target.path) else {
-                presentFailure("Couldn’t open “\(target.lastPathComponent)”.", nil)
-                return
+        // The bytes decide what the file is before its name gets a say: a
+        // PDF opens as one and text opens as text, whatever it is called.
+        switch FileSniff.classify(at: target) {
+        case .pdf:
+            openAsPDF(target)
+        case .text:
+            openAsText(target)
+        case .binary:
+            // Not text, and no `%PDF-` at the front — but a file actually
+            // named for a PDF still gets a tab. PDFKit may yet parse it; if
+            // `PDFDocument` comes back `nil` that is the pane's own missing
+            // message, not this alert.
+            if Note.isPDFFile(target) {
+                openAsPDF(target)
+            } else {
+                presentFailure("Couldn’t open “\(target.lastPathComponent)”.",
+                               nil, detail: "Nota only opens text files.")
             }
-            addTab(fileURL: target, kind: .pdf)
-            return
+        case .unreadable:
+            // Nothing about the file could be read at all — missing, or no
+            // permission — so the name is all that is left to say what it
+            // was going to be.
+            presentFailure("Couldn’t open “\(target.lastPathComponent)”.", nil,
+                           detail: Note.isPDFFile(target) ? nil : "Nota only opens text files.")
         }
+    }
+
+    /// The one binary Nota opens, and it opens as a viewer: its own tab,
+    /// locked in reading, with PDFKit drawing the pages.
+    private func openAsPDF(_ target: URL) {
+        addTab(fileURL: target, kind: .pdf)
+    }
+
+    private func openAsText(_ target: URL) {
         guard let opened = TextFile.read(at: target) else {
             presentFailure("Couldn’t open “\(target.lastPathComponent)”.",
                            nil, detail: "Nota only opens text files.")

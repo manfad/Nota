@@ -906,7 +906,7 @@ final class MarkdownPreviewTests: XCTestCase {
         _ = NSApplication.shared
         let controller = try makeController()
         let window = try XCTUnwrap(controller.window)
-        window.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFrontOffscreen()
         window.layoutIfNeeded()
         try XCTSkipUnless(window.isVisible, "no window server here — nothing slides")
 
@@ -933,7 +933,7 @@ final class MarkdownPreviewTests: XCTestCase {
         let controller = try makeController()
         let window = try XCTUnwrap(controller.window)
         window.setFrame(NSRect(x: 120, y: 140, width: 1100, height: 620), display: false)
-        window.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFrontOffscreen()
         window.layoutIfNeeded()
 
         controller.setPreviewMode(.split)
@@ -996,7 +996,7 @@ final class MarkdownPreviewTests: XCTestCase {
         let controller = try makeController()
         let window = try XCTUnwrap(controller.window)
         window.setFrame(NSRect(x: 120, y: 140, width: 1100, height: 620), display: false)
-        window.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFrontOffscreen()
         window.layoutIfNeeded()
 
         controller.setPreviewMode(.split)
@@ -1042,7 +1042,7 @@ final class MarkdownPreviewTests: XCTestCase {
         let controller = try makeController()
         let window = try XCTUnwrap(controller.window)
         window.setFrame(NSRect(x: 100, y: 120, width: 1200, height: 700), display: false)
-        window.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFrontOffscreen()
         window.layoutIfNeeded()
 
         controller.setPreviewMode(.split)
@@ -2011,7 +2011,7 @@ final class MarkdownPreviewTests: XCTestCase {
         _ = NSApplication.shared
         let controller = try makeController()
         let window = try XCTUnwrap(controller.window)
-        window.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFrontOffscreen()
         controller.setPreviewMode(.reading)
         // On a window somebody can see, the mode slides in — ⌘F is asked for
         // once it has landed.
@@ -2528,7 +2528,7 @@ final class MarkdownPreviewTests: XCTestCase {
         _ = NSApplication.shared
         let controller = try makeController()
         let window = try XCTUnwrap(controller.window)
-        window.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFrontOffscreen()
         controller.setPreviewMode(.split)
         window.layoutIfNeeded()
 

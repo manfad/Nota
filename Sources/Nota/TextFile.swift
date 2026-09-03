@@ -174,11 +174,21 @@ enum TextFile {
 
     // MARK: - Types
 
-    /// Text on paper but not text to Nota: SPEC rules out rich text and
-    /// binaries, and an image belongs to the asset store, not to a tab.
-    private static let excludedTypes: [UTType] = [
-        .rtf, .pdf, .image, .audiovisualContent, .archive,
+    /// Text on paper but not text to Nota on purpose: an RTF's or an
+    /// archive's own wrapper is plain ASCII and would decode as text as
+    /// happily as a real note, but SPEC rules them out by what they are
+    /// regardless — an image belongs to the asset store, not to a tab, and a
+    /// rich-text or zipped file is not a note either. PDF is not in this
+    /// list: it is content Nota opens, only as a viewer instead of an
+    /// editor, so `FileSniff` decides it by its magic bytes rather than by
+    /// exclusion.
+    static let deliberatelyExcludedTypes: [UTType] = [
+        .rtf, .image, .audiovisualContent, .archive,
     ]
+
+    /// The same list, plus PDF, for the places that are still deciding by
+    /// extension alone rather than by content.
+    private static let excludedTypes: [UTType] = deliberatelyExcludedTypes + [.pdf]
 
     /// Whether a file dropped on the editor is one to open in a tab. A type
     /// the system knows answers for itself; a `.toml` or a `.env` has no UTI
@@ -195,8 +205,21 @@ enum TextFile {
         return decode(head) != nil
     }
 
+    /// Whether `url`'s extension is one of the types Nota refuses to open as
+    /// a note no matter what its bytes look like.
+    static func isDeliberatelyExcluded(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
+        return deliberatelyExcludedTypes.contains(where: type.conforms(to:))
+    }
+
     /// The first 8 KB, so sniffing a huge log does not read the whole thing.
-    private static func head(of url: URL) -> Data? {
+    /// `nil` means the file could not be opened at all — missing, a
+    /// directory, or no permission — which is what `FileSniff` calls
+    /// unreadable rather than binary.
+    static func head(of url: URL) -> Data? {
+        if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            return nil
+        }
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         return (try? handle.read(upToCount: sniffLength)) ?? Data()
@@ -218,4 +241,49 @@ enum TextFile {
         }
         return types
     }()
+}
+
+// MARK: - Sniffing
+
+/// What a file's own bytes say it is, decided before its name is ever asked.
+/// This is the one place Nota reads a file's content to answer that
+/// question; everywhere else — `MainWindowController.open(url:)`,
+/// `Note.isOpenable`, restoring a session tab — asks `FileSniff` first and
+/// only falls back to the extension when the bytes cannot say anything at
+/// all.
+enum FileClass {
+    /// `%PDF-` at the start of the file, a byte-order mark or not.
+    case pdf
+    /// Not a PDF, and `TextFile.decode` can make sense of the bytes.
+    case text
+    /// Readable, but neither of the above — a real binary.
+    case binary
+    /// Could not be read at all: missing, a directory, or no permission.
+    /// Nothing about the file is known, so the caller falls back to its
+    /// name, the one thing left to go on.
+    case unreadable
+}
+
+enum FileSniff {
+    private static let pdfMagic: [UInt8] = Array("%PDF-".utf8)
+    private static let utf8BOM: [UInt8] = [0xEF, 0xBB, 0xBF]
+
+    /// Classifies a file by its first 8 KB, in order: the PDF signature,
+    /// then whether `TextFile.decode` reads the bytes as text, and binary
+    /// for everything else that could still be read.
+    static func classify(at url: URL) -> FileClass {
+        guard let head = TextFile.head(of: url) else { return .unreadable }
+        if isPDF(head) { return .pdf }
+        if TextFile.decode(head) != nil { return .text }
+        return .binary
+    }
+
+    /// A PDF is never actually preceded by a byte-order mark, but a file
+    /// that somehow was should still be known for what it is rather than
+    /// mistaken for text with a stray mark at the front.
+    private static func isPDF(_ head: Data) -> Bool {
+        var bytes = head
+        if bytes.starts(with: utf8BOM) { bytes = bytes.dropFirst(utf8BOM.count) }
+        return bytes.starts(with: pdfMagic)
+    }
 }

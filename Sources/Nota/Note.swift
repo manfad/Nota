@@ -165,6 +165,12 @@ final class Note {
 
     /// The same rule, for a file that has no note behind it yet — what the
     /// "open Markdown and LaTeX files in reading mode" setting asks about.
+    ///
+    /// This is the one question in Nota that stays by extension on purpose:
+    /// what a file *is* — text, PDF, binary — comes from its bytes, but what
+    /// it is *rendered as* is the author's own word, spelled in the name
+    /// they gave it. A `.md` that happens to hold LaTeX macros still renders
+    /// as Markdown; there is no content to sniff that would say otherwise.
     static func previewKind(_ url: URL) -> RenderedPreviewKind? {
         RenderedPreviewKind(fileExtension: url.pathExtension)
     }
@@ -185,9 +191,23 @@ final class Note {
     }
 
     /// Whether a file is one Nota opens in a tab at all — what a drop on the
-    /// window filters on. Text of any kind, and the one binary.
+    /// window filters on. The bytes decide first: `FileSniff` says PDF or
+    /// text and that is the answer, whatever the file is named — a `report`
+    /// with no extension and a `.pdf` that is really a log both go by their
+    /// content. A handful of types stay refused by name even when their
+    /// bytes read as plain text, the same way `TextFile.isTextFile` refuses
+    /// them — an RTF's own markup is ASCII, but it is not a note. Only when
+    /// the bytes cannot say anything — the file is missing, unreadable, or a
+    /// real binary — does the old name-based guess take over.
     static func isOpenable(_ url: URL) -> Bool {
-        isPDFFile(url) || TextFile.isTextFile(at: url)
+        switch FileSniff.classify(at: url) {
+        case .pdf:
+            return true
+        case .text:
+            return !TextFile.isDeliberatelyExcluded(url)
+        case .binary, .unreadable:
+            return isPDFFile(url) || TextFile.isTextFile(at: url)
+        }
     }
 
     /// The parsed document behind a PDF tab, read the first time it is asked
