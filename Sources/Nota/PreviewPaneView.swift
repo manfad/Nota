@@ -5,8 +5,8 @@ import AppKit
 ///
 /// It holds one content view at a time and keeps the others alive behind it
 /// rather than throwing them away, so a trip through a PDF tab and back does
-/// not cost the render that was already made — the Markdown view still has
-/// it, and its own cache says so. Which one is in front is settled by the
+/// not cost the render that was already made — the render view still has it,
+/// and its own cache says so. Which one is in front is settled by the
 /// note, once, in `PreviewContentKind`.
 ///
 /// Everything the window controller wants of the content it asks the column
@@ -21,11 +21,14 @@ final class PreviewPaneView: NSView {
     /// what it is holding.
     struct Panes {
         let markdown: MarkdownPreviewView
+        let latex: LaTeXPreviewView
         let pdf: PDFPreviewView
-        let showsPDF: Bool
+        let kind: PreviewContentKind
+        var showsPDF: Bool { kind == .pdf }
     }
 
     private let markdownContent = MarkdownPreviewView()
+    private let latexContent = LaTeXPreviewView()
     private let pdfContent = PDFPreviewView()
     private var currentKind: PreviewContentKind = .markdown
 
@@ -175,12 +178,13 @@ final class PreviewPaneView: NSView {
     private func content(of kind: PreviewContentKind) -> any PreviewContent {
         switch kind {
         case .markdown: markdownContent
+        case .latex: latexContent
         case .pdf: pdfContent
         }
     }
 
     private func forEachContent(_ body: (any PreviewContent) -> Void) {
-        for kind in [PreviewContentKind.markdown, .pdf] { body(content(of: kind)) }
+        for kind in PreviewContentKind.all { body(content(of: kind)) }
     }
 
     // MARK: - Which content is in front
@@ -242,6 +246,7 @@ final class PreviewPaneView: NSView {
     // MARK: - Tests
 
     var panes: Panes {
-        Panes(markdown: markdownContent, pdf: pdfContent, showsPDF: currentKind == .pdf)
+        Panes(markdown: markdownContent, latex: latexContent, pdf: pdfContent,
+              kind: currentKind)
     }
 }

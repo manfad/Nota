@@ -157,11 +157,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let mode = windowController?.previewMode ?? .off
         if menuItem.action == #selector(toggleMarkdownPreview(_:)) {
             menuItem.state = mode == .off ? .off : .on
-            return windowController?.canShowMarkdownPreview ?? false
+            // The item is named for the grammar in front: a `.tex` tab is not
+            // offered a Markdown preview, it is offered its own.
+            menuItem.title = windowController?.currentRenderedPreviewKind == .latex
+                ? "LaTeX Preview" : "Markdown Preview"
+            return windowController?.canShowRenderedPreview ?? false
         }
         if menuItem.action == #selector(toggleReadingMode(_:)) {
             menuItem.state = mode == .reading ? .on : .off
-            return windowController?.canShowMarkdownPreview ?? false
+            return windowController?.canShowRenderedPreview ?? false
         }
         // A PDF tab is a view of a file Nota never writes to, so there is
         // nothing for either save item to do there.

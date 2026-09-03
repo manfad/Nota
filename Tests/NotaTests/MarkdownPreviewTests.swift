@@ -676,14 +676,14 @@ final class MarkdownPreviewTests: XCTestCase {
     func testPreviewIsAvailableOnlyForDotMdFiles() throws {
         _ = NSApplication.shared
         let controller = try makeController()
-        XCTAssertTrue(controller.canShowMarkdownPreview)
+        XCTAssertTrue(controller.canShowRenderedPreview)
 
         let directory = try makeTemporaryDirectory()
         let text = directory.appendingPathComponent("notes.txt")
         try "# Plain text".write(to: text, atomically: true, encoding: .utf8)
         controller.open(url: text)
 
-        XCTAssertFalse(controller.canShowMarkdownPreview)
+        XCTAssertFalse(controller.canShowRenderedPreview)
         controller.toggleMarkdownPreview()
         XCTAssertFalse(controller.previewState.isVisible)
         XCTAssertFalse(controller.showsMarkdownPreview)
@@ -691,7 +691,7 @@ final class MarkdownPreviewTests: XCTestCase {
         let uppercase = directory.appendingPathComponent("notes.MD")
         try "# Markdown".write(to: uppercase, atomically: true, encoding: .utf8)
         controller.open(url: uppercase)
-        XCTAssertTrue(controller.canShowMarkdownPreview)
+        XCTAssertTrue(controller.canShowRenderedPreview)
     }
 
     /// A file dropped on the window is a fresh tab like any other: it opens
@@ -1447,17 +1447,17 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(plus.accessibilityRole(), .button)
         XCTAssertEqual(plus.toolTip, "New Tab  ⌘T")
         XCTAssertFalse(plus.isHidden)
-        XCTAssertTrue(controller.canShowMarkdownPreview, "the window opens on a saved .md")
+        XCTAssertTrue(controller.canShowRenderedPreview, "the window opens on a saved .md")
 
         plus.performClick(nil)
         XCTAssertFalse(
-            controller.canShowMarkdownPreview,
+            controller.canShowRenderedPreview,
             "the + opens an untitled note, which has no render until it is saved"
         )
         controller.selectTab(at: 0)
-        XCTAssertTrue(controller.canShowMarkdownPreview, "the original .md is still the first tab")
+        XCTAssertTrue(controller.canShowRenderedPreview, "the original .md is still the first tab")
         controller.selectTab(at: 1)
-        XCTAssertFalse(controller.canShowMarkdownPreview, "and the new one is still the second")
+        XCTAssertFalse(controller.canShowRenderedPreview, "and the new one is still the second")
     }
 
     /// When the strip overflows, the tabs scroll in the leading remainder;

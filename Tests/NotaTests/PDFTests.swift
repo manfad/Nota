@@ -88,7 +88,7 @@ final class PDFTests: XCTestCase {
         controller.open(url: try makePDF(pages: 1, named: "paper.pdf",
                                          in: try makeTemporaryDirectory()))
 
-        XCTAssertFalse(controller.canShowMarkdownPreview,
+        XCTAssertFalse(controller.canShowRenderedPreview,
                        "there is no Markdown render behind a PDF")
         let (editor, preview) = controller.modeControlOverlays
         XCTAssertTrue(editor.isHidden, "no control in the collapsed editor column")

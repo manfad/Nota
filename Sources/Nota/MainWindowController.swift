@@ -1394,7 +1394,7 @@ final class MainWindowController: NSWindowController {
         addTab(fileURL: target, text: opened.text, format: opened.format)
         // The setting is about opening files, not about restoring them: a tab
         // coming back from the session keeps the mode it was left in.
-        if preferences.opensMarkdownInReadingMode, Note.supportsMarkdownPreview(target) {
+        if preferences.opensMarkdownInReadingMode, Note.supportsRenderedPreview(target) {
             setPreviewMode(.reading)
         }
     }
@@ -1838,23 +1838,30 @@ extension MainWindowController: TabPickerPanelDelegate {
 
 extension MainWindowController {
 
-    /// Whether the render is up, what it is showing, and which mode the tab
-    /// in front is in — for the tests.
+    /// Whether the render is up, what whichever render is in front is
+    /// showing, and which mode the tab in front is in — for the tests.
     var previewState: (isVisible: Bool, renderedText: String, mode: PreviewMode) {
-        (previewIsVisible, previewColumn.panes.markdown.renderedText, previewMode)
+        (previewIsVisible,
+         (previewColumn.current as? RenderedPreviewView)?.renderedText ?? "",
+         previewMode)
     }
 
     /// Whether a mode slide is still on the wing — for the tests, which have
     /// no other way to tell a 0.2s slide from a snap.
     var isSlidingPreviewMode: Bool { previewModeIsSliding }
 
-    /// Whether the front tab has a render at all. Only a saved `.md` file
-    /// does; every other note keeps the whole window for its source.
-    var canShowMarkdownPreview: Bool { currentNote?.supportsMarkdownPreview ?? false }
+    /// Whether the front tab has a render at all. Only a saved `.md` or
+    /// `.tex` file does; every other note keeps the whole window for its
+    /// source.
+    var canShowRenderedPreview: Bool { currentNote?.supportsRenderedPreview ?? false }
+
+    /// Which grammar the front tab's render reads — what the View item calls
+    /// itself. `nil` for a tab with no render, where the item is disabled.
+    var currentRenderedPreviewKind: RenderedPreviewKind? { currentNote?.previewKind }
 
     /// What the tab in front asks for — what the View menu's checkmarks say,
     /// whether or not zen is hiding the chrome at this moment. A remembered
-    /// mode on a file that is not `.md` is deliberately ignored.
+    /// mode on a file that has no render is deliberately ignored.
     var previewMode: PreviewMode {
         guard let note = currentNote else { return .off }
         // A PDF tab has no Markdown render and no mode control, and is in
@@ -1883,7 +1890,7 @@ extension MainWindowController {
     /// control, a block click and a keystroke in reading mode all come
     /// through here.
     func setPreviewMode(_ mode: PreviewMode) {
-        guard let note = currentNote, note.supportsMarkdownPreview else { return }
+        guard let note = currentNote, note.supportsRenderedPreview else { return }
         note.previewMode = mode
         applyPreviewMode(animated: true)
         refreshPreviewContent()
@@ -2227,7 +2234,7 @@ extension MainWindowController {
     /// while it is up — the bar opens above the content, right where the
     /// control floats, and its own buttons must stay clickable.
     fileprivate func updateModeControlOverlays() {
-        let available = canShowMarkdownPreview && !isZenMode
+        let available = canShowRenderedPreview && !isZenMode
         editorModeOverlay.setAvailable(
             available && installedPreviewMode != .reading && !scrollView.isFindBarVisible
         )

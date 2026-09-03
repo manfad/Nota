@@ -207,7 +207,7 @@ enum TextFile {
     /// `allowsOtherFileTypes`, which is what keeps a typed `.toml` a `.toml`.
     static let contentTypes: [UTType] = {
         var types: [UTType] = []
-        for name in ["md", "txt", "json", "xml", "html", "css", "js", "yaml",
+        for name in ["md", "tex", "txt", "json", "xml", "html", "css", "js", "yaml",
                      "csv", "log", "sh", "py", "swift"] {
             if let type = UTType(filenameExtension: name), !types.contains(type) {
                 types.append(type)

@@ -44,6 +44,26 @@ enum PreviewMode: String, Codable, CaseIterable {
     }
 }
 
+/// Which of Nota's two renders a file gets, decided by how it is spelled and
+/// by nothing else. The grammars are different; everything around them — the
+/// three modes, the mode control, block sync, the find bar — is the same.
+enum RenderedPreviewKind {
+    case markdown, latex
+
+    init?(fileExtension: String) {
+        if fileExtension.caseInsensitiveCompare("md") == .orderedSame {
+            self = .markdown
+            return
+        }
+        for spelling in ["tex", "latex", "ltx"]
+        where fileExtension.caseInsensitiveCompare(spelling) == .orderedSame {
+            self = .latex
+            return
+        }
+        return nil
+    }
+}
+
 /// What a tab is holding. Everything Nota edits is text; a PDF is the one
 /// binary it opens at all, and it opens as a viewer — there is no text
 /// storage behind it, nothing to save, and nothing to keep in the cache.
@@ -80,9 +100,9 @@ final class Note {
     /// Where the tab was left: the caret in a text note, the page being read
     /// in a PDF. One number either way, so the session keeps both the same.
     var selectionLocation: Int = 0
-    /// What this tab does with the Markdown render — editor, split or
-    /// reading. Per tab, not per app: ⇧⌘P on a Markdown note must not follow
-    /// you into the next ⌘T. The editor until asked for.
+    /// What this tab does with its render — editor, split or reading. Per
+    /// tab, not per app: ⇧⌘P on a Markdown note must not follow you into the
+    /// next ⌘T. The editor until asked for.
     ///
     /// A PDF is the render and nothing else: it is locked in reading, and
     /// asking it for another mode is asking for nothing at all.
@@ -128,21 +148,30 @@ final class Note {
         return untitledName ?? UntitledNaming.base
     }
 
-    /// Only saved `.md` files have a rendered companion. Nota still edits any
-    /// text file, but other formats always keep the full workspace for source.
-    var supportsMarkdownPreview: Bool {
-        fileURL.map(Note.supportsMarkdownPreview) ?? false
+    /// Which render this tab has, if it has one at all. Only a saved file
+    /// spelled one of the two ways does. Nota still edits any text file, but
+    /// every other format keeps the full workspace for source.
+    var previewKind: RenderedPreviewKind? {
+        fileURL.flatMap(Note.previewKind)
     }
 
+    /// Whether the tab has a render beside its source.
+    var supportsRenderedPreview: Bool { previewKind != nil }
+
     /// Whether the tab has anything at all to put in the preview column: a
-    /// render for a saved `.md`, the document for a PDF. A `.txt` and an
-    /// untitled note have neither, so no mode means anything there.
-    var hasPreviewContent: Bool { kind == .pdf || supportsMarkdownPreview }
+    /// render for a saved `.md` or `.tex`, the document for a PDF. A `.txt`
+    /// and an untitled note have neither, so no mode means anything there.
+    var hasPreviewContent: Bool { kind == .pdf || supportsRenderedPreview }
 
     /// The same rule, for a file that has no note behind it yet — what the
-    /// "open Markdown files in reading mode" setting asks about.
-    static func supportsMarkdownPreview(_ url: URL) -> Bool {
-        url.pathExtension.caseInsensitiveCompare("md") == .orderedSame
+    /// "open Markdown and LaTeX files in reading mode" setting asks about.
+    static func previewKind(_ url: URL) -> RenderedPreviewKind? {
+        RenderedPreviewKind(fileExtension: url.pathExtension)
+    }
+
+    /// The same, as a yes or no.
+    static func supportsRenderedPreview(_ url: URL) -> Bool {
+        previewKind(url) != nil
     }
 
     /// A file Nota opens as a viewer rather than an editor. The spelling

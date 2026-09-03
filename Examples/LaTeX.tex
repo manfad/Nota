@@ -1,0 +1,155 @@
+% Nota's LaTeX render, exercised. Press ⇧⌘P to cycle editor → split →
+% reading, or ⌥⇧⌘P to jump straight to reading. This whole line is a comment
+% and renders nothing; an escaped \% is a percent sign.
+\documentclass[11pt]{article}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\newcommand{\nota}{\textbf{Nota}}
+
+\title{Reading \LaTeX{} in Nota}
+\author{The Nota preview}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Nota reads an article-level subset of \LaTeX{} and lays it out to be read ---
+not to be typeset. The preamble above renders nothing at all; only the title,
+the author and the date were taken out of it.
+\end{abstract}
+
+\section{Text}
+\label{sec:text}
+
+Paragraphs are parted by a blank line, and a source line break is just a space,
+so this sentence
+runs on.
+
+You can set text \textbf{bold}, \textit{italic}, \emph{emphasised},
+\texttt{monospaced}, \underline{underlined} and \textsc{small caps}, and nest
+them: \textbf{\textit{both at once}}.
+
+Punctuation is TeX's: `single quotes', ``double quotes'', an en--dash, an
+em---dash, a non~breaking space, and an ellipsis\ldots{} A hard break comes
+from a double backslash,\\ like that.
+
+A footnote\footnote{Which shows as a bracketed note in the secondary colour,
+right where the mark stood.} sits in the running text. So do citations
+\cite{knuth1984} and cross-references to Section \ref{sec:maths} and to
+Equation \eqref{eq:gauss}. Links are clickable: \url{https://example.com} and
+\href{https://example.com}{a named link}.
+
+\subsection{Lists}
+
+\begin{itemize}
+  \item Bullets, from \texttt{itemize}.
+  \item They nest:
+  \begin{enumerate}
+    \item Numbered, from \texttt{enumerate}.
+    \item And the numbers count.
+  \end{enumerate}
+  \item Back out at the first level.
+\end{itemize}
+
+\begin{description}
+  \item[Block sync] Clicking a block here puts the caret on its source.
+  \item[Both ways] Moving the caret over there lights the block here.
+\end{description}
+
+\subsubsection{Quotations}
+
+\begin{quote}
+A quoted paragraph takes a leading hairline bar, the same one a Markdown block
+quote gets.
+\end{quote}
+
+\section{Maths}
+\label{sec:maths}
+
+Inline maths sits in the sentence: the roots are
+$x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$, Euler's identity is
+$e^{i\pi} + 1 = 0$, and \(a^2 + b^2 = c^2\) is Pythagoras.
+
+An unnumbered display formula stands on its own:
+\[
+  \lim_{x \to 0} \frac{\sin x}{x} = 1
+\]
+
+A numbered one carries its number at the trailing edge:
+
+\begin{equation}
+\label{eq:gauss}
+\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
+\end{equation}
+
+An \texttt{align} splits on the double backslash, drops the alignment
+ampersands, and numbers every row in its own right:
+
+\begin{align}
+(a + b)^2 &= a^2 + 2ab + b^2 \\
+(a - b)^2 &= a^2 - 2ab + b^2
+\end{align}
+
+A starred environment is unnumbered:
+
+\begin{gather*}
+\sum_{i=1}^{n} i = \frac{n(n+1)}{2}
+\end{gather*}
+
+\section{Blocks}
+
+\subsection{Code}
+
+Verbatim is untouched --- the dollars and backslashes in here are characters,
+not delimiters:
+
+\begin{verbatim}
+for i in 1..$n; do
+    echo "$i \frac{1}{2}"
+done
+\end{verbatim}
+
+\subsection{Tables}
+
+\begin{table}
+\begin{tabular}{lrl}
+\hline
+Environment & Rows & Numbered \\
+\hline
+equation & 1 & yes \\
+align & many & every row \\
+gather* & many & no \\
+\hline
+\end{tabular}
+\caption{What the maths environments do.}
+\end{table}
+
+\subsection{Pictures}
+
+An \verb-\includegraphics- whose path resolves beside this file draws the
+picture; one that resolves to nothing shows the path instead, as this one does:
+
+\begin{figure}
+\includegraphics[width=0.6\textwidth]{diagram}
+\caption{A picture that is not there.}
+\end{figure}
+
+\section{What the subset has never heard of}
+
+A command it does not know renders as its own raw source, inline in the
+code-span style: \marginpar{like this one}. So does a use of the
+\verb-\newcommand- from the preamble: \nota.
+
+An environment it does not know renders whole, as a code block:
+
+\begin{theorem}
+Every unknown environment comes back as itself. Never a blank, never a broken
+page --- the same rule the maths engine keeps.
+\end{theorem}
+
+\begin{center}
+That is the whole of it.
+\end{center}
+
+\end{document}

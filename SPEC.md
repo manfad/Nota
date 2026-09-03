@@ -30,8 +30,9 @@
 - **Editor** (default), **Split**, **Reading**. ⇧⌘P cycles editor → split → reading → editor; ⌥⇧⌘P jumps to reading and
   back out to the editor. The View menu keeps "Markdown Preview" (checkmarked in split and reading) and adds
   "Reading Mode" (checkmarked in reading). Both checkmarks are the front tab's.
-- Markdown files only: a note whose file is spelled `.md`, saved. Every other tab — an untitled note, a `.txt`, anything
-  not yet saved — has no render, no mode control, and both View items are disabled there, so ⇧⌘P and ⌥⇧⌘P do nothing.
+- Rendered files only: a note whose file is spelled `.md`, saved — or `.tex` (`.latex`, `.ltx`), which gets the LaTeX
+  render below instead, and everything else here unchanged. Every other tab — an untitled note, a `.txt`, anything not
+  yet saved — has no render, no mode control, and both View items are disabled there, so ⇧⌘P and ⌥⇧⌘P do nothing.
 - Split: a read-only rendered pane beside the editor (trailing side, resizable, 50% default, min 240pt); the image sidebar
   stays outermost. Reading: the editor collapses and the render takes its column. Either way the window keeps its frame —
   the panes share the room out between them. A mode you ask for slides across in 0.2s (Reduce Motion snaps; a tab switch
@@ -64,8 +65,8 @@
 - Per tab, not per app: ⇧⌘P sets the mode of the tab in front only, and switching tabs lays out for the tab you land on —
   a new ⌘T tab and a freshly opened file start in the editor. The mode rides in `session.json`, so each tab comes back the
   way it was left (a session written when the pane was a yes/no comes back split where it was open).
-- Settings "Open Markdown files in reading mode" (default off): opening a `.md` file opens that tab in reading. Session
-  restore ignores it — the tab's saved mode wins.
+- Settings "Open Markdown and LaTeX files in reading mode" (default off): opening a `.md` or `.tex` file opens that tab
+  in reading. Session restore ignores it — the tab's saved mode wins.
 - Native: Foundation's Markdown parser (`AttributedString(markdown:)`, full interpretation) + Nota's own block styling.
   No WebView, no dependencies, no theming. Same font family/size as the editor; headings scale from it (H1 ×1.6 … H6 ×1.0,
   semibold); lists indented with `•` / `1.`; block quotes with a leading hairline bar in secondaryLabelColor; code spans
@@ -125,20 +126,24 @@
 - Footer: the middle counts pages (`12 pages`, `1 page`), the right says which one (`Page 3 of 12`), and it is empty
   when there is no document to be in. Everything else in the chrome — the strip, the vim badge, zen — is unchanged.
 
-## LaTeX preview (decided 2026-09-03, planned for v0.5)
+## LaTeX preview (decided 2026-09-03)
 - A `.tex` (`.latex`, `.ltx`) file is a tab with a render beside it, the way a `.md` is: the same three modes, the same
   floating mode control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the session.
-  The setting becomes "Open Markdown and LaTeX files in reading mode".
+  The setting is "Open Markdown and LaTeX files in reading mode".
 - Native, no dependency, no WebView: Nota's own parser of a LaTeX subset into attributed text, the equations drawn by the
   maths engine the Markdown render already uses. Not TeX's pixels — Nota's reading layout of the document.
-- Article level on day one: `\maketitle` from `\title` `\author` `\date`, `abstract`, numbered `\section`
-  `\subsection` `\subsubsection` (1, 1.1, 1.1.1), paragraphs, `\textbf` `\textit` `\emph` `\texttt` `\underline`,
-  `itemize` `enumerate` `description`, `$…$` `\(…\)` `\[…\]` `equation` `align` `gather` (numbered on the right; `*`
-  forms unnumbered) through the maths engine, `verbatim` `lstlisting` as code blocks, `quote` `quotation`, `\footnote`
-  as a bracketed note in the secondary colour, `\cite` `\ref` `\eqref` `\label` `\url` `\href` as grey placeholders
-  showing their key, `\includegraphics` as the picture when the path resolves beside the file (alt text otherwise),
-  `tabular` best effort like the Markdown table, `figure`/`table` with a `Figure N:` / `Table N:` caption, `%` comments
-  stripped, `\\` and `\newline`, `~` as a non-breaking space, `--` `---` as dashes, `` ` ` '' `` as quotes.
+- Article level: `\maketitle` from `\title` `\author` `\date`, `abstract`, numbered `\section` `\subsection`
+  `\subsubsection` (1, 1.1, 1.1.1) and `\paragraph`, the `*` forms unnumbered, paragraphs, `\textbf` `\textit` `\emph`
+  `\texttt` `\underline` `\textsc` `\verb`, `itemize` `enumerate` `description` (nested, `\item[label]`), `$…$`
+  `\(…\)` `\[…\]` `equation` `align` `gather` `multline` `eqnarray` `displaymath` (numbered on the right, `align`'s
+  rows one formula each on `\\` with the `&`s dropped; `*` forms and `\nonumber` unnumbered) through the maths engine,
+  `verbatim` `lstlisting` `minted` as code blocks, `quote` `quotation`, `center`, `\footnote` as a bracketed note in the
+  secondary colour, `\cite` `\ref` `\eqref` `\pageref` `\label` as grey placeholders showing their key, `\url`
+  `\href` underlined and clickable, `\includegraphics` as the picture when the path resolves beside the file — the
+  extension tried when the path has none — and the path as alt text otherwise, `tabular` best effort like the Markdown
+  table, `figure`/`table` with a `Figure N:` / `Table N:` caption, `%` comments stripped (`\%` is a percent sign),
+  `\\` and `\newline`, `~` as a non-breaking space, `--` `---` as dashes, `` ` ` '' `` as quotes, `\ldots` as an
+  ellipsis, `\LaTeX` and `\TeX` as themselves.
 - The preamble renders nothing: `\documentclass`, `\usepackage`, `\newcommand` and the rest are skipped, and only the
   title fields are taken from it. A file with no `\begin{document}` is rendered whole as body. Uses of a `\newcommand`
   show raw, since expansion is beyond article level.
@@ -147,8 +152,10 @@
   keeps.
 - Block sync both ways, as for Markdown, and exact rather than heuristic: the parser knows every block's source range,
   so no source map is searched for.
-- Export: File › Export as PDF… on a `.tex` tab runs `pdflatex` (or `tectonic`, `xelatex`) if one is installed, showing
-  the result in a PDF tab; with none installed it prints the native render, the same as the Markdown export (Todo).
+- The render and the pane are the Markdown ones: `RenderStyle` holds the look both wear — heading scales, list indents,
+  quote bar, code box, table, rule — and `RenderedPreviewView` holds everything a rendered pane does, so each renderer is
+  a subclass that says which grammar it reads and nothing else.
+- Export as PDF… on a `.tex` tab is a Todo (see Todo 6).
 - Out for now: `\input` `\include`, theorem environments, `\newcommand` expansion, bibliographies from `.bib`.
 
 ## Workspace (decided 2026-09-03, refactor before the LaTeX preview)
@@ -250,6 +257,8 @@
    `3 / 7 done` in the footer for a `.md` that has any.
 6. **Print / PDF of the render.** ⌥⌘P prints the reading layout (⌘P is the tab switcher); Export as PDF… in File, same
    layout, page margins from the render's inset. Plain-text tabs print the text with line numbers if the gutter is on.
+   Export a `.tex` tab as PDF via `pdflatex` / `tectonic` / `xelatex` if one is installed, showing the result in a PDF
+   tab; with none installed it prints the native render, the same as the Markdown export.
 7. **Line operations** the Notepad++ hands expect outside vim mode: ⌥↑ / ⌥↓ move line, ⇧⌥↓ duplicate, ⌘D duplicate/select-next,
    ⌘/ toggle a `#`/`//` comment by extension, Tab / ⇧Tab indent a selection, ⌘] ⌘[ likewise.
 8. **Big files.** Open a 100 MB log and a 200k-line CSV without the gutter, the chip scan or the word count freezing the
@@ -276,5 +285,5 @@
 16. **Big files, in full** (after the tab strip; see 8). Also: spell checking off for anything that is not prose (by
     extension) and for any file past a size, and `allowsNonContiguousLayout` so word wrap lays out only what is on screen.
 
-Order from here: v0.4 (tab drag, PDF tabs, maths in Markdown) → workspace refactor → LaTeX preview (v0.5) → tab strip →
-big files.
+Order from here: v0.4 (tab drag, PDF tabs, maths in Markdown) → workspace refactor → LaTeX preview (v0.5, done) →
+tab strip → big files.

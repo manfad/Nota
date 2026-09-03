@@ -77,35 +77,16 @@ extension NSAttributedString.Key {
 /// colours, so the pane matches the editor beside it in either appearance.
 enum MarkdownRenderer {
 
-    /// A render: the styled text, and where every block in it came from.
-    struct Result {
-        let text: NSAttributedString
-        /// In document order. `range` indexes `text`, `source` indexes the
-        /// note's own plain text.
-        let blocks: [(range: NSRange, source: NSRange)]
-        /// Whether anything here was drawn to fit the pane — a picture, or
-        /// the hairline a `---` becomes. Everything else is text and reflows
-        /// on its own, so a render with neither is right at any width and
-        /// the column can widen under it without being made again.
-        var dependsOnWidth = false
+    /// What a render is — the same thing every content view in the column
+    /// deals in, whichever grammar made it.
+    typealias Result = RenderedDocument
 
-        static let empty = Result(text: NSAttributedString(), blocks: [])
-    }
-
-    /// H1 down to H6, as multiples of the editor's size.
-    static let headingScales: [CGFloat] = [1.6, 1.4, 1.25, 1.15, 1.05, 1.0]
-
-    /// The air inside a fenced block's box. The paragraph style holds the
-    /// code this far off the edges; the pane draws the box that far out
-    /// around it. The two halves have to agree, so they are stated once.
-    static let codeBoxInset: CGFloat = 8
-    static let codeBoxPadding: CGFloat = 6
-    static let codeBoxCornerRadius: CGFloat = 6
-
-    /// One step of list or quote indentation.
-    private static func indentUnit(for font: NSFont) -> CGFloat {
-        (font.pointSize * 1.8).rounded()
-    }
+    /// The look, which is `RenderStyle`'s: named here too so the render and
+    /// the tests that pin it read the way they always have.
+    static var headingScales: [CGFloat] { RenderStyle.headingScales }
+    static var codeBoxInset: CGFloat { RenderStyle.codeBoxInset }
+    static var codeBoxPadding: CGFloat { RenderStyle.codeBoxPadding }
+    static var codeBoxCornerRadius: CGFloat { RenderStyle.codeBoxCornerRadius }
 
     static func render(
         _ markdown: String, font: NSFont, assets: AssetStore?, width: CGFloat
@@ -147,7 +128,7 @@ enum MarkdownRenderer {
         var index = 0
 
         while index < blocks.count {
-            appendBreak(to: result)
+            RenderStyle.appendBreak(to: result)
             let start = result.length
             let source: NSRange
 
@@ -341,19 +322,6 @@ enum MarkdownRenderer {
         return blocks
     }
 
-    /// Blocks are laid end to end; the newline between them is what makes
-    /// each one its own paragraph.
-    ///
-    /// It belongs to the block *before* it — a paragraph ends at its newline —
-    /// so it is given that block's style, which is where the spacing after a
-    /// heading or a list item lives.
-    private static func appendBreak(to result: NSMutableAttributedString) {
-        guard result.length > 0 else { return }
-        let previous = result.attributes(at: result.length - 1, effectiveRange: nil)
-            .filter { $0.key == .font || $0.key == .paragraphStyle }
-        result.append(NSAttributedString(string: "\n", attributes: previous))
-    }
-
     // MARK: - Styling one block
 
     private static func append(
@@ -361,7 +329,7 @@ enum MarkdownRenderer {
         assets: AssetStore?, maths: [MarkdownMath.Span], width: CGFloat, wantsMarker: Bool
     ) {
         let start = result.length
-        let unit = indentUnit(for: font)
+        let unit = RenderStyle.indentUnit(for: font)
         let style = NSMutableParagraphStyle()
         var blockFont = font
         var isCodeBlock = false
@@ -370,19 +338,21 @@ enum MarkdownRenderer {
         switch block.kind {
         case .header(let level):
             let scale = Self.headingScales[min(max(level, 1), 6) - 1]
-            blockFont = heading(font, scale: scale)
+            blockFont = RenderStyle.heading(font, scale: scale)
             style.paragraphSpacingBefore = (font.pointSize * 0.9).rounded()
             style.paragraphSpacing = (font.pointSize * 0.3).rounded()
         case .codeBlock:
             isCodeBlock = true
-            blockFont = .monospacedSystemFont(ofSize: font.pointSize, weight: .regular)
+            blockFont = RenderStyle.monospaced(font.pointSize)
             // Spacing goes on the block's outer lines only (see `padEnds`):
             // on every line it would space the code itself out.
         case .thematicBreak:
             style.paragraphSpacingBefore = (font.pointSize * 0.6).rounded()
             style.paragraphSpacing = (font.pointSize * 0.6).rounded()
             result.append(NSAttributedString(
-                attachment: MarkdownRuleAttachment(width: ruleWidth(width, font: font), font: font)
+                attachment: MarkdownRuleAttachment(
+                    width: RenderStyle.ruleWidth(width, font: font), font: font
+                )
             ))
             result.addAttribute(.paragraphStyle, value: style,
                                 range: NSRange(location: start, length: result.length - start))
@@ -455,37 +425,8 @@ enum MarkdownRenderer {
         let blockRange = NSRange(location: start, length: result.length - start)
         result.addAttribute(.paragraphStyle, value: style, range: blockRange)
         if isCodeBlock {
-            padEnds(of: blockRange, in: result, style: style,
-                    gap: (font.pointSize * 0.6).rounded())
-        }
-    }
-
-    /// Reserves the box's top and bottom air on the code block's outer lines,
-    /// so the drawn box clears the blocks above and below it. Every line
-    /// between them keeps the plain style — code reads as code, not as a
-    /// column of spaced-out paragraphs.
-    private static func padEnds(
-        of range: NSRange, in result: NSMutableAttributedString,
-        style: NSParagraphStyle, gap: CGFloat
-    ) {
-        guard range.length > 0 else { return }
-        let text = result.string as NSString
-        let opening = NSIntersectionRange(
-            text.lineRange(for: NSRange(location: range.location, length: 0)), range
-        )
-        let closing = NSIntersectionRange(
-            text.lineRange(for: NSRange(location: NSMaxRange(range) - 1, length: 0)), range
-        )
-        let isOneLine = opening == closing
-
-        if let top = style.mutableCopy() as? NSMutableParagraphStyle {
-            top.paragraphSpacingBefore += codeBoxPadding
-            if isOneLine { top.paragraphSpacing += codeBoxPadding + gap }
-            result.addAttribute(.paragraphStyle, value: top, range: opening)
-        }
-        if !isOneLine, let bottom = style.mutableCopy() as? NSMutableParagraphStyle {
-            bottom.paragraphSpacing += codeBoxPadding + gap
-            result.addAttribute(.paragraphStyle, value: bottom, range: closing)
+            RenderStyle.padEnds(of: blockRange, in: result, style: style,
+                                gap: (font.pointSize * 0.6).rounded())
         }
     }
 
@@ -595,9 +536,8 @@ enum MarkdownRenderer {
         return end
     }
 
-    /// Best effort, as the spec says: the cells are padded out to a common
-    /// width and set monospaced, so the columns line up as text. No rules, no
-    /// cell backgrounds — a table stays something you read.
+    /// Best effort, as the spec says — `RenderStyle` lays the rows out; the
+    /// only work here is gathering the cells into them.
     private static func appendTable(
         _ cells: [Block], to result: NSMutableAttributedString, font: NSFont
     ) {
@@ -610,75 +550,15 @@ enum MarkdownRenderer {
             }
             rows[rows.count - 1].append(cell.plainText)
         }
-
-        let columns = rows.map(\.count).max() ?? 0
-        guard columns > 0 else { return }
-        var widths = [Int](repeating: 0, count: columns)
-        for row in rows {
-            for (column, text) in row.enumerated() {
-                widths[column] = max(widths[column], text.count)
-            }
-        }
-
-        let lines = rows.map { row -> String in
-            let padded = (0 ..< columns).map { column -> String in
-                let text = column < row.count ? row[column] : ""
-                return text + String(repeating: " ", count: max(0, widths[column] - text.count))
-            }
-            var line = padded.joined(separator: "  ")
-            while line.hasSuffix(" ") { line.removeLast() }
-            return line
-        }
-
-        let style = NSMutableParagraphStyle()
-        style.paragraphSpacing = (font.pointSize * 0.5).rounded()
-        result.append(NSAttributedString(
-            string: lines.joined(separator: "\n"),
-            attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: .regular),
-                .foregroundColor: NSColor.labelColor,
-                .paragraphStyle: style,
-            ]
-        ))
+        RenderStyle.appendTable(rows, to: result, font: font)
     }
 
     // MARK: - Fonts
-
-    /// A heading keeps the editor's family and takes its weight and size from
-    /// the level, so the pane reads as the same typeface throughout.
-    private static func heading(_ font: NSFont, scale: CGFloat) -> NSFont {
-        let size = (font.pointSize * scale).rounded()
-        let semibold = font.fontDescriptor.addingAttributes([
-            .traits: [NSFontDescriptor.TraitKey.weight: NSFont.Weight.semibold.rawValue],
-        ])
-        // The system font has a real semibold face. A family that has none
-        // hands back its regular weight unchanged, and gets its bold face
-        // instead — the nearest thing it has to offer.
-        if let heavier = NSFont(descriptor: semibold, size: size),
-           heavier.fontDescriptor.symbolicTraits.contains(.bold) {
-            return heavier
-        }
-        let bold = font.fontDescriptor.withSymbolicTraits(.bold)
-        return NSFont(descriptor: bold, size: size)
-            ?? NSFont(descriptor: font.fontDescriptor, size: size)
-            ?? font
-    }
 
     private static func styled(_ font: NSFont, inline: InlinePresentationIntent) -> NSFont {
         var traits: NSFontDescriptor.SymbolicTraits = []
         if inline.contains(.emphasized) { traits.insert(.italic) }
         if inline.contains(.stronglyEmphasized) { traits.insert(.bold) }
-        guard !traits.isEmpty else { return font }
-        let descriptor = font.fontDescriptor.withSymbolicTraits(
-            NSFontDescriptor.SymbolicTraits(rawValue: font.fontDescriptor.symbolicTraits.rawValue)
-                .union(traits)
-        )
-        return NSFont(descriptor: descriptor, size: font.pointSize) ?? font
-    }
-
-    /// The pane's width when it has one; before the first layout pass there is
-    /// no width to draw to, so the rule falls back to a readable measure.
-    private static func ruleWidth(_ width: CGFloat, font: NSFont) -> CGFloat {
-        width > 1 ? width : font.pointSize * 20
+        return RenderStyle.styled(font, traits: traits)
     }
 }

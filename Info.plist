@@ -76,6 +76,9 @@
             <string>Alternate</string>
             <key>CFBundleTypeExtensions</key>
             <array>
+                <string>tex</string>
+                <string>latex</string>
+                <string>ltx</string>
                 <string>toml</string>
                 <string>ini</string>
                 <string>cfg</string>

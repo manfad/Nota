@@ -13,6 +13,10 @@ beside the editor or in place of it, drawn by Foundation's Markdown parser and
 Nota's own block styling, with **LaTeX** between `$…$`, `$$…$$` or in a
 ```` ```math ```` fence laid out by Nota itself — no WebView and no dependency.
 
+A `.tex` (`.latex`, `.ltx`) file reads the same way: Nota's own parser of an article-level LaTeX subset — title block,
+numbered sections, lists, `verbatim`, `tabular`, figures and captions — with the equations drawn by the same maths
+engine, and anything the subset has never heard of shown as its own raw source.
+
 Nota opens plain text of any kind, plus one binary: a **PDF** opens in a
 read-only tab of its own — ⌘O, a drag onto the window, Finder's "Open With" or
 `:e` — drawn by PDFKit and locked in reading mode. There is no mode control on
