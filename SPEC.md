@@ -7,7 +7,8 @@
   Closed tabs are gone (after the Save / Don't Save / Cancel prompt; Don't Save = ⌘D).
 - Files are plain text of any kind — .md .txt .xml .json .css .js .html .yaml .toml .csv .log .ini .sh .py .swift and
   anything else that is text (Notepad++ model). Nota registers as an editor for text/source types (Finder "Open With",
-  drag onto the Dock icon, drop onto the window). No syntax highlighting. Not .docx / .rtf / binaries.
+  drag onto the Dock icon, drop onto the window). No syntax highlighting. Not .docx / .rtf / binaries —
+  except PDF, the one binary Nota opens, and it opens it as a viewer (see PDF).
 - Editing a named file only updates the cache; disk changes on ⌘S only. A named file keeps its extension, encoding
   (UTF-8 / UTF-16 / Latin-1 / Windows-1252 detected on open) and line endings (LF / CRLF) on save.
 - ⌘S default for a new note: `.md`, opens in the last-used folder; any extension typed in the panel is kept.
@@ -78,6 +79,85 @@
   editor so that source is visible and puts the caret at the block's first character (vim: normal mode, block caret on
   it) — in split only; reading takes no block clicks at all. Moving the caret in the editor lights the block it is in and scrolls the preview to keep it visible. One block
   lit at a time; the band clears when the text changes under it. No proportional scroll following any more.
+
+### LaTeX
+- `$…$` inline, `$$…$$`, and a ```` ```math ```` fence (`latex` and `tex` open one too) are laid out by Nota itself: a
+  TeX subset into attributed text — Greek and symbols by Unicode, `^` `_` as real super/subscript, `\frac` stacked with
+  a hairline, `\sqrt` with a vinculum, `\sum` `\int` `\prod` with limits, `\left(` `\right)` sized to what they
+  hold, `\text{}`, `\mathbf` `\mathit`, spacing `\,` `\;` `\quad`. No WebView and no dependency (so no KaTeX /
+  MathJax / iosMath), and the same monochrome as everything else in the pane.
+- The maths is taken out of the source before Foundation's parser sees it, each formula standing as an image token in
+  its place — otherwise `$a_1$` and `$b_2$` would pair their underscores into an emphasis and the formulas would be
+  gone before the render began.
+- A `$` opens only with a non-space against it, and closes only on the same line, with a non-space against it and no
+  digit after it — so `costs $5 and $10 more` is a sentence about money. A `$$` opens and closes inside one paragraph;
+  a blank line ends the paragraph, and an unclosed delimiter is left as the text it is, so a cursor left of a `$` being
+  typed never swallows the rest of the note. `\$` is a dollar everywhere.
+- Code wins: a `$` inside a code span, a fenced block or an indented one is a dollar, never a delimiter.
+- Formulas are measured against the render's own font, so Settings' size carries them and maths in a heading takes the
+  heading's face. Nothing about one depends on the pane's width — widening the column re-wraps the words around it and
+  leaves the maths alone.
+- TeX the subset has never heard of renders as itself inside the formula; TeX that cannot be read at all — an unbalanced
+  brace, a `\left` with no `\right` — comes back as the raw source in the code-span style. Never a broken render,
+  never a blank.
+- A paragraph that is nothing but `$$…$$`, and a ```` ```math ```` fence, is a display block: centred in the pane, with
+  the air a fenced block is given above and below, and a block of its own for block sync — clicking it selects its
+  `$$` or its fence in the source, and a caret in that source lights it. A `$$…$$` inside a sentence stays in the
+  sentence, set in display style where it stands.
+
+## PDF
+- A `.pdf` opens in a tab of its own and is read there. Entry points are the same as any other file's: ⌘O, a drag
+  onto the window or the Dock icon, Finder's "Open With" (declared `Viewer` / `Alternate`, so nothing is taken over),
+  and `:e path`. Opening one that is already open comes back to its tab.
+- The tab is locked in reading: the document takes the whole column, the editor stays collapsed, and there is no mode
+  control in either corner. ⇧⌘P, ⌥⇧⌘P and both View items do nothing there and are disabled — a PDF has no Markdown
+  render to have a mode about.
+- Drawn by PDFKit (`PDFView`, auto-scaled, single page continuous, page breaks shown) on the same background the
+  editor and the render use, so the column does not change colour between a Markdown tab and a PDF one. No WebView
+  and no dependency: PDFKit ships with macOS. The pages are pinned edge to edge rather than inset — `PDFView` scales
+  and centres each page in the room it has, so an inset would shrink the paper rather than give the text a margin.
+- Read, never written. The tab is never dirty, ⌘S and Save As are disabled, `:w` does nothing, ⌘W closes with no
+  prompt, and nothing about it is written to the cache — the file on disk is the whole of it. The document is parsed
+  once per tab and held, so switching back to it does not read the file again.
+- The page you were on comes back: it rides in the session in the same key the caret does, and the tab reopens there.
+  A file that has gone — deleted while the tab was open, or missing when the session comes back — keeps its tab, stays
+  clean, and shows a quiet centred `Couldn't open "name.pdf".` in the editor's own font.
+- Footer: the middle counts pages (`12 pages`, `1 page`), the right says which one (`Page 3 of 12`), and it is empty
+  when there is no document to be in. Everything else in the chrome — the strip, the vim badge, zen — is unchanged.
+
+## LaTeX preview (decided 2026-09-03, planned for v0.5)
+- A `.tex` (`.latex`, `.ltx`) file is a tab with a render beside it, the way a `.md` is: the same three modes, the same
+  floating mode control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the session.
+  The setting becomes "Open Markdown and LaTeX files in reading mode".
+- Native, no dependency, no WebView: Nota's own parser of a LaTeX subset into attributed text, the equations drawn by the
+  maths engine the Markdown render already uses. Not TeX's pixels — Nota's reading layout of the document.
+- Article level on day one: `\maketitle` from `\title` `\author` `\date`, `abstract`, numbered `\section`
+  `\subsection` `\subsubsection` (1, 1.1, 1.1.1), paragraphs, `\textbf` `\textit` `\emph` `\texttt` `\underline`,
+  `itemize` `enumerate` `description`, `$…$` `\(…\)` `\[…\]` `equation` `align` `gather` (numbered on the right; `*`
+  forms unnumbered) through the maths engine, `verbatim` `lstlisting` as code blocks, `quote` `quotation`, `\footnote`
+  as a bracketed note in the secondary colour, `\cite` `\ref` `\eqref` `\label` `\url` `\href` as grey placeholders
+  showing their key, `\includegraphics` as the picture when the path resolves beside the file (alt text otherwise),
+  `tabular` best effort like the Markdown table, `figure`/`table` with a `Figure N:` / `Table N:` caption, `%` comments
+  stripped, `\\` and `\newline`, `~` as a non-breaking space, `--` `---` as dashes, `` ` ` '' `` as quotes.
+- The preamble renders nothing: `\documentclass`, `\usepackage`, `\newcommand` and the rest are skipped, and only the
+  title fields are taken from it. A file with no `\begin{document}` is rendered whole as body. Uses of a `\newcommand`
+  show raw, since expansion is beyond article level.
+- Unknown: a command the subset does not know renders as its raw source, `\foo{bar}`, inline in the code-span style; an
+  unknown environment renders whole as a code block. Never a blank, never a broken page, the same rule the maths engine
+  keeps.
+- Block sync both ways, as for Markdown, and exact rather than heuristic: the parser knows every block's source range,
+  so no source map is searched for.
+- Export: File › Export as PDF… on a `.tex` tab runs `pdflatex` (or `tectonic`, `xelatex`) if one is installed, showing
+  the result in a PDF tab; with none installed it prints the native render, the same as the Markdown export (Todo).
+- Out for now: `\input` `\include`, theorem environments, `\newcommand` expansion, bibliographies from `.bib`.
+
+## Workspace (decided 2026-09-03, refactor before the LaTeX preview)
+- The window controller has exactly one editor pane and one preview pane and talks to nothing inside them by name. The
+  preview pane is a host holding one content view at a time; every content view — the Markdown render, the PDF view, the
+  LaTeX render, later an image view — adopts one `PreviewContent` protocol (show a note, focus, takes keyboard, find bar
+  visibility, freeze/thaw width, highlight and clear a block, block-click and status callbacks), and the host swaps them by
+  the note's kind. Mode and divider logic stay where they are for now; moving them into a workspace controller of their
+  own is a later step. Pure refactor: no behaviour changes, the existing preview and PDF tests pin it.
 
 ## Zen mode
 - ⌥⌘Z toggles: tab strip, traffic lights, status bar, line-number gutter, image sidebar and the Markdown mode controls all
@@ -159,31 +239,42 @@
   render's is frozen, or slide a snapshot of the editor and re-wrap once on landing.
 
 ## Todo (in rough priority)
-1. **LaTeX in the Markdown render.** `$…$` inline and `$$…$$` / ```` ```math ```` blocks. Same rules as the rest of the
-   render: no WebView, no dependency (so no KaTeX / MathJax / iosMath). Nota's own layout of a TeX subset into attributed
-   text: Greek and symbols by Unicode, `^` `_` as real super/subscript, `\frac` stacked with a hairline, `\sqrt` with a vinculum,
-   `\sum` `\int` `\prod` with limits, `\left(` `\right)` sized delimiters, `\text{}`, `\mathbf` `\mathit`, spacing `\,` `\;`
-   `\quad`. Anything the subset does not know renders as the raw TeX in the code-span style — never a broken render, never a
-   blank. Display math is its own block for block sync (click → source, caret → block lit). Cursor left of an unbalanced
-   `$` while typing must not swallow the rest of the note as math: a `$` closes only on the same line, `$$` within the block.
-   Fallback while unimplemented: leave `$…$` untouched as text (today Foundation's parser may eat the underscores).
-2. **External changes to an open file.** A named tab watches its file (DispatchSource on the fd); when it changes on disk
+1. **External changes to an open file.** A named tab watches its file (DispatchSource on the fd); when it changes on disk
    and the tab is clean, reload silently; when dirty, mark the tab and offer Reload / Keep mine on the next focus
    (Notepad++ "file has been modified" without the modal storm). Missing file → the existing dirty behaviour.
-3. **Encoding and line endings in the status bar.** `UTF-8 · LF` at the right of the counts; click either for a menu that
+2. **Encoding and line endings in the status bar.** `UTF-8 · LF` at the right of the counts; click either for a menu that
    converts (UTF-8 / UTF-16 / Latin-1 / Windows-1252; LF / CRLF). Conversion marks the tab dirty; ⌘S writes the new shape.
-4. **Go to line.** ⌘L opens a one-line pane (the vim command pane's chrome) taking `N` or `N:M`; `:N` already does it in vim.
-5. **File › Open Recent** (NSDocumentController's list, cleared from the same submenu) and tab reorder by drag in the strip.
-6. **Task lists** in the render: `- [ ]` / `- [x]` as real checkboxes, ticking one rewrites the source character; counted
+3. **Go to line.** ⌘L opens a one-line pane (the vim command pane's chrome) taking `N` or `N:M`; `:N` already does it in vim.
+4. **File › Open Recent** (NSDocumentController's list, cleared from the same submenu) and tab reorder by drag in the strip.
+5. **Task lists** in the render: `- [ ]` / `- [x]` as real checkboxes, ticking one rewrites the source character; counted
    `3 / 7 done` in the footer for a `.md` that has any.
-7. **Print / PDF of the render.** ⌥⌘P prints the reading layout (⌘P is the tab switcher); Export as PDF… in File, same
+6. **Print / PDF of the render.** ⌥⌘P prints the reading layout (⌘P is the tab switcher); Export as PDF… in File, same
    layout, page margins from the render's inset. Plain-text tabs print the text with line numbers if the gutter is on.
-8. **Line operations** the Notepad++ hands expect outside vim mode: ⌥↑ / ⌥↓ move line, ⇧⌥↓ duplicate, ⌘D duplicate/select-next,
+7. **Line operations** the Notepad++ hands expect outside vim mode: ⌥↑ / ⌥↓ move line, ⇧⌥↓ duplicate, ⌘D duplicate/select-next,
    ⌘/ toggle a `#`/`//` comment by extension, Tab / ⇧Tab indent a selection, ⌘] ⌘[ likewise.
-9. **Big files.** Open a 100 MB log and a 200k-line CSV without the gutter, the chip scan or the word count freezing the
+8. **Big files.** Open a 100 MB log and a 200k-line CSV without the gutter, the chip scan or the word count freezing the
    run loop: count on a background queue, chip scan only the visible range, gutter numbers by line-index table.
-10. **Headings outline.** `@` in the ⌘P switcher lists the front `.md` tab's headings; choosing one puts the caret there
-    and, in split/reading, scrolls the render to the block.
-11. **Ship it.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on another Mac
+9. **Headings outline.** `@` in the ⌘P switcher lists the front `.md` tab's headings; choosing one puts the caret there
+   and, in split/reading, scrolls the render to the block.
+10. **Ship it.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on another Mac
     without the Gatekeeper dance; `Nota.app.zip` as the release artifact next to the tag.
-12. Fix the word-wrap re-flow lag in the split slide (Known issues above).
+11. Fix the word-wrap re-flow lag in the split slide (Known issues above).
+12. **⌘F inside a PDF and Print of a PDF tab.** The find bar over a PDF tab searching the document itself
+    (`PDFDocument.findString`, selections drawn on the page, ⌘G walking them), and ⌥⌘P printing the PDF rather than
+    the render.
+13. **Bookmarks (v0.5 or v0.6).** A tab can be bookmarked (⌘D-style toggle in File and in the tab's context menu; a
+    dot or pin on the tab). A bookmark is the file's path, kept in `session.json` beside the tabs, so closing the tab
+    does not lose the note: File › Bookmarks lists them and ⌘P's switcher offers them under the open tabs, and choosing
+    one reopens the file where it was. Bookmarking an untitled note asks it to be saved first. A bookmark whose file has
+    gone stays in the list greyed out until removed.
+14. **Copying maths out of the render.** A selection over a formula copies U+FFFC today; the plain-text flavour
+    should be the formula's `plainText` (`x²+α`), which the layout already keeps for accessibility.
+15. **Tab strip, browser style (after the LaTeX preview).** Keeps today's minimum width and the fitted strip. An icon per
+    tab (artwork to come), the reorder mechanic revisited, drag a tab out of the strip to open it in a new window (Nota
+    becomes multi-window: one window controller per window, the session remembering which tabs are in which), and a
+    considered answer for many tabs — an overflow menu when the strip is full.
+16. **Big files, in full** (after the tab strip; see 8). Also: spell checking off for anything that is not prose (by
+    extension) and for any file past a size, and `allowsNonContiguousLayout` so word wrap lays out only what is on screen.
+
+Order from here: v0.4 (tab drag, PDF tabs, maths in Markdown) → workspace refactor → LaTeX preview (v0.5) → tab strip →
+big files.

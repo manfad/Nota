@@ -163,6 +163,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menuItem.state = mode == .reading ? .on : .off
             return windowController?.canShowMarkdownPreview ?? false
         }
+        // A PDF tab is a view of a file Nota never writes to, so there is
+        // nothing for either save item to do there.
+        if menuItem.action == #selector(saveNote(_:))
+            || menuItem.action == #selector(saveNoteAs(_:)) {
+            return windowController?.currentTabIsSavable ?? true
+        }
         return true
     }
 

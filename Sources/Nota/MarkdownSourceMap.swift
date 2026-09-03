@@ -29,6 +29,11 @@ struct MarkdownSourceMap {
         case image
         /// Found by its first row, and closed by the last one.
         case table
+        /// Found by its opening `$$` line or its ```` ```math ```` fence, and
+        /// closed by the matching one. A display formula renders no words of
+        /// its own — it is one attachment — so its punctuation is all there is
+        /// to find it by.
+        case displayMath
     }
 
     /// The longest run of a block's text worth searching for whole. Beyond
@@ -73,6 +78,8 @@ struct MarkdownSourceMap {
             return max(from, lineBounds(at: token.location).start)
         case .table:
             return firstLine(from: from) { $0.contains("|") } ?? from
+        case .displayMath:
+            return firstLine(from: from, where: Self.opensDisplayMath) ?? from
         case .prose:
             return locateProse(text: text, from: from) ?? from
         }
@@ -109,6 +116,8 @@ struct MarkdownSourceMap {
             return (line.contentsEnd, line.end)
         case .table:
             return consumeLines(from: start) { $0.contains("|") }
+        case .displayMath:
+            return consumeDisplayMath(from: start)
         case .prose:
             return consumeProse(from: start, text: text)
         }
@@ -132,6 +141,28 @@ struct MarkdownSourceMap {
         // An unclosed fence swallows the rest of the note, exactly as the
         // parser reads it.
         return (source.length, source.length)
+    }
+
+    /// A ```` ```math ```` block closes the way any fence does. A `$$` block
+    /// closes on its own line when it carries both delimiters, and otherwise
+    /// on the next line that carries one.
+    private func consumeDisplayMath(from start: Int) -> (contentsEnd: Int, resume: Int) {
+        let opening = lineBounds(at: start)
+        let text = content(of: opening)
+        if Self.isFence(text) { return consumeFence(from: start) }
+        if Self.displayDelimiters(in: text) >= 2 {
+            return (opening.contentsEnd, opening.end)
+        }
+        var index = opening.end
+        while index < source.length {
+            let line = lineBounds(at: index)
+            if Self.displayDelimiters(in: content(of: line)) >= 1 {
+                return (line.contentsEnd, line.end)
+            }
+            guard line.end > index else { break }
+            index = line.end
+        }
+        return (opening.contentsEnd, opening.end)
     }
 
     private func consumeLines(
@@ -258,6 +289,21 @@ struct MarkdownSourceMap {
         let trimmed = line.drop { $0 == " " }
         guard let first = trimmed.first, first == "`" || first == "~" else { return nil }
         return trimmed.prefix { $0 == first }.count >= 3 ? first : nil
+    }
+
+    private static func opensDisplayMath(_ line: String) -> Bool {
+        if line.drop(while: { $0 == " " }).hasPrefix("$$") { return true }
+        return MarkdownMath.isFormulaFence(line)
+    }
+
+    private static func displayDelimiters(in line: String) -> Int {
+        var count = 0
+        var rest = Substring(line)
+        while let found = rest.range(of: "$$") {
+            count += 1
+            rest = rest[found.upperBound...]
+        }
+        return count
     }
 
     private static func isThematicBreak(_ line: String) -> Bool {

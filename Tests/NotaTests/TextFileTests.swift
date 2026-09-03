@@ -320,9 +320,20 @@ final class TextFileTests: XCTestCase {
             XCTAssertTrue(extensions.contains(name), "\(name) should be declared")
         }
 
-        // An editor, but never the default one for anybody else's file type.
+        // The one binary, and it is declared for what it is: Nota views a
+        // PDF, it never edits one.
+        let pdfType = try XCTUnwrap(types.first {
+            ($0["LSItemContentTypes"] as? [String])?.contains("com.adobe.pdf") == true
+        })
+        XCTAssertEqual(pdfType["CFBundleTypeRole"] as? String, "Viewer")
+
+        // An editor for text, a viewer for the PDF, and never the default one
+        // for anybody else's file type.
         for type in types {
-            XCTAssertEqual(type["CFBundleTypeRole"] as? String, "Editor")
+            let isPDF = (type["LSItemContentTypes"] as? [String])?
+                .contains("com.adobe.pdf") == true
+            XCTAssertEqual(type["CFBundleTypeRole"] as? String,
+                           isPDF ? "Viewer" : "Editor")
             XCTAssertEqual(type["LSHandlerRank"] as? String, "Alternate")
         }
     }
@@ -347,7 +358,7 @@ final class TextFileTests: XCTestCase {
         // Several files at once means several tabs; the image stays the
         // asset store's business and the binary is nobody's.
         XCTAssertEqual(
-            NotaTextView.textFiles(on: pasteboard).map(\.lastPathComponent),
+            NotaTextView.openableFiles(on: pasteboard).map(\.lastPathComponent),
             ["notes.md", "Cargo.toml"]
         )
     }
@@ -356,7 +367,7 @@ final class TextFileTests: XCTestCase {
         let pasteboard = NSPasteboard(name: .init("NotaTests-\(UUID().uuidString)"))
         pasteboard.clearContents()
         pasteboard.setString("just some text", forType: .string)
-        XCTAssertTrue(NotaTextView.textFiles(on: pasteboard).isEmpty)
+        XCTAssertTrue(NotaTextView.openableFiles(on: pasteboard).isEmpty)
     }
 
     // MARK: - Through the window

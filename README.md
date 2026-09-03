@@ -8,6 +8,17 @@ The editor is deliberately plain: system font on `textBackgroundColor`, so it
 follows light and dark mode on its own. No themes, no rich text, no syntax
 highlighting.
 
+A saved `.md` file can be read as well as written: ⇧⌘P puts a rendered pane
+beside the editor or in place of it, drawn by Foundation's Markdown parser and
+Nota's own block styling, with **LaTeX** between `$…$`, `$$…$$` or in a
+```` ```math ```` fence laid out by Nota itself — no WebView and no dependency.
+
+Nota opens plain text of any kind, plus one binary: a **PDF** opens in a
+read-only tab of its own — ⌘O, a drag onto the window, Finder's "Open With" or
+`:e` — drawn by PDFKit and locked in reading mode. There is no mode control on
+it, ⌘S is greyed out, it is never dirty, and the page you were on comes back
+with the session.
+
 ## The cache model
 
 1. Every tab is continuously mirrored to `~/Library/Application Support/Nota/` —

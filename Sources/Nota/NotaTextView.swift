@@ -524,7 +524,7 @@ final class NotaTextView: NSTextView {
     /// A drag can carry both kinds of file at once: the images come in as
     /// chips where the caret is, the text files open as tabs beside this one.
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let openable = Self.textFiles(on: sender.draggingPasteboard)
+        let openable = Self.openableFiles(on: sender.draggingPasteboard)
         if !openable.isEmpty { onOpenFiles?(openable) }
         guard let type = droppableType(on: sender) else {
             return openable.isEmpty ? super.performDragOperation(sender) : true
@@ -534,7 +534,7 @@ final class NotaTextView: NSTextView {
 
     private func claimsDrag(_ sender: NSDraggingInfo) -> Bool {
         droppableType(on: sender) != nil
-            || !Self.textFiles(on: sender.draggingPasteboard).isEmpty
+            || !Self.openableFiles(on: sender.draggingPasteboard).isEmpty
     }
 
     /// Only claims a drag that actually carries an image; text drags fall
@@ -552,13 +552,14 @@ final class NotaTextView: NSTextView {
         return nil
     }
 
-    /// The dropped files that are notes rather than images. Extensions are no
-    /// use on their own — a `.toml` has no type at all — so `TextFile` decides,
-    /// by the system's type where there is one and by the bytes where not.
-    static func textFiles(on pboard: NSPasteboard) -> [URL] {
+    /// The dropped files that open in a tab rather than landing in one as a
+    /// picture. Extensions are no use on their own — a `.toml` has no type at
+    /// all — so `Note.isOpenable` decides, by the system's type where there is
+    /// one and by the bytes where not, and a PDF is openable the way text is.
+    static func openableFiles(on pboard: NSPasteboard) -> [URL] {
         guard pboard.types?.contains(.fileURL) == true else { return [] }
         let urls = pboard.readObjects(forClasses: [NSURL.self]) as? [URL] ?? []
-        return urls.filter { !AssetStore.isImageFile($0) && TextFile.isTextFile(at: $0) }
+        return urls.filter { !AssetStore.isImageFile($0) && Note.isOpenable($0) }
     }
 
     // MARK: - Insertion

@@ -4,3 +4,5 @@ Nota.app/
 Jot.app/
 .DS_Store
 Icon/Nota.iconset/
+# Claude Code scratch worktrees.
+.claude/worktrees/

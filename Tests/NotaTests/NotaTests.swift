@@ -1908,6 +1908,148 @@ final class NotaTests: XCTestCase {
         XCTAssertNil(bar.draggedTabXForTesting, "the count change cancelled the drag")
     }
 
+    /// Reordering should respond once the dragged tab reaches the boundary
+    /// between adjacent resting slots. Requiring it to reach the next slot's
+    /// centre makes the gesture feel as though it has not started.
+    @MainActor
+    func testDragChangesSlotAfterHalfATabOfTravel() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 600, height: TabBarView.height))
+        let tabs = (0..<3).map { TabBarItem(title: "Note \($0)", isDirty: false) }
+        bar.setItems(tabs, selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+
+        bar.beginDragForTesting(index: 0)
+        let startX = try XCTUnwrap(bar.draggedTabXForTesting)
+        // Tabs have a 110 pt minimum width. Moving 60 pt is just over half a
+        // tab, enough for its trailing edge to cross the next tab's centre.
+        bar.updateDragForTesting(pointerX: startX + 55 + 60)
+
+        XCTAssertEqual(try XCTUnwrap(bar.draggedTabXForTesting), startX + 60,
+                       accuracy: 0.5, "the tab stays attached to its grab point")
+        XCTAssertEqual(bar.draggedTabSlotForTesting, 1)
+
+        // Crossing the same boundary in reverse restores the original slot,
+        // without a wide dead zone or oscillation around the midpoint.
+        bar.updateDragForTesting(pointerX: startX + 55 + 54)
+        XCTAssertEqual(bar.draggedTabSlotForTesting, 0)
+
+        // End the synthetic drag by changing the item count, the same safe
+        // cancellation route covered by the lifecycle test above.
+        bar.setItems(Array(tabs.dropLast()), selectedIndex: 0)
+    }
+
+    /// One press-and-drag on a background tab must both select and move it.
+    /// The press selects, as it does in every browser; the same press keeps
+    /// dragging even though selection has meanwhile rebuilt the strip.
+    @MainActor
+    func testBackgroundTabSelectsAndReordersInOneGesture() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 600, height: TabBarView.height))
+        let tabs = (0..<3).map { TabBarItem(title: "Note \($0)", isDirty: false) }
+        bar.setItems(tabs, selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+
+        final class RecordingDelegate: TabBarViewDelegate {
+            let tabs: [TabBarItem]
+            var selections: [Int] = []
+            var moved: (from: Int, to: Int)?
+
+            init(tabs: [TabBarItem]) { self.tabs = tabs }
+
+            func tabBar(_ bar: TabBarView, didSelect index: Int) {
+                selections.append(index)
+                // Match MainWindowController: selection pushes refreshed tab
+                // state back into the bar during the same gesture.
+                MainActor.assumeIsolated {
+                    bar.setItems(tabs, selectedIndex: index)
+                }
+            }
+            func tabBar(_ bar: TabBarView, didRequestCloseAt index: Int) {}
+            func tabBarDidRequestNewTab(_ bar: TabBarView) {}
+            func tabBar(_ bar: TabBarView, didMove index: Int, to newIndex: Int) {
+                moved = (index, newIndex)
+            }
+        }
+
+        let recorder = RecordingDelegate(tabs: tabs)
+        bar.delegate = recorder
+
+        let downPoint = NSPoint(x: 140, y: TabBarView.height / 2)
+        let draggedPoint = NSPoint(x: 45, y: downPoint.y)
+        let tab = try XCTUnwrap(bar.hitTest(downPoint))
+
+        func event(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: bar.convert(point, to: nil), modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            ))
+        }
+
+        tab.mouseDown(with: try event(.leftMouseDown, at: downPoint))
+        XCTAssertEqual(recorder.selections, [1], "the press selects straight away")
+
+        tab.mouseDragged(with: try event(.leftMouseDragged, at: draggedPoint))
+        XCTAssertEqual(recorder.selections, [1], "dragging must not re-select")
+        XCTAssertEqual(bar.draggedTabSlotForTesting, 0,
+                       "the drag is underway even though selection rebuilt the strip")
+
+        tab.mouseUp(with: try event(.leftMouseUp, at: draggedPoint))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(recorder.moved?.from, 1)
+        XCTAssertEqual(recorder.moved?.to, 0)
+    }
+
+    /// The gesture above, driven through the real event queue. `mouseDown`
+    /// must enter its tracking loop and dequeue the drag and the mouse-up
+    /// itself — the routing AppKit would otherwise use does not survive the
+    /// hierarchy rebuild that selecting a background tab causes.
+    @MainActor
+    func testTrackingLoopCarriesTheDragThroughSelection() throws {
+        let harness = try TabDragLoopHarness()
+
+        NSApp.postEvent(try harness.mouseEvent(.leftMouseDragged, at: harness.draggedPoint), atStart: false)
+        NSApp.postEvent(try harness.mouseEvent(.leftMouseUp, at: harness.draggedPoint), atStart: false)
+
+        harness.tab.mouseDown(with: try harness.mouseEvent(.leftMouseDown, at: harness.downPoint))
+
+        XCTAssertEqual(harness.recorder.selections, [1], "the press selected before the loop ran")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(harness.recorder.moved?.from, 1)
+        XCTAssertEqual(harness.recorder.moved?.to, 0)
+    }
+
+    /// The strip lives in the title-bar region. A press on a tab while the
+    /// window is not key must reach the tab, not the frame view — otherwise
+    /// it activates the window and a drag moves the window, and the user
+    /// has to press a second time to drag the tab.
+    @MainActor
+    func testTabAcceptsTheActivatingFirstClick() throws {
+        let harness = try TabDragLoopHarness()
+        let event = try harness.mouseEvent(.leftMouseDown, at: harness.downPoint)
+        XCTAssertTrue(harness.tab.acceptsFirstMouse(for: event))
+    }
+
+    /// Esc during a real drag abandons it. Local key monitors are never
+    /// called inside a nested tracking loop, so the loop has to notice the
+    /// key itself; the tab stays selected and nothing is reordered.
+    @MainActor
+    func testTrackingLoopEscapeCancelsTheDrag() throws {
+        let harness = try TabDragLoopHarness()
+
+        NSApp.postEvent(try harness.mouseEvent(.leftMouseDragged, at: harness.draggedPoint), atStart: false)
+        NSApp.postEvent(try harness.escapeEvent(), atStart: false)
+        NSApp.postEvent(try harness.mouseEvent(.leftMouseUp, at: harness.draggedPoint), atStart: false)
+
+        harness.tab.mouseDown(with: try harness.mouseEvent(.leftMouseDown, at: harness.downPoint))
+
+        XCTAssertEqual(harness.recorder.selections, [1], "Esc cancels the move, not the selection")
+        XCTAssertNil(harness.bar.draggedTabXForTesting, "the drag session is gone")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertNil(harness.recorder.moved, "nothing was reordered")
+    }
+
     // MARK: - Carried over from Jot
 
     /// Notes written before the rename hold `jot://` tokens. They still find
@@ -2170,5 +2312,77 @@ final class NotaTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         temporaryDirectories.append(directory)
         return directory
+    }
+}
+
+/// Sets up a real `NSWindow` around a tab strip so `TabItemView.mouseDown`
+/// finds an event queue to track. The window is never ordered front; it only
+/// has to exist and have a window number the posted events can carry.
+@MainActor
+private final class TabDragLoopHarness {
+    /// Mimics `MainWindowController`: selecting pushes refreshed tab state
+    /// back into the bar, rebuilding the strip in the middle of the gesture.
+    final class RecordingDelegate: TabBarViewDelegate {
+        let tabs: [TabBarItem]
+        var selections: [Int] = []
+        var moved: (from: Int, to: Int)?
+
+        init(tabs: [TabBarItem]) { self.tabs = tabs }
+
+        func tabBar(_ bar: TabBarView, didSelect index: Int) {
+            selections.append(index)
+            MainActor.assumeIsolated {
+                bar.setItems(tabs, selectedIndex: index)
+            }
+        }
+        func tabBar(_ bar: TabBarView, didRequestCloseAt index: Int) {}
+        func tabBarDidRequestNewTab(_ bar: TabBarView) {}
+        func tabBar(_ bar: TabBarView, didMove index: Int, to newIndex: Int) {
+            moved = (index, newIndex)
+        }
+    }
+
+    let window: NSWindow
+    let bar: TabBarView
+    let recorder: RecordingDelegate
+    let tab: NSView
+    /// Inside the second tab, and far enough left of it to land on slot 0.
+    let downPoint = NSPoint(x: 140, y: TabBarView.height / 2)
+    let draggedPoint = NSPoint(x: 45, y: TabBarView.height / 2)
+
+    init() throws {
+        _ = NSApplication.shared
+        let frame = NSRect(x: 0, y: 0, width: 600, height: TabBarView.height)
+        window = NSWindow(contentRect: frame, styleMask: [.borderless],
+                          backing: .buffered, defer: false)
+        bar = TabBarView(frame: frame)
+        window.contentView = bar
+
+        let tabs = (0..<3).map { TabBarItem(title: "Note \($0)", isDirty: false) }
+        bar.setItems(tabs, selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+
+        recorder = RecordingDelegate(tabs: tabs)
+        bar.delegate = recorder
+        tab = try XCTUnwrap(bar.hitTest(downPoint))
+    }
+
+    func mouseEvent(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.mouseEvent(
+            with: type, location: bar.convert(point, to: nil), modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1
+        ))
+    }
+
+    func escapeEvent() throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+            isARepeat: false, keyCode: 53
+        ))
     }
 }

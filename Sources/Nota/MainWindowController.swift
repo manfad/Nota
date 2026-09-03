@@ -53,6 +53,9 @@ final class MainWindowController: NSWindowController {
     private var sidebarItem: NSSplitViewItem?
     private let previewPane = NSViewController()
     private let markdownPreview = MarkdownPreviewView()
+    /// The other thing the preview column can hold. Exactly one of the two is
+    /// ever on screen: the render for a Markdown tab, the document for a PDF.
+    private let pdfPreview = PDFPreviewView()
     private var previewItem: NSSplitViewItem?
     private var editorItem: NSSplitViewItem?
     private var previewWorkItem: DispatchWorkItem?
@@ -151,6 +154,9 @@ final class MainWindowController: NSWindowController {
     /// The four numbers behind the middle label, kept so a relayout can
     /// re-fit the text without walking the note again.
     private var counts = (words: 0, characters: 0, images: 0, lines: 1)
+    /// How many pages the PDF in front has, when the tab in front is one.
+    /// `nil` for every text tab, which is what puts the words back.
+    private var pdfPageCount: Int?
     /// Never shown: a stand-in used to measure a candidate string exactly as
     /// the real label would lay it out.
     private let countsRuler = NSTextField(labelWithString: "")
@@ -519,6 +525,13 @@ final class MainWindowController: NSWindowController {
         }
         container.addSubview(markdownPreview)
 
+        // Away until a PDF tab asks for it, and laid out exactly over the
+        // render so the column looks the same whichever of the two is in it.
+        pdfPreview.translatesAutoresizingMaskIntoConstraints = false
+        pdfPreview.isHidden = true
+        pdfPreview.onPageChange = { [weak self] page in self?.pdfPageDidChange(page) }
+        container.addSubview(pdfPreview)
+
         previewZenDragRegion.translatesAutoresizingMaskIntoConstraints = false
         previewZenDragRegion.isHidden = true
         container.addSubview(previewZenDragRegion)
@@ -527,6 +540,13 @@ final class MainWindowController: NSWindowController {
             markdownPreview.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             markdownPreview.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             markdownPreview.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            // Its top is the render's own, so zen's inset switch below moves
+            // the two together and neither can be left behind the other.
+            pdfPreview.topAnchor.constraint(equalTo: markdownPreview.topAnchor),
+            pdfPreview.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            pdfPreview.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            pdfPreview.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 
             previewZenDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
             previewZenDragRegion.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -913,6 +933,12 @@ final class MainWindowController: NSWindowController {
     /// the cached text and is marked dirty so nothing is lost.
     private func makeRestoredNote(from tab: SessionTab) -> Note {
         let fileURL = tab.path.map { URL(fileURLWithPath: $0) }
+        // Asked before the file is read: `TextFile.read` says no to a binary,
+        // and a PDF read as a note that failed would come back as a dirty tab
+        // of nothing at all.
+        if let fileURL, Note.isPDFFile(fileURL) {
+            return makeRestoredPDFNote(from: tab, fileURL: fileURL)
+        }
         var text = store.readText(for: tab.id) ?? ""
         var isDirty = tab.isDirty
         // The session remembers the file's shape; only a session written
@@ -945,6 +971,23 @@ final class MainWindowController: NSWindowController {
         return note
     }
 
+    /// A PDF tab coming back. There is no cache behind it and nothing to be
+    /// dirty about: the file is the whole of it, and a file that has gone
+    /// keeps its tab and says so in the pane. `selection` is the page.
+    private func makeRestoredPDFNote(from tab: SessionTab, fileURL: URL) -> Note {
+        let note = Note(
+            id: tab.id,
+            fileURL: fileURL,
+            untitledName: nil,
+            text: "",
+            attributes: defaultAttributes,
+            assets: store.assets,
+            kind: .pdf
+        )
+        note.selectionLocation = max(0, tab.selection)
+        return note
+    }
+
     private func normalizeUntitledNames() {
         for note in notes where note.fileURL == nil && note.untitledName == nil {
             note.untitledName = UntitledNaming.nextName(existing: notes.map(\.title))
@@ -974,16 +1017,20 @@ final class MainWindowController: NSWindowController {
         layoutManager.replaceTextStorage(note.storage)
         installedStorage = note.storage
         // A scratch tab is vim's `'nomodifiable'`: the motions still work, the
-        // keyboard does not.
-        textView.isEditable = !note.isScratch
-        vimEngine.isModifiable = !note.isScratch
+        // keyboard does not. A PDF has no text behind it to type into either.
+        textView.isEditable = note.isEditable
+        vimEngine.isModifiable = note.isEditable
         // Temporary attributes belong to the layout manager, not the note, so
         // the highlights are laid on again for whatever is now in it.
         vimEngine.refreshSearchHighlights()
         applyTextAttributes()
-        let location = max(0, min(note.selectionLocation, note.storage.length))
-        textView.setSelectedRange(NSRange(location: location, length: 0))
-        textView.scrollRangeToVisible(textView.selectedRange())
+        // A PDF tab was left on a page rather than on a character; the page
+        // goes back into the pane with the document, in `updatePreviewContent`.
+        if note.kind == .text {
+            let location = max(0, min(note.selectionLocation, note.storage.length))
+            textView.setSelectedRange(NSRange(location: location, length: 0))
+            textView.scrollRangeToVisible(textView.selectedRange())
+        }
         lineNumberRuler?.refresh()
         // The mode belongs to the tab, so switching tabs opens, splits or
         // collapses for the tab you land on. Not animated: the tab's other
@@ -1009,14 +1056,22 @@ final class MainWindowController: NSWindowController {
     }
 
     private func updateStatus() {
-        let plain = currentNote?.text ?? ""
-        let stripped = NoteText.strippingTokens(plain)
-        counts = (
-            words: TextStats.wordCount(stripped),
-            characters: TextStats.characterCount(stripped),
-            images: NoteText.assetIDs(in: plain).count,
-            lines: TextStats.lineCount(currentNote?.storage.string ?? "")
-        )
+        if let note = currentNote, note.kind == .pdf {
+            // A PDF has no words, characters, pictures or lines to speak of.
+            // How long it is, is how many pages — and where you are in it is
+            // which of them is in front.
+            pdfPageCount = note.pdfDocument?.pageCount ?? 0
+        } else {
+            pdfPageCount = nil
+            let plain = currentNote?.text ?? ""
+            let stripped = NoteText.strippingTokens(plain)
+            counts = (
+                words: TextStats.wordCount(stripped),
+                characters: TextStats.characterCount(stripped),
+                images: NoteText.assetIDs(in: plain).count,
+                lines: TextStats.lineCount(currentNote?.storage.string ?? "")
+            )
+        }
         updateCountsLabel()
         updateCursorPosition()
     }
@@ -1025,11 +1080,14 @@ final class MainWindowController: NSWindowController {
     /// regions, so the middle sheds a whole segment — and finally its words —
     /// rather than truncating a phrase mid-way.
     private func updateCountsLabel() {
-        let variants = TextStats.countVariants(
-            words: counts.words, characters: counts.characters,
-            images: counts.images, lines: counts.lines,
-            segments: preferences.footerSegments
-        )
+        // A PDF's one count has nothing to shed: there is only ever the one
+        // way to write it.
+        let variants = pdfPageCount.map { [TextStats.pageCounts($0)] }
+            ?? TextStats.countVariants(
+                words: counts.words, characters: counts.characters,
+                images: counts.images, lines: counts.lines,
+                segments: preferences.footerSegments
+            )
         // Measured through a label of its own rather than off the string: a
         // text field lays out a few points wider than the type it holds, and
         // those points are the difference between fitting and being squeezed.
@@ -1062,6 +1120,15 @@ final class MainWindowController: NSWindowController {
 
     /// The caret's 1-based line and column, at the right of the footer.
     private func updateCursorPosition() {
+        if let pages = pdfPageCount {
+            // Nothing to be on when there is no document to be in.
+            cursorLabel.stringValue = pages > 0
+                ? TextStats.pagePosition(
+                    current: pdfPreview.currentPageIndex + 1, total: pages
+                )
+                : ""
+            return
+        }
         let text = (currentNote?.storage.string ?? "") as NSString
         cursorLabel.stringValue = TextStats.position(
             in: text, at: textView.selectedRange().location
@@ -1148,7 +1215,7 @@ final class MainWindowController: NSWindowController {
 
     func selectTab(at index: Int) {
         guard notes.indices.contains(index), index != selectedIndex else { return }
-        currentNote?.selectionLocation = textView.selectedRange().location
+        currentNote.map(rememberSelection)
         flushAll()
         selectedIndex = index
         installCurrentNote()
@@ -1160,18 +1227,18 @@ final class MainWindowController: NSWindowController {
     }
 
     func addTab(fileURL: URL? = nil, text: String = "",
-                format: TextFileFormat = .default) {
+                format: TextFileFormat = .default, kind: NoteKind = .text) {
         let note: Note
         if let fileURL {
             note = Note(id: UUID(), fileURL: fileURL, untitledName: nil,
                         text: text, attributes: defaultAttributes, assets: store.assets,
-                        format: format)
+                        format: format, kind: kind)
         } else {
             note = makeUntitledNote()
         }
         notes.insert(note, at: min(selectedIndex + 1, notes.count))
         selectedIndex = notes.firstIndex { $0 === note } ?? notes.count - 1
-        store.writeText(note.text, for: note.id)
+        if note.writesToCache { store.writeText(note.text, for: note.id) }
         installCurrentNote()
         refreshTabs()
         updateStatus()
@@ -1254,8 +1321,12 @@ final class MainWindowController: NSWindowController {
 
     // MARK: - Files
 
+    /// A PDF tab has nothing to save: the file on disk is the whole of it,
+    /// and Nota never changed a byte. ⌘S and ⇧⌘S are simply not offered
+    /// there, and `:w` says as little.
     @discardableResult
     func save(note: Note, forcePanel: Bool) -> Bool {
+        guard note.kind == .text else { return false }
         var destination = note.fileURL
         if destination == nil || forcePanel {
             guard let chosen = runSavePanel(for: note) else { return false }
@@ -1269,6 +1340,7 @@ final class MainWindowController: NSWindowController {
     /// panel, or by the name `:w` was given.
     @discardableResult
     private func write(note: Note, to destination: URL) -> Bool {
+        guard note.kind == .text else { return false }
         // The file goes back in the shape it came in — same encoding, same
         // mark, same line endings — unless the text has outgrown it, which
         // `encode` says by handing back a format of its own.
@@ -1335,6 +1407,16 @@ final class MainWindowController: NSWindowController {
             selectTab(at: index)
             return
         }
+        // The one binary Nota opens, and it opens as a viewer: its own tab,
+        // locked in reading, with PDFKit drawing the pages.
+        if Note.isPDFFile(target) {
+            guard FileManager.default.fileExists(atPath: target.path) else {
+                presentFailure("Couldn’t open “\(target.lastPathComponent)”.", nil)
+                return
+            }
+            addTab(fileURL: target, kind: .pdf)
+            return
+        }
         guard let opened = TextFile.read(at: target) else {
             presentFailure("Couldn’t open “\(target.lastPathComponent)”.",
                            nil, detail: "Nota only opens text files.")
@@ -1371,8 +1453,8 @@ final class MainWindowController: NSWindowController {
         saveWorkItem?.cancel()
         saveWorkItem = nil
         if let note = currentNote {
-            note.selectionLocation = textView.selectedRange().location
-            if !note.isScratch { store.writeText(note.text, for: note.id) }
+            rememberSelection(note)
+            if note.writesToCache { store.writeText(note.text, for: note.id) }
         }
         writeSessionFile()
     }
@@ -1381,9 +1463,24 @@ final class MainWindowController: NSWindowController {
     func flushAll() {
         saveWorkItem?.cancel()
         saveWorkItem = nil
-        currentNote?.selectionLocation = textView.selectedRange().location
-        for note in notes where !note.isScratch { store.writeText(note.text, for: note.id) }
+        currentNote.map(rememberSelection)
+        for note in notes where note.writesToCache { store.writeText(note.text, for: note.id) }
         writeSessionFile()
+    }
+
+    /// Where the tab is, for the session to bring it back to: the caret in a
+    /// text tab, the page being read in a PDF. The caret is the text view's;
+    /// the page is the pane's, and only while it is that note's document on
+    /// screen — a PDF whose file has gone is left on the page it remembers
+    /// rather than sent back to the first one.
+    private func rememberSelection(_ note: Note) {
+        switch note.kind {
+        case .text:
+            note.selectionLocation = textView.selectedRange().location
+        case .pdf:
+            guard note === currentNote, pdfPreview.pageCount > 0 else { return }
+            note.selectionLocation = pdfPreview.currentPageIndex
+        }
     }
 
     /// Scratch tabs are left out of both the session file and the cache, so
@@ -1421,6 +1518,10 @@ final class MainWindowController: NSWindowController {
         guard let note = currentNote else { return }
         save(note: note, forcePanel: forcePanel)
     }
+
+    /// Whether ⌘S and ⇧⌘S mean anything on the tab in front — what the File
+    /// menu greys its two items out by. A PDF is read, never written.
+    var currentTabIsSavable: Bool { currentNote?.kind == .text }
 
     func selectNextTab() {
         guard notes.count > 1 else { return }
@@ -1787,8 +1888,12 @@ extension MainWindowController {
     /// whether or not zen is hiding the chrome at this moment. A remembered
     /// mode on a file that is not `.md` is deliberately ignored.
     var previewMode: PreviewMode {
-        guard canShowMarkdownPreview else { return .off }
-        return currentNote?.previewMode ?? .off
+        guard let note = currentNote else { return .off }
+        // A PDF tab has no Markdown render and no mode control, and is in
+        // reading all the same: the document takes the column the way a page
+        // does. Everything else needs a render before a mode means anything.
+        guard note.kind == .pdf || note.supportsMarkdownPreview else { return .off }
+        return note.previewMode
     }
 
     /// Whether the render is one of the two modes that show it.
@@ -2093,11 +2198,28 @@ extension MainWindowController {
     /// The render is read, not typed in — so the keyboard stays in the editor,
     /// except in reading mode, where the editor is not on screen to hold it.
     private func focusForPreviewMode() {
-        if installedPreviewMode == .reading {
-            markdownPreview.focus(in: window)
+        guard installedPreviewMode == .reading else { return focusEditor() }
+        if currentNote?.kind == .pdf {
+            pdfPreview.focus(in: window)
         } else {
-            focusEditor()
+            markdownPreview.focus(in: window)
         }
+    }
+
+    /// The tab in front, as much of it as a test can otherwise not reach:
+    /// what kind of thing it is holding, whether it has edits its file does
+    /// not, and where it was left.
+    var currentTabState: (kind: NoteKind, isDirty: Bool, selection: Int) {
+        let note = currentNote
+        return (note?.kind ?? .text, note?.isDirty ?? false, note?.selectionLocation ?? 0)
+    }
+
+    /// The preview column's two halves and which of them is on screen — for
+    /// the tests. Exactly one is ever showing, and a PDF tab is the only
+    /// thing that puts the document there.
+    var previewPanes: (markdown: MarkdownPreviewView, pdf: PDFPreviewView,
+                       showsPDF: Bool) {
+        (markdownPreview, pdfPreview, !pdfPreview.isHidden && markdownPreview.isHidden)
     }
 
     /// Both overlays, for the tests: the editor column's and the preview
@@ -2163,7 +2285,11 @@ extension MainWindowController {
     private func renderMarkdownPreview() {
         previewWorkItem?.cancel()
         previewWorkItem = nil
-        guard previewIsVisible else { return }
+        // Which of the two the column is holding is the tab's business, not
+        // the mode's — switching from a `.md` tab in reading to a PDF never
+        // moves the divider, so the swap cannot live in `applyPreviewMode`.
+        updatePreviewContent()
+        guard previewIsVisible, currentNote?.kind != .pdf else { return }
         let text = currentNote?.text ?? ""
         let font = preferences.font()
         let width = markdownPreview.contentWidth
@@ -2188,6 +2314,38 @@ extension MainWindowController {
         )
         markdownPreview.show(result)
         highlightPreviewBlock()
+    }
+
+    /// Puts the front tab's own content in the preview column: the Markdown
+    /// render for a text note, the document for a PDF. A PDF is shown here
+    /// and nowhere else, and it leaves the remembered render alone — the
+    /// Markdown pane is still holding whatever it last made, ready for the
+    /// tab it belongs to.
+    private func updatePreviewContent() {
+        let note = currentNote
+        let showsPDF = note?.kind == .pdf
+        markdownPreview.isHidden = showsPDF
+        pdfPreview.isHidden = !showsPDF
+        guard showsPDF, let note else { return }
+        let document = note.pdfDocument
+        // Read before the document goes in: installing one lands on its first
+        // page, and the page we are about to restore must not be that.
+        let page = note.selectionLocation
+        pdfPreview.show(document, missingName: document == nil ? note.title : nil)
+        // Only when it is not already there: this is asked again on a resize
+        // and a settings change, and going to the page you are on would jump
+        // a half-read page back to its top.
+        if pdfPreview.currentPageIndex != page { pdfPreview.currentPageIndex = page }
+    }
+
+    /// The reader turned a page. That is where a PDF tab is left, so it goes
+    /// where a caret would — into the note, and from there into the session
+    /// on the same debounce a keystroke uses.
+    private func pdfPageDidChange(_ page: Int) {
+        guard let note = currentNote, note.kind == .pdf else { return }
+        note.selectionLocation = page
+        updateCursorPosition()
+        scheduleSave()
     }
 
     /// What the render on screen was made from. Nothing here is about the
@@ -2557,7 +2715,7 @@ extension MainWindowController: VimEngineHost {
     /// `:w` alone is ⌘S. `:w name` writes that name into the folder the last
     /// save used, with no panel — a path with a slash in it is taken as it is.
     func vimSave(name: String?) -> Bool {
-        guard let note = currentNote else { return false }
+        guard let note = currentNote, note.kind == .text else { return false }
         guard let name, !name.isEmpty else { return save(note: note, forcePanel: false) }
         return write(note: note, to: resolvedURL(for: name, near: note))
     }
@@ -2651,7 +2809,7 @@ extension MainWindowController: NSTextViewDelegate {
             note.isDirty = true
             refreshTabs()
         }
-        note.selectionLocation = textView.selectedRange().location
+        rememberSelection(note)
         updateStatus()
         // The matches have moved with the edit.
         vimEngine.refreshSearchHighlights()
@@ -2664,7 +2822,7 @@ extension MainWindowController: NSTextViewDelegate {
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
-        currentNote?.selectionLocation = textView.selectedRange().location
+        currentNote.map(rememberSelection)
         updateCursorPosition()
         // Moving the caret any other way retires the remembered click.
         clickedChipLocation = nil

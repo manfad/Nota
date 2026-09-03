@@ -115,6 +115,19 @@ enum TextStats {
         return "Ln \(position.line), Col \(position.column)"
     }
 
+    /// `"12 pages"` — the middle of the footer for a PDF tab, where there
+    /// are no words to count and how long it is means how many pages.
+    static func pageCounts(_ pages: Int) -> String {
+        "\(pages) \(pages == 1 ? "page" : "pages")"
+    }
+
+    /// `"Page 3 of 12"` — the right of the footer for a PDF tab, in place of
+    /// the caret's line and column. Both numbers are 1-based, the way the
+    /// page they name is printed.
+    static func pagePosition(current: Int, total: Int) -> String {
+        "Page \(current) of \(total)"
+    }
+
     /// `"13 pt"` — shown next to the gear at the right of the status bar.
     static func pointSize(_ size: Int) -> String {
         "\(size) pt"
@@ -174,7 +187,9 @@ struct SessionTab: Codable, Equatable {
     /// Name shown for a never-saved tab, so numbering survives a restart.
     var untitledName: String?
     var isDirty: Bool
-    /// Cursor location, restored on launch.
+    /// Cursor location, restored on launch — and, for a PDF tab, the page
+    /// that was being read, counted from zero. Both are one number about
+    /// where the tab was left, so both come back through the same key.
     var selection: Int
     /// The file's encoding, byte-order mark and line endings, so a CRLF
     /// Latin-1 file is still one after a relaunch. `nil` for a note with no

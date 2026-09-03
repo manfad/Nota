@@ -51,6 +51,20 @@
                 <string>public.log</string>
             </array>
         </dict>
+        <!-- The one binary Nota opens, and it opens it as a viewer: a PDF
+             gets a tab of its own, drawn by PDFKit, with nothing to save. -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>PDF Document</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.adobe.pdf</string>
+            </array>
+        </dict>
         <!-- Types with no system UTI at all, which can only be named by
              their extension. -->
         <dict>

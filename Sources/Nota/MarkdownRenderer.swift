@@ -117,9 +117,14 @@ enum MarkdownRenderer {
             interpretedSyntax: .full,
             failurePolicy: .returnPartiallyParsedIfPossible
         )
+        // The maths comes out before the parser goes in: left in, a `$a_1$`
+        // would lose its underscore to an emphasis and never be a formula
+        // again. What the parser reads is the note with each formula standing
+        // as an image token.
+        let maths = MarkdownMath.extract(from: markdown)
         // Partial parsing already covers malformed input; this is the last
         // resort, where the note comes through as the plain text it is.
-        guard let parsed = try? AttributedString(markdown: markdown, options: options) else {
+        guard let parsed = try? AttributedString(markdown: maths.markdown, options: options) else {
             let whole = NSRange(location: 0, length: (markdown as NSString).length)
             return Result(
                 text: NSAttributedString(string: markdown, attributes: [
@@ -156,9 +161,14 @@ enum MarkdownRenderer {
                 let block = blocks[index]
                 let wantsMarker = block.listItemIdentity
                     .map { markedItems.insert($0).inserted } ?? false
-                source = map.next(text: block.plainText, shape: block.shape)
+                // A paragraph that is nothing but a display formula is found
+                // in the source by its `$$` or its fence, not by its words —
+                // it renders none.
+                let shape = isDisplayMath(block, in: maths.spans)
+                    ? MarkdownSourceMap.Shape.displayMath : block.shape
+                source = map.next(text: block.plainText, shape: shape)
                 append(block, to: result, font: font, assets: assets,
-                       width: width, wantsMarker: wantsMarker)
+                       maths: maths.spans, width: width, wantsMarker: wantsMarker)
                 index += 1
             }
 
@@ -172,8 +182,17 @@ enum MarkdownRenderer {
         return render
     }
 
+    /// Whether a block is a display formula standing on its own — the shape
+    /// a `$$…$$` paragraph and a ```` ```math ```` fence both come back as.
+    private static func isDisplayMath(_ block: Block, in spans: [MarkdownMath.Span]) -> Bool {
+        guard let index = block.soleMathIndex, spans.indices.contains(index) else { return false }
+        return spans[index].isOwnBlock
+    }
+
     /// Whether the render holds anything that was sized to the column it was
-    /// made for. Only pictures and rules are.
+    /// made for. Only pictures and rules are. A formula is not: it is measured
+    /// against the font, so the column can widen under one without the note
+    /// being rendered again.
     private static func fitsThePane(_ text: NSAttributedString) -> Bool {
         var found = false
         text.enumerateAttribute(
@@ -223,9 +242,27 @@ enum MarkdownRenderer {
             case .thematicBreak: return .thematicBreak
             default: break
             }
-            let hasImage = pieces.contains { $0.imageURL != nil }
+            let hasImage = pieces.contains { piece in
+                piece.imageURL.map { MarkdownMath.spanIndex(from: $0) == nil } ?? false
+            }
             let hasWords = plainText.contains { $0.isLetter || $0.isNumber }
             return hasImage && !hasWords ? .image : .prose
+        }
+
+        /// The one maths token this block holds, when a token is all it
+        /// holds. A `$$…$$` paragraph comes back as one of these, and that is
+        /// what makes it a display block rather than a formula in a sentence.
+        var soleMathIndex: Int? {
+            var found: Int?
+            for piece in pieces {
+                if let url = piece.imageURL, let index = MarkdownMath.spanIndex(from: url) {
+                    guard found == nil else { return nil }
+                    found = index
+                } else if piece.text.contains(where: { !$0.isWhitespace && $0 != "\u{FFFC}" }) {
+                    return nil
+                }
+            }
+            return found
         }
 
         /// The table this cell belongs to, so consecutive cells can be
@@ -321,13 +358,14 @@ enum MarkdownRenderer {
 
     private static func append(
         _ block: Block, to result: NSMutableAttributedString, font: NSFont,
-        assets: AssetStore?, width: CGFloat, wantsMarker: Bool
+        assets: AssetStore?, maths: [MarkdownMath.Span], width: CGFloat, wantsMarker: Bool
     ) {
         let start = result.length
         let unit = indentUnit(for: font)
         let style = NSMutableParagraphStyle()
         var blockFont = font
         var isCodeBlock = false
+        let isFormulaBlock = isDisplayMath(block, in: maths)
 
         switch block.kind {
         case .header(let level):
@@ -349,6 +387,12 @@ enum MarkdownRenderer {
             result.addAttribute(.paragraphStyle, value: style,
                                 range: NSRange(location: start, length: result.length - start))
             return
+        case _ where isFormulaBlock:
+            // A formula on its own stands in the middle of the pane, with the
+            // same air above and below that a fenced block is given.
+            style.alignment = .center
+            style.paragraphSpacingBefore = Self.codeBoxPadding
+            style.paragraphSpacing = Self.codeBoxPadding + (font.pointSize * 0.6).rounded()
         default:
             // A paragraph inside a list sits close to its neighbours; a
             // free-standing one gets a full gap after it.
@@ -404,7 +448,7 @@ enum MarkdownRenderer {
         } else {
             for piece in block.pieces {
                 append(piece, to: result, font: blockFont, base: font,
-                       assets: assets, width: width)
+                       assets: assets, maths: maths, width: width)
             }
         }
 
@@ -449,9 +493,13 @@ enum MarkdownRenderer {
 
     private static func append(
         _ piece: Piece, to result: NSMutableAttributedString, font: NSFont,
-        base: NSFont, assets: AssetStore?, width: CGFloat
+        base: NSFont, assets: AssetStore?, maths: [MarkdownMath.Span], width: CGFloat
     ) {
         if let imageURL = piece.imageURL {
+            if let index = MarkdownMath.spanIndex(from: imageURL), maths.indices.contains(index) {
+                appendMath(maths[index], to: result, font: font, base: base)
+                return
+            }
             appendImage(imageURL, alt: piece.text, to: result,
                         font: font, assets: assets, width: width)
             return
@@ -477,6 +525,30 @@ enum MarkdownRenderer {
             attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
         }
         result.append(NSAttributedString(string: piece.text, attributes: attributes))
+    }
+
+    /// A formula, laid out against whatever font the block is set in — the
+    /// heading's in a heading, the editor's size everywhere else, so the maths
+    /// grows with Settings the way the rest of the render does.
+    ///
+    /// TeX that cannot be read at all comes back as the source it was, set as
+    /// a code span. Never a blank, and never a crash: a note half way through
+    /// a formula still reads as a note.
+    private static func appendMath(
+        _ span: MarkdownMath.Span, to result: NSMutableAttributedString,
+        font: NSFont, base: NSFont
+    ) {
+        if let formula = MathRenderer.layout(span.tex, font: font, display: span.isDisplay) {
+            result.append(NSAttributedString(
+                attachment: MathAttachment(formula: formula, font: font)
+            ))
+            return
+        }
+        result.append(NSAttributedString(string: span.raw, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: base.pointSize, weight: .regular),
+            .foregroundColor: NSColor.labelColor,
+            .backgroundColor: NSColor.labelColor.withAlphaComponent(0.05),
+        ]))
     }
 
     /// A `nota://` token — or a `jot://` one written before the rename —

@@ -41,7 +41,10 @@ final class TabBarView: NSView {
     /// the strip. The move-vs-click threshold itself lives on `TabItemView`,
     /// the only place that needs it.
     private static let draggedTabAlpha: CGFloat = 0.9
-    private static let dragAnimationDuration: TimeInterval = 0.15
+    private static let dragAnimationDuration: TimeInterval = 0.12
+    /// Keeps a tab from flickering between two slots when the pointer rests
+    /// directly on their boundary.
+    private static let dragSlotHysteresis: CGFloat = 4
     private static let autoScrollEdge: CGFloat = 24
     private static let autoScrollStep: CGFloat = 6
     private static let autoScrollInterval: TimeInterval = 0.02
@@ -197,6 +200,16 @@ final class TabBarView: NSView {
         return itemViews[session.originalIndex].frame.minX
     }
 
+    /// Test hook: advances the active drag in the same coordinate space as
+    /// `TabItemView`'s real mouse events.
+    internal func updateDragForTesting(pointerX: CGFloat) {
+        guard let session = dragSession else { return }
+        updateDrag(for: itemViews[session.originalIndex], pointerX: pointerX)
+    }
+
+    /// Test hook: the slot the dragged tab would occupy if dropped now.
+    internal var draggedTabSlotForTesting: Int? { dragSession?.currentSlot }
+
     /// Test hook: performs the delegate call a completed drag would make —
     /// `index` moved to `newIndex` — without going through mouse events or
     /// the slide/settle animations. The delegate owns the actual reorder
@@ -269,9 +282,11 @@ final class TabBarView: NSView {
         updateAutoScroll(pointerX: pointerX)
     }
 
-    /// Moves the dragged tab to follow the pointer and, whenever its
-    /// midpoint crosses a sibling's, swaps that sibling into the vacated
-    /// slot with a short animated slide.
+    /// Moves the tab one-to-one with the pointer, then snaps the gap to the
+    /// nearest insertion slot. This is how browser tab strips behave: the
+    /// possible resting places are fixed, and their halfway points are the
+    /// reorder boundaries. It stays predictable with mixed tab widths and
+    /// also lets a quick gesture skip several tabs in one event.
     private func updateDragPositions(pointerX: CGFloat) {
         guard var session = dragSession, itemViews.indices.contains(session.originalIndex) else { return }
         let viewport = tabsViewportWidth
@@ -284,31 +299,44 @@ final class TabBarView: NSView {
         var draggedFrame = draggedView.frame
         draggedFrame.origin.x = clampedX
         draggedView.frame = draggedFrame
-        let draggedMidX = clampedX + draggedWidth / 2
 
-        func slotX(_ slot: Int) -> CGFloat {
-            var x: CGFloat = 0
-            for i in 0..<slot { x += widths[session.visualOrder[i]] + Self.spacing }
-            return x
+        let draggedCenter = clampedX + draggedWidth / 2
+        let siblings = session.visualOrder.filter { $0 != session.originalIndex }
+
+        // The centre the dragged tab would have in each possible resting
+        // slot. Adjacent centres define a natural halfway reorder boundary.
+        var candidateCenters: [CGFloat] = []
+        var x = -scrollOffset
+        for slot in 0...siblings.count {
+            candidateCenters.append(x + draggedWidth / 2)
+            if slot < siblings.count {
+                x += widths[siblings[slot]] + Self.spacing
+            }
         }
 
-        while session.currentSlot > 0 {
-            let neighborSlot = session.currentSlot - 1
-            let neighborOriginal = session.visualOrder[neighborSlot]
-            let neighborMidX = slotX(neighborSlot) - scrollOffset + widths[neighborOriginal] / 2
-            guard draggedMidX < neighborMidX else { break }
-            session.visualOrder.swapAt(neighborSlot, session.currentSlot)
-            session.currentSlot -= 1
-            animateSibling(itemViews[neighborOriginal], to: slotX(session.currentSlot + 1) - scrollOffset)
-        }
-        while session.currentSlot < session.visualOrder.count - 1 {
-            let neighborSlot = session.currentSlot + 1
-            let neighborOriginal = session.visualOrder[neighborSlot]
-            let neighborMidX = slotX(neighborSlot) - scrollOffset + widths[neighborOriginal] / 2
-            guard draggedMidX > neighborMidX else { break }
-            session.visualOrder.swapAt(session.currentSlot, neighborSlot)
-            session.currentSlot += 1
-            animateSibling(itemViews[neighborOriginal], to: slotX(session.currentSlot - 1) - scrollOffset)
+        let nearestSlot = candidateCenters.indices.min {
+            abs(draggedCenter - candidateCenters[$0])
+                < abs(draggedCenter - candidateCenters[$1])
+        } ?? session.currentSlot
+        let currentDistance = abs(draggedCenter - candidateCenters[session.currentSlot])
+        let nearestDistance = abs(draggedCenter - candidateCenters[nearestSlot])
+
+        // A few points of hysteresis make the gap stay put under a resting
+        // pointer instead of rapidly swapping back and forth on a boundary.
+        if nearestSlot != session.currentSlot,
+           nearestDistance + Self.dragSlotHysteresis < currentDistance {
+            var newOrder = siblings
+            newOrder.insert(session.originalIndex, at: nearestSlot)
+            session.currentSlot = nearestSlot
+            session.visualOrder = newOrder
+
+            var siblingX = -scrollOffset
+            for originalIndex in newOrder {
+                if originalIndex != session.originalIndex {
+                    animateSibling(itemViews[originalIndex], to: siblingX)
+                }
+                siblingX += widths[originalIndex] + Self.spacing
+            }
         }
 
         dragSession = session
@@ -462,6 +490,10 @@ final class TabBarView: NSView {
         }
     }
 
+    /// Covers a drag that did not come from `TabItemView.mouseDown` — the
+    /// test hook, in practice. A real drag runs inside that view's tracking
+    /// loop, where local monitors are never called, so the loop handles Esc
+    /// itself.
     private func startEscMonitor() {
         stopEscMonitor()
         dragEscMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -624,14 +656,16 @@ final class NewTabButton: NSButton {
 private final class TabItemView: NSView {
     var onSelect: ((TabItemView) -> Void)?
     var onClose: ((TabItemView) -> Void)?
-    /// Fired once, the moment a mouse-down turns into a drag (past the
-    /// threshold), with the pointer's x in the tab bar's own coordinates.
+    /// Fired once when the press turns into a drag, with the *original*
+    /// mouse-down x in the tab bar's coordinates. Keeping that grab point
+    /// prevents the tab from lagging behind the pointer by the activation
+    /// threshold. It arrives from inside `mouseDown`'s tracking loop, after
+    /// the tab has already been selected.
     var onDragStart: ((TabItemView, CGFloat) -> Void)?
     /// Fired on every subsequent drag, same coordinate space.
     var onDragMove: ((TabItemView, CGFloat) -> Void)?
-    /// Fired on mouse-up once a drag was underway; `committed` is always
-    /// `true` here — Esc cancellation is handled by the bar itself, not a
-    /// mouse event on this view.
+    /// Fired once a drag was underway and has finished: `committed` is
+    /// `true` on mouse-up, `false` when Esc abandoned it mid-gesture.
     var onDragEnd: ((TabItemView, Bool) -> Void)?
 
     private static let font = NSFont.systemFont(ofSize: 12)
@@ -640,7 +674,7 @@ private final class TabItemView: NSView {
     private static let slotTrailingPadding: CGFloat = 6
     private static let titleSlotGap: CGFloat = 4
     private static let crossFadeDuration: TimeInterval = 0.12
-    private static let dragThreshold: CGFloat = 4
+    private static let dragThreshold: CGFloat = 3
 
     private var title = ""
     private var isDirty = false
@@ -756,23 +790,76 @@ private final class TabItemView: NSView {
         needsDisplay = true
     }
 
-    /// A plain click still selects, on mouse-down as it always has; a drag
-    /// only starts once the pointer has moved past the threshold, and rides
-    /// on top of whichever tab was just selected.
+    /// The strip sits in the title-bar region, so a press while another app
+    /// is frontmost is an activation click. Views refuse those by default,
+    /// which leaves the press to the frame view, and a drag from there moves
+    /// the window; the tab only gets the *next* press. Accepting first mouse
+    /// delivers that first press here, so a tab in a background window can be
+    /// selected and dragged in one go, as in Chromium and Safari.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// Selects on the press, the way every browser tab strip does, and then
+    /// runs the rest of the gesture itself.
+    ///
+    /// The loop is what makes one press both select and drag. Selecting a
+    /// background tab rebuilds the editor hierarchy and the tab strip
+    /// underneath the pointer, and AppKit's per-window routing of the
+    /// following drag/up events does not survive that churn — they stop
+    /// arriving here, so the press could only ever select and the user had
+    /// to press a second time to drag. Dequeuing this gesture's own events
+    /// directly means nothing can steal them. Local `NSEvent` monitors are
+    /// not called inside a nested tracking loop, which is why Esc is
+    /// handled in the loop rather than by the bar's monitor.
     override func mouseDown(with event: NSEvent) {
         dragTrackingStart = event.locationInWindow
         isDraggingTab = false
         onSelect?(self)
+
+        // No window means no event queue to track — unit tests drive the
+        // mouse methods directly on a bar that was never put in one.
+        // Selection can also have removed this tab outright.
+        guard superview != nil, window != nil else { return }
+
+        while let window = self.window,
+              let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown],
+                                          until: .distantFuture,
+                                          inMode: .eventTracking,
+                                          dequeue: true) {
+            switch next.type {
+            case .leftMouseDragged:
+                mouseDragged(with: next)
+            case .leftMouseUp:
+                mouseUp(with: next)
+                return
+            case .keyDown:
+                // Esc abandons a drag in progress, but the button is still
+                // down: keep dequeuing until it comes up. Every other key is
+                // swallowed for the duration of the gesture.
+                guard next.keyCode == 53 else { break }
+                let wasDragging = isDraggingTab
+                isDraggingTab = false
+                dragTrackingStart = nil
+                if wasDragging { onDragEnd?(self, false) }
+            default:
+                break
+            }
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let start = dragTrackingStart else { return }
         let location = event.locationInWindow
         if !isDraggingTab {
-            guard abs(location.x - start.x) > Self.dragThreshold else { return }
+            // Count the user's actual pointer travel. Looking only at x made
+            // a natural, slightly diagonal gesture take longer to engage.
+            guard hypot(location.x - start.x, location.y - start.y) >= Self.dragThreshold else {
+                return
+            }
             isDraggingTab = true
-            if let barX = superview?.convert(location, from: nil).x {
-                onDragStart?(self, barX)
+            // The grab point, not the current location: the tab must not
+            // jump forward by the threshold the moment it lifts off.
+            if let grabX = superview?.convert(start, from: nil).x {
+                onDragStart?(self, grabX)
             }
         }
         if let barX = superview?.convert(location, from: nil).x {
