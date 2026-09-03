@@ -7,7 +7,7 @@ import AppKit
 /// It is a view of the note, never a second place to type in it. Clicking a
 /// block does not put a caret here — it sends you to that block in the editor,
 /// which is the only place a note is ever edited.
-final class MarkdownPreviewView: NSView {
+final class MarkdownPreviewView: NSView, PreviewContent {
 
     private let scrollView = FindBarScrollView()
     private let textView: PreviewTextView
@@ -21,6 +21,8 @@ final class MarkdownPreviewView: NSView {
     /// Whether the render is being held at a fixed wrap width — see
     /// `freezeWidth()`.
     private var widthIsFrozen = false
+    /// What the render on screen was made from — see `RenderKey`.
+    private var renderedKey: RenderKey?
 
     /// Run when a block is clicked, with the source it came from.
     var onBlockClick: ((NSRange) -> Void)?
@@ -196,6 +198,58 @@ final class MarkdownPreviewView: NSView {
 
     /// The lit block's band, if one is lit.
     var highlightedBandRect: NSRect? { textView.bandRect }
+
+    /// Renders the note, unless the pane is already showing what it would
+    /// make. A mode switch, a tab switch, a resize and a settings change all
+    /// ask for a render; most of the time nothing the render is made from has
+    /// moved, and the answer is on screen already.
+    ///
+    /// A render nobody can see is not worth making at all — the column is
+    /// away, and the mode that brings it back asks again on the way in.
+    func show(_ note: Note, in context: PreviewContext) {
+        guard context.isVisible else { return }
+        let text = note.text
+        let width = contentWidth
+        if let renderedKey, renderedKey.matches(
+            noteID: note.id, text: text, font: context.font, width: width
+        ) { return }
+        let render = MarkdownRenderer.render(
+            text, font: context.font, assets: context.assets, width: width
+        )
+        renderedKey = RenderKey(
+            noteID: note.id, text: text,
+            fontName: context.font.fontName, fontSize: context.font.pointSize,
+            // A render with no picture and no rule in it is right at any
+            // width, so widening the column is not a reason to make it again.
+            width: render.dependsOnWidth ? width : nil
+        )
+        show(render)
+    }
+
+    /// Throws the remembered render away, so the next ask makes a fresh one —
+    /// for everything the key cannot see, such as a picture in the store
+    /// redrawn under an unchanged token.
+    func invalidateRender() {
+        renderedKey = nil
+    }
+
+    /// What the render on screen was made from. Nothing here is about the
+    /// look of it: the colours are the system's own and follow light and dark
+    /// without a fresh render.
+    private struct RenderKey {
+        let noteID: UUID
+        let text: String
+        let fontName: String
+        let fontSize: CGFloat
+        /// The width it was fitted to, when it was fitted to one at all.
+        let width: CGFloat?
+
+        func matches(noteID: UUID, text: String, font: NSFont, width: CGFloat) -> Bool {
+            self.noteID == noteID && self.text == text
+                && fontName == font.fontName && fontSize == font.pointSize
+                && (self.width == nil || self.width == width)
+        }
+    }
 
     /// Swaps in a fresh render. The pane is re-rendered on every keystroke
     /// once typing stops, so it stays where the reader left it rather than

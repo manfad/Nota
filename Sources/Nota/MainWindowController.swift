@@ -52,15 +52,13 @@ final class MainWindowController: NSWindowController {
     private let sidebarPane = NSViewController()
     private var sidebarItem: NSSplitViewItem?
     private let previewPane = NSViewController()
-    private let markdownPreview = MarkdownPreviewView()
-    /// The other thing the preview column can hold. Exactly one of the two is
-    /// ever on screen: the render for a Markdown tab, the document for a PDF.
-    private let pdfPreview = PDFPreviewView()
+    /// The preview column itself: one host holding one content view at a time
+    /// — the render for a Markdown tab, the document for a PDF, and whatever
+    /// comes after them. Nothing out here knows which.
+    private let previewColumn = PreviewPaneView(zenTopInset: Layout.zenTopInset)
     private var previewItem: NSSplitViewItem?
     private var editorItem: NSSplitViewItem?
     private var previewWorkItem: DispatchWorkItem?
-    /// What the pane's current render was made from — see `RenderKey`.
-    private var renderedKey: RenderKey?
     /// The preview's share of the document split, as the divider was last
     /// left. Read on the way out of split and pinned back on the way in.
     private var splitPreviewFraction: CGFloat = 0.5
@@ -113,13 +111,6 @@ final class MainWindowController: NSWindowController {
     /// never persisted, so Nota always opens with its chrome.
     private(set) var isZenMode = false
     private let zenDragRegion = DragRegionView()
-    /// The render column's own drag band and top inset. Zen keeps the split,
-    /// so in zen there are two columns whose top edge is the window's own —
-    /// each needs somewhere to drag the window by, and neither should start
-    /// hard against the frame.
-    private let previewZenDragRegion = DragRegionView()
-    private var previewTopToPane: NSLayoutConstraint?
-    private var previewTopToZenInset: NSLayoutConstraint?
     private var editorTopToContent: NSLayoutConstraint?
     private var editorTopToZenInset: NSLayoutConstraint?
     private var sidebarWorkItem: DispatchWorkItem?
@@ -154,9 +145,10 @@ final class MainWindowController: NSWindowController {
     /// The four numbers behind the middle label, kept so a relayout can
     /// re-fit the text without walking the note again.
     private var counts = (words: 0, characters: 0, images: 0, lines: 1)
-    /// How many pages the PDF in front has, when the tab in front is one.
-    /// `nil` for every text tab, which is what puts the words back.
-    private var pdfPageCount: Int?
+    /// How long the content in the preview column is in its own units, when
+    /// it has any — a PDF's pages. `nil` whenever the editor's own words and
+    /// characters are the answer, which is what puts them back.
+    private var previewPageCount: Int?
     /// Never shown: a stand-in used to measure a candidate string exactly as
     /// the real label would lay it out.
     private let countsRuler = NSTextField(labelWithString: "")
@@ -509,61 +501,28 @@ final class MainWindowController: NSWindowController {
     }
 
     private func buildPreviewPane() {
-        let container = previewPane.view
-        markdownPreview.translatesAutoresizingMaskIntoConstraints = false
-        markdownPreview.horizontalInset = previewHorizontalInset
-        markdownPreview.onWidthChange = { [weak self] in
-            self?.scheduleMarkdownPreviewRender()
+        previewPane.view = previewColumn
+        previewColumn.horizontalInset = previewHorizontalInset
+        previewColumn.onWidthChange = { [weak self] in
+            self?.schedulePreviewRefresh()
         }
-        markdownPreview.onBlockClick = { [weak self] source in
+        previewColumn.onBlockClick = { [weak self] source in
             self?.goToSource(source)
         }
-        // ⌘F in reading mode opens a bar over the render, in the corner the
-        // render's own mode control floats in.
-        markdownPreview.onFindBarVisibilityChange = { [weak self] _ in
+        // ⌘F in reading mode opens a bar over the content, in the corner the
+        // column's own mode control floats in.
+        previewColumn.onFindBarVisibilityChange = { [weak self] _ in
             self?.updateModeControlOverlays()
         }
-        container.addSubview(markdownPreview)
+        // The reader moved somewhere the content is keeping — a page turned
+        // in a PDF. That is where the tab is left, so it goes where a caret
+        // would: into the note, and from there into the session on the same
+        // debounce a keystroke uses.
+        previewColumn.onPositionChange = { [weak self] position in
+            self?.previewPositionDidChange(position)
+        }
 
-        // Away until a PDF tab asks for it, and laid out exactly over the
-        // render so the column looks the same whichever of the two is in it.
-        pdfPreview.translatesAutoresizingMaskIntoConstraints = false
-        pdfPreview.isHidden = true
-        pdfPreview.onPageChange = { [weak self] page in self?.pdfPageDidChange(page) }
-        container.addSubview(pdfPreview)
-
-        previewZenDragRegion.translatesAutoresizingMaskIntoConstraints = false
-        previewZenDragRegion.isHidden = true
-        container.addSubview(previewZenDragRegion)
-
-        NSLayoutConstraint.activate([
-            markdownPreview.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            markdownPreview.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            markdownPreview.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-
-            // Its top is the render's own, so zen's inset switch below moves
-            // the two together and neither can be left behind the other.
-            pdfPreview.topAnchor.constraint(equalTo: markdownPreview.topAnchor),
-            pdfPreview.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            pdfPreview.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            pdfPreview.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-
-            previewZenDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
-            previewZenDragRegion.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            previewZenDragRegion.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            previewZenDragRegion.heightAnchor.constraint(equalToConstant: Layout.zenTopInset),
-        ])
-
-        // Under the strip normally; clear of the traffic-light zone in zen,
-        // where there is no strip and the column runs to the window's edge —
-        // the same drop the editor beside it takes.
-        previewTopToPane = markdownPreview.topAnchor.constraint(equalTo: container.topAnchor)
-        previewTopToZenInset = markdownPreview.topAnchor.constraint(
-            equalTo: container.topAnchor, constant: Layout.zenTopInset
-        )
-        previewTopToPane?.isActive = true
-
-        installModeOverlay(previewModeOverlay, over: container)
+        installModeOverlay(previewModeOverlay, over: previewColumn)
     }
 
     /// The editor and preview share a split below the one document tab strip.
@@ -741,7 +700,7 @@ final class MainWindowController: NSWindowController {
     }
 
     private func applyTextAttributes() {
-        markdownPreview.horizontalInset = previewHorizontalInset
+        previewColumn.horizontalInset = previewHorizontalInset
         textView.font = preferences.font()
         textView.textColor = .textColor
         textView.defaultParagraphStyle = defaultAttributes[.paragraphStyle] as? NSParagraphStyle
@@ -893,8 +852,8 @@ final class MainWindowController: NSWindowController {
         refreshImages(force: true)
         applyPreviewMode()
         updateModeControlOverlays()
-        invalidateMarkdownRender()
-        renderMarkdownPreview()
+        previewColumn.invalidateRenders()
+        refreshPreviewContent()
         vimEngine.isEnabled = preferences.vimMode
         applyFooterVisibility()
         updateStatus()
@@ -1042,7 +1001,7 @@ final class MainWindowController: NSWindowController {
         updatePreviewModeControl()
         updateModeControlOverlays()
         focusForPreviewMode()
-        renderMarkdownPreview()
+        refreshPreviewContent()
     }
 
     /// Also re-asks whether the tab in front is Markdown: ⌘S is where an
@@ -1056,13 +1015,14 @@ final class MainWindowController: NSWindowController {
     }
 
     private func updateStatus() {
-        if let note = currentNote, note.kind == .pdf {
-            // A PDF has no words, characters, pictures or lines to speak of.
-            // How long it is, is how many pages — and where you are in it is
-            // which of them is in front.
-            pdfPageCount = note.pdfDocument?.pageCount ?? 0
+        // A PDF has no words, characters, pictures or lines to speak of. How
+        // long it is, is how many pages — and where you are in it is which of
+        // them is in front. The content in the column is what says so; a
+        // render has nothing of its own to add, and the counts stand.
+        if let status = currentPreviewFooterStatus {
+            previewPageCount = status.pageCount
         } else {
-            pdfPageCount = nil
+            previewPageCount = nil
             let plain = currentNote?.text ?? ""
             let stripped = NoteText.strippingTokens(plain)
             counts = (
@@ -1082,7 +1042,7 @@ final class MainWindowController: NSWindowController {
     private func updateCountsLabel() {
         // A PDF's one count has nothing to shed: there is only ever the one
         // way to write it.
-        let variants = pdfPageCount.map { [TextStats.pageCounts($0)] }
+        let variants = previewPageCount.map { [TextStats.pageCounts($0)] }
             ?? TextStats.countVariants(
                 words: counts.words, characters: counts.characters,
                 images: counts.images, lines: counts.lines,
@@ -1118,13 +1078,22 @@ final class MainWindowController: NSWindowController {
         return max(0, cursorLabel.frame.minX - 12 - leading)
     }
 
+    /// What the tab in front has to say about its own length and where you
+    /// are in it, when it has anything — a PDF's pages. The note asks, not
+    /// the column: which view is in front settles itself a moment later, and
+    /// the footer must not be a step behind it.
+    private var currentPreviewFooterStatus: PreviewFooterStatus? {
+        currentNote.flatMap { previewColumn.content(for: $0).footerStatus }
+    }
+
     /// The caret's 1-based line and column, at the right of the footer.
     private func updateCursorPosition() {
-        if let pages = pdfPageCount {
+        if let pages = previewPageCount {
             // Nothing to be on when there is no document to be in.
             cursorLabel.stringValue = pages > 0
                 ? TextStats.pagePosition(
-                    current: pdfPreview.currentPageIndex + 1, total: pages
+                    current: (currentPreviewFooterStatus?.currentPage ?? 0) + 1,
+                    total: pages
                 )
                 : ""
             return
@@ -1474,13 +1443,14 @@ final class MainWindowController: NSWindowController {
     /// screen — a PDF whose file has gone is left on the page it remembers
     /// rather than sent back to the first one.
     private func rememberSelection(_ note: Note) {
-        switch note.kind {
-        case .text:
+        // Only the column knows where a document was left; everything else is
+        // read against the caret, which the editor has.
+        guard let position = previewColumn.content(for: note).rememberedPosition else {
             note.selectionLocation = textView.selectedRange().location
-        case .pdf:
-            guard note === currentNote, pdfPreview.pageCount > 0 else { return }
-            note.selectionLocation = pdfPreview.currentPageIndex
+            return
         }
+        guard note === currentNote else { return }
+        note.selectionLocation = position
     }
 
     /// Scratch tabs are left out of both the session file and the cache, so
@@ -1564,13 +1534,11 @@ extension MainWindowController {
         editorTopToZenInset?.isActive = enabled
         // Split survives zen, so the render column takes the same drop and
         // gets a drag band of its own rather than running to the frame.
-        previewTopToPane?.isActive = !enabled
-        previewTopToZenInset?.isActive = enabled
+        previewColumn.isZenMode = enabled
         // The footer goes; the pane does not — `:` has to work in zen mode.
         paneBottomToStatus?.isActive = !enabled
         paneBottomToContent?.isActive = enabled
         zenDragRegion.isHidden = !enabled
-        previewZenDragRegion.isHidden = !enabled
 
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             window?.standardWindowButton(button)?.isHidden = enabled
@@ -1651,7 +1619,7 @@ final class DocumentSplitViewController: NSSplitViewController {
 
 /// A transparent strip that lets the window be dragged by its top edge once
 /// the title bar's own chrome is gone.
-private final class DragRegionView: NSView {
+final class DragRegionView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
 }
 
@@ -1873,7 +1841,7 @@ extension MainWindowController {
     /// Whether the render is up, what it is showing, and which mode the tab
     /// in front is in — for the tests.
     var previewState: (isVisible: Bool, renderedText: String, mode: PreviewMode) {
-        (previewIsVisible, markdownPreview.renderedText, previewMode)
+        (previewIsVisible, previewColumn.panes.markdown.renderedText, previewMode)
     }
 
     /// Whether a mode slide is still on the wing — for the tests, which have
@@ -1892,7 +1860,7 @@ extension MainWindowController {
         // A PDF tab has no Markdown render and no mode control, and is in
         // reading all the same: the document takes the column the way a page
         // does. Everything else needs a render before a mode means anything.
-        guard note.kind == .pdf || note.supportsMarkdownPreview else { return .off }
+        guard note.hasPreviewContent else { return .off }
         return note.previewMode
     }
 
@@ -1918,7 +1886,7 @@ extension MainWindowController {
         guard let note = currentNote, note.supportsMarkdownPreview else { return }
         note.previewMode = mode
         applyPreviewMode(animated: true)
-        renderMarkdownPreview()
+        refreshPreviewContent()
         updatePreviewModeControl()
         updateModeControlOverlays()
         flush()
@@ -1943,13 +1911,13 @@ extension MainWindowController {
         // single frame is drawn: what the click on the page means, what the
         // keyboard belongs to, and whether a band is lit are all true of the
         // mode itself, not of the motion into it.
-        markdownPreview.takesKeyboard = mode == .reading
+        previewColumn.takesKeyboard = mode == .reading
         // Reading is for reading: a click on the page stays on the page.
-        markdownPreview.sendsBlockClicks = mode != .reading
+        previewColumn.sendsBlockClicks = mode != .reading
         // And the page is read on its own: the caret is not on screen, so
         // nothing on it is lit for the caret. Whatever split left burning
         // goes out on the way in.
-        if mode == .reading { markdownPreview.clearHighlight() }
+        if mode == .reading { previewColumn.clearHighlight() }
 
         // A second slide started over a first would fight it for the same
         // divider, and the two would land wherever they met. So a mode asked
@@ -1974,7 +1942,7 @@ extension MainWindowController {
         // render that follows is made once, at the width it will be read at.
         guard animated, let window, window.isVisible, !reduceMotion else {
             placeDivider(for: mode)
-            markdownPreview.thawWidth()
+            previewColumn.thawWidth()
             updateModeControlOverlays()
             return
         }
@@ -1983,10 +1951,10 @@ extension MainWindowController {
         // width it is leaving, so the animation itself has no work in it — no
         // render, no forced layout, nothing per frame.
         previewModeIsSliding = true
-        renderMarkdownPreview()
+        refreshPreviewContent()
         // The render rides the animation at the width it was made for, rather
         // than re-wrapping itself on every frame of it.
-        _ = markdownPreview.freezeWidth()
+        _ = previewColumn.freezeWidth()
         previewModeSlideNumber += 1
         let slide = previewModeSlideNumber
         slideDivider(to: mode) { [weak self] in self?.previewModeSlideDidLand(slide) }
@@ -2001,11 +1969,11 @@ extension MainWindowController {
         applyColumnBounds(for: installedPreviewMode)
         window?.layoutIfNeeded()
         lastSplitWidth = workspaceSplitViewController.splitView.bounds.width
-        markdownPreview.thawWidth()
+        previewColumn.thawWidth()
         // Only now is there a final width to fit a picture or a rule to, and
         // only a render that depends on one is made again — for a plain note
         // the key still matches and nothing happens here at all.
-        renderMarkdownPreview()
+        refreshPreviewContent()
         updateModeControlOverlays()
         let slides = deferredPreviewModeSlides
         deferredPreviewModeSlides = nil
@@ -2199,11 +2167,10 @@ extension MainWindowController {
     /// except in reading mode, where the editor is not on screen to hold it.
     private func focusForPreviewMode() {
         guard installedPreviewMode == .reading else { return focusEditor() }
-        if currentNote?.kind == .pdf {
-            pdfPreview.focus(in: window)
-        } else {
-            markdownPreview.focus(in: window)
-        }
+        // Whatever the tab in front is read through, brought forward first:
+        // the keyboard cannot go to a view that is still behind another.
+        let content = currentNote.map(previewColumn.bringForward) ?? previewColumn.current
+        content.focus(in: window)
     }
 
     /// The tab in front, as much of it as a test can otherwise not reach:
@@ -2214,13 +2181,10 @@ extension MainWindowController {
         return (note?.kind ?? .text, note?.isDirty ?? false, note?.selectionLocation ?? 0)
     }
 
-    /// The preview column's two halves and which of them is on screen — for
-    /// the tests. Exactly one is ever showing, and a PDF tab is the only
+    /// The preview column's content views and which of them is on screen —
+    /// for the tests. Exactly one is ever showing, and a PDF tab is the only
     /// thing that puts the document there.
-    var previewPanes: (markdown: MarkdownPreviewView, pdf: PDFPreviewView,
-                       showsPDF: Bool) {
-        (markdownPreview, pdfPreview, !pdfPreview.isHidden && markdownPreview.isHidden)
-    }
+    var previewPanes: PreviewPaneView.Panes { previewColumn.panes }
 
     /// Both overlays, for the tests: the editor column's and the preview
     /// column's. Split has both up, one per column; the editor mode has only
@@ -2268,109 +2232,49 @@ extension MainWindowController {
             available && installedPreviewMode != .reading && !scrollView.isFindBarVisible
         )
         previewModeOverlay.setAvailable(
-            available && installedPreviewMode != .off && !markdownPreview.isFindBarVisible
+            available && installedPreviewMode != .off && !previewColumn.current.isFindBarVisible
         )
     }
 
     /// Debounced, like the cache write: a burst of keystrokes re-renders once,
     /// about 150 ms after the typing stops.
-    private func scheduleMarkdownPreviewRender() {
+    private func schedulePreviewRefresh() {
         guard previewIsVisible else { return }
         previewWorkItem?.cancel()
-        let item = DispatchWorkItem { [weak self] in self?.renderMarkdownPreview() }
+        let item = DispatchWorkItem { [weak self] in self?.refreshPreviewContent() }
         previewWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
     }
 
-    private func renderMarkdownPreview() {
+    /// Hands the front tab to the preview column, which brings the view that
+    /// tab is read through forward and shows the note in it.
+    ///
+    /// Which view that is, is the tab's business rather than the mode's —
+    /// switching from a `.md` tab in reading to a PDF never moves the divider,
+    /// so the swap cannot live in `applyPreviewMode`. What showing costs is
+    /// the content's own business: a render already holding this note at this
+    /// width does nothing at all here.
+    private func refreshPreviewContent() {
         previewWorkItem?.cancel()
         previewWorkItem = nil
-        // Which of the two the column is holding is the tab's business, not
-        // the mode's — switching from a `.md` tab in reading to a PDF never
-        // moves the divider, so the swap cannot live in `applyPreviewMode`.
-        updatePreviewContent()
-        guard previewIsVisible, currentNote?.kind != .pdf else { return }
-        let text = currentNote?.text ?? ""
-        let font = preferences.font()
-        let width = markdownPreview.contentWidth
-        // A mode switch, a tab switch, a resize and a settings change all ask
-        // for a render; most of the time nothing the render is made from has
-        // moved, and the pane is already showing the answer.
-        if let done = renderedKey, done.matches(
-            noteID: currentNote?.id, text: text, font: font, width: width
-        ) {
-            highlightPreviewBlock()
-            return
-        }
-        let result = MarkdownRenderer.render(
-            text, font: font, assets: store.assets, width: width
-        )
-        renderedKey = RenderKey(
-            noteID: currentNote?.id, text: text,
-            fontName: font.fontName, fontSize: font.pointSize,
-            // A render with no picture and no rule in it is right at any
-            // width, so widening the column is not a reason to make it again.
-            width: result.dependsOnWidth ? width : nil
-        )
-        markdownPreview.show(result)
+        guard let note = currentNote else { return }
+        previewColumn.show(note, in: PreviewContext(
+            font: preferences.font(),
+            assets: store.assets,
+            isVisible: previewIsVisible
+        ))
         highlightPreviewBlock()
     }
 
-    /// Puts the front tab's own content in the preview column: the Markdown
-    /// render for a text note, the document for a PDF. A PDF is shown here
-    /// and nowhere else, and it leaves the remembered render alone — the
-    /// Markdown pane is still holding whatever it last made, ready for the
-    /// tab it belongs to.
-    private func updatePreviewContent() {
-        let note = currentNote
-        let showsPDF = note?.kind == .pdf
-        markdownPreview.isHidden = showsPDF
-        pdfPreview.isHidden = !showsPDF
-        guard showsPDF, let note else { return }
-        let document = note.pdfDocument
-        // Read before the document goes in: installing one lands on its first
-        // page, and the page we are about to restore must not be that.
-        let page = note.selectionLocation
-        pdfPreview.show(document, missingName: document == nil ? note.title : nil)
-        // Only when it is not already there: this is asked again on a resize
-        // and a settings change, and going to the page you are on would jump
-        // a half-read page back to its top.
-        if pdfPreview.currentPageIndex != page { pdfPreview.currentPageIndex = page }
-    }
-
-    /// The reader turned a page. That is where a PDF tab is left, so it goes
-    /// where a caret would — into the note, and from there into the session
-    /// on the same debounce a keystroke uses.
-    private func pdfPageDidChange(_ page: Int) {
-        guard let note = currentNote, note.kind == .pdf else { return }
-        note.selectionLocation = page
+    /// The reader moved somewhere the content in the column is keeping — a
+    /// page turned in a PDF. That is where the tab is left, so it goes where a
+    /// caret would: into the note, and from there into the session on the same
+    /// debounce a keystroke uses.
+    private func previewPositionDidChange(_ position: Int) {
+        guard let note = currentNote else { return }
+        note.selectionLocation = position
         updateCursorPosition()
         scheduleSave()
-    }
-
-    /// What the render on screen was made from. Nothing here is about the
-    /// look of it: the colours are the system's own and follow light and dark
-    /// without a fresh render.
-    private struct RenderKey {
-        let noteID: UUID?
-        let text: String
-        let fontName: String
-        let fontSize: CGFloat
-        /// The width it was fitted to, when it was fitted to one at all.
-        let width: CGFloat?
-
-        func matches(noteID: UUID?, text: String, font: NSFont, width: CGFloat) -> Bool {
-            self.noteID == noteID && self.text == text
-                && fontName == font.fontName && fontSize == font.pointSize
-                && (self.width == nil || self.width == width)
-        }
-    }
-
-    /// Throws the remembered render away, so the next ask makes a fresh one —
-    /// for everything the key cannot see, such as a picture in the store
-    /// redrawn under an unchanged token.
-    private func invalidateMarkdownRender() {
-        renderedKey = nil
     }
 
     /// Lights the block the caret is in. Called on every selection change, so
@@ -2380,7 +2284,7 @@ extension MainWindowController {
         // reading there is no editor on screen for a band to be pointing at:
         // the page is read on its own, so nothing on it is ever lit.
         guard installedPreviewMode == .split else { return }
-        markdownPreview.highlightBlock(containingSource: textView.selectedRange().location)
+        previewColumn.current.highlightBlock(containingSource: textView.selectedRange().location)
     }
 
     /// A block was clicked in the pane: put the caret on the first character
@@ -2816,8 +2720,8 @@ extension MainWindowController: NSTextViewDelegate {
         scheduleImageRefresh()
         // The blocks have moved under the pane; nothing is lit again until it
         // has been rendered afresh.
-        markdownPreview.invalidateBlocks()
-        scheduleMarkdownPreviewRender()
+        previewColumn.content(for: note).invalidateBlocks()
+        schedulePreviewRefresh()
         scheduleSave()
     }
 
@@ -2892,8 +2796,8 @@ extension MainWindowController {
     /// image is already gone; the render on screen was made from it, so that
     /// has to go too.
     func assetDidChangeOnDisk() {
-        invalidateMarkdownRender()
-        scheduleMarkdownPreviewRender()
+        previewColumn.invalidateRenders()
+        schedulePreviewRefresh()
         updateSidebarHighlight()
     }
 }

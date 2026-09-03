@@ -134,6 +134,11 @@ final class Note {
         fileURL.map(Note.supportsMarkdownPreview) ?? false
     }
 
+    /// Whether the tab has anything at all to put in the preview column: a
+    /// render for a saved `.md`, the document for a PDF. A `.txt` and an
+    /// untitled note have neither, so no mode means anything there.
+    var hasPreviewContent: Bool { kind == .pdf || supportsMarkdownPreview }
+
     /// The same rule, for a file that has no note behind it yet — what the
     /// "open Markdown files in reading mode" setting asks about.
     static func supportsMarkdownPreview(_ url: URL) -> Bool {

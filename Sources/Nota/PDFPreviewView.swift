@@ -12,7 +12,7 @@ import PDFKit
 /// Nothing here is a view of a note. There are no blocks to click, no source
 /// to jump back to and no band to light; the only thing it tells the window
 /// about is which page is in front, which is the one thing worth keeping.
-final class PDFPreviewView: NSView {
+final class PDFPreviewView: NSView, PreviewContent {
 
     private let pdfView = PDFView()
     /// Shown instead of the document when the file has gone — deleted while
@@ -20,7 +20,12 @@ final class PDFPreviewView: NSView {
     private let missingLabel = NSTextField(labelWithString: "")
 
     /// Run when the reader moves to another page, with its 0-based index.
-    var onPageChange: ((Int) -> Void)?
+    var onPositionChange: ((Int) -> Void)?
+    /// The page the pane was last told to be on. A document that would not
+    /// open has no page to be asked for, and reporting the first one would
+    /// send a tab whose file has gone back to the top of a PDF that is not
+    /// there; it is left where the session remembers instead.
+    private var installedPage = 0
     /// True while a document or a page is being put in by hand, so the
     /// notification that follows is not read back as the reader turning a
     /// page — restoring page 4 must not be the same thing as leaving page 4.
@@ -76,11 +81,26 @@ final class PDFPreviewView: NSView {
 
     // MARK: - Content
 
+    /// Puts the tab's document in the pane and goes back to the page it was
+    /// left on. Nothing here asks whether the column is on screen: a document
+    /// costs nothing to hold, and the page has to be right before it is.
+    func show(_ note: Note, in context: PreviewContext) {
+        let document = note.pdfDocument
+        // Read before the document goes in: installing one lands on its first
+        // page, and the page we are about to restore must not be that.
+        let page = note.selectionLocation
+        show(document, missingName: document == nil ? note.title : nil)
+        // Only when it is not already there: this is asked again on a resize
+        // and a settings change, and going to the page you are on would jump
+        // a half-read page back to its top.
+        if currentPageIndex != page { currentPageIndex = page }
+    }
+
     /// Puts a document in the pane, or says why there is none. `missingName`
     /// is the file's name, and naming it is the whole message: a PDF that is
     /// not there is not an error to be dismissed, only a page that cannot be
     /// drawn.
-    func show(_ document: PDFDocument?, missingName: String?) {
+    private func show(_ document: PDFDocument?, missingName: String?) {
         isInstalling = true
         defer { isInstalling = false }
 
@@ -103,11 +123,12 @@ final class PDFPreviewView: NSView {
     var currentPageIndex: Int {
         get {
             guard let document = pdfView.document, let page = pdfView.currentPage
-            else { return 0 }
+            else { return installedPage }
             let index = document.index(for: page)
             return index == NSNotFound ? 0 : index
         }
         set {
+            installedPage = max(newValue, 0)
             guard let document = pdfView.document, document.pageCount > 0,
                   let page = document.page(at: min(max(newValue, 0), document.pageCount - 1))
             else { return }
@@ -119,7 +140,18 @@ final class PDFPreviewView: NSView {
 
     @objc private func pageDidChange(_ notification: Notification) {
         guard !isInstalling else { return }
-        onPageChange?(currentPageIndex)
+        onPositionChange?(currentPageIndex)
+    }
+
+    /// Where a PDF tab is left, for the session to bring it back to. It is
+    /// the one thing this pane knows that the window does not: there is no
+    /// caret behind a document for the editor to answer with.
+    var rememberedPosition: Int? { currentPageIndex }
+
+    /// A PDF has no words or characters to count. How long it is, is how many
+    /// pages — and where you are in it is which of them is in front.
+    var footerStatus: PreviewFooterStatus? {
+        PreviewFooterStatus(pageCount: pageCount, currentPage: currentPageIndex)
     }
 
     /// Puts the keyboard in the document — reading mode's answer to
