@@ -1,0 +1,5 @@
+This is not a PDF.
+
+It is a plain text file that somebody named fake.pdf. The bytes have no
+%PDF- signature and decode as UTF-8, so Nota opens it as a text tab rather
+than an empty PDF pane.

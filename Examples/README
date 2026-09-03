@@ -1,0 +1,5 @@
+README with no extension
+
+This file has no extension at all. Nota does not care: the bytes decode as
+UTF-8, so it opens as an ordinary text tab. Try dragging it onto the window
+too — the drop filter uses the same rule.

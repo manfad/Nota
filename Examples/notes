@@ -1,0 +1,4 @@
+Notes in Latin-1
+
+This file is Windows-1252 / Latin-1, not UTF-8: café, naïve, résumé.
+The status bar format will be kept on save, and the accents survive.
