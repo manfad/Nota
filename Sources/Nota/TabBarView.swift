@@ -13,9 +13,9 @@ protocol TabBarViewDelegate: AnyObject {
 }
 
 /// The strip of tabs that sits in the title bar next to the traffic lights.
-/// Tabs keep a comfortable width until they run out of room, then shrink
-/// evenly down to a floor past that; they also reorder by dragging along
-/// the strip.
+/// Tabs share one width that shrinks as tabs are added, the way a browser's
+/// do; the strip never scrolls. `TabStripLayout` owns that arithmetic, this
+/// view only puts the frames where it says and runs the drag.
 final class TabBarView: NSView {
     weak var delegate: TabBarViewDelegate?
 
@@ -28,41 +28,50 @@ final class TabBarView: NSView {
     static let height: CGFloat = 34
 
     private static let tabHeight: CGFloat = 24
-    private static let spacing: CGFloat = 4
-    private static let newTabButtonSize: CGFloat = 24
-    private static let idealMaxWidth: CGFloat = 180
-    private static let idealMinWidth: CGFloat = 110
-    /// Tabs stop shrinking here; past it the strip scrolls instead.
-    private static let minimumReadableWidth: CGFloat = 110
+    private static let spacing = TabStripLayout.spacing
+    private static let newTabButtonSize = TabStripLayout.plusSize
 
     /// Drag-to-reorder tuning: how raised the dragged tab looks, how long a
-    /// slide/settle animation takes, the hot zone at either end of the
-    /// viewport that auto-scrolls, and how far each auto-scroll tick moves
-    /// the strip. The move-vs-click threshold itself lives on `TabItemView`,
-    /// the only place that needs it.
+    /// slide/settle animation takes, and — only when tabs are hidden — the
+    /// hot zone at either end that reveals one more slot, and how often. The
+    /// move-vs-click threshold itself lives on `TabItemView`, the only place
+    /// that needs it.
     private static let draggedTabAlpha: CGFloat = 0.9
     private static let dragAnimationDuration: TimeInterval = 0.12
     /// Keeps a tab from flickering between two slots when the pointer rests
     /// directly on their boundary.
     private static let dragSlotHysteresis: CGFloat = 4
-    private static let autoScrollEdge: CGFloat = 24
-    private static let autoScrollStep: CGFloat = 6
-    private static let autoScrollInterval: TimeInterval = 0.02
+    private static let dragRevealEdge: CGFloat = 24
+    private static let dragRevealInterval: TimeInterval = 0.25
+
+    /// The hairline drawn in the gap between two plain tabs.
+    private static let separatorHeight: CGFloat = 12
 
     private var items: [TabBarItem] = []
     private var selectedIndex = 0
     private var itemViews: [TabItemView] = []
     private let newTabButton = NewTabButton()
 
-    /// How far the strip is scrolled when the tabs do not all fit.
-    private var scrollOffset: CGFloat = 0
+    /// Where the sliding window starts when the tabs no longer fit even at
+    /// their floor. Fed back into the next layout so the window stays put
+    /// while the selection moves inside it.
+    private var firstVisibleIndex = 0
 
-    /// Re-anchoring the selected tab happens on selection change and on
-    /// viewport resize, but not on a manual trackpad scroll — these track
-    /// what `layout()` last saw so it can tell which case it is in.
-    private var lastViewportWidth: CGFloat?
-    private var lastAnchoredSelectedIndex: Int?
-    private var needsSelectedTabReveal = true
+    /// The tab under the pointer, if any: separators are not drawn beside it.
+    private var hoveredIndex: Int?
+
+    /// Chromium's `in_tab_close_`: after a ✕ the tabs that remain keep the
+    /// widths they had and close up the gap, so a run of closes leaves each
+    /// next ✕ under the pointer. Dropped when the pointer leaves the strip.
+    /// ⌘W never comes through the ✕, so it relayouts straight away.
+    private struct CloseFreeze {
+        var widths: [CGFloat]
+        var firstVisibleIndex: Int
+        var plusX: CGFloat
+    }
+
+    private var closeFreeze: CloseFreeze?
+    private var hoverArea: NSTrackingArea?
 
     /// State for a tab currently being dragged along the strip. `nil` when
     /// nothing is being dragged.
@@ -76,19 +85,28 @@ final class TabBarView: NSView {
         /// permutation of `items` indices. Never written back to `items` —
         /// the delegate is told the final slot and owns the real reorder.
         var visualOrder: [Int]
-        /// Readable widths snapshot at drag start, indexed like `items`.
+        /// Widths snapshot at drag start, indexed like `items`.
         let widths: [CGFloat]
+        /// How many leading slots the window has hidden, and the leading x
+        /// that follows from it. Edge-reveal moves both.
+        var revealedSlots: Int
+        var originX: CGFloat
+        /// The + stays where it was for the length of the drag.
+        let plusX: CGFloat
         let startPointerX: CGFloat
         let startViewX: CGFloat
         var lastPointerX: CGFloat
     }
 
     private var dragSession: DragSession?
-    private var dragAutoScrollTimer: Timer?
+    private var dragRevealTimer: Timer?
     private var dragEscMonitor: Any?
 
-    /// Empty strip is title-bar background, so dragging it moves the window.
-    override var mouseDownCanMoveWindow: Bool { true }
+    /// The strip never lets AppKit move the window on its own: with the
+    /// automatic region on, a press on a tab dragged the window *and* the
+    /// tab at once (the tab's refusal was not honoured). Dragging the empty
+    /// strip still moves the window — `mouseDown` starts that drag itself.
+    override var mouseDownCanMoveWindow: Bool { false }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -102,7 +120,8 @@ final class TabBarView: NSView {
     /// Double-clicking the empty strip behaves like double-clicking a title bar,
     /// honouring System Settings ▸ Desktop & Dock ▸ "Double-click a window's title bar to".
     override func mouseDown(with event: NSEvent) {
-        guard event.clickCount == 2, let window else { return super.mouseDown(with: event) }
+        guard let window else { return super.mouseDown(with: event) }
+        guard event.clickCount == 2 else { return window.performDrag(with: event) }
         switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize" {
         case "Minimize": window.performMiniaturize(nil)
         case "None": break
@@ -120,70 +139,54 @@ final class TabBarView: NSView {
         }
         self.items = items
         self.selectedIndex = selectedIndex
-        // A pushed item list can change what is selected without changing
-        // the numeric index (e.g. a drag that shuffles tabs around the
-        // selected one) — always double-check visibility on the next pass.
-        needsSelectedTabReveal = true
         rebuild()
     }
 
-    /// Trackpad and shift-wheel scrolling along the strip.
-    override func scrollWheel(with event: NSEvent) {
-        let delta = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
-            ? event.scrollingDeltaX
-            : event.scrollingDeltaY
-        guard delta != 0, contentWidth > tabsViewportWidth else {
-            super.scrollWheel(with: event)
-            return
-        }
-        setScrollOffset(scrollOffset - delta)
-    }
-
-    private func setScrollOffset(_ value: CGFloat) {
-        let clamped = min(max(0, value), max(0, contentWidth - tabsViewportWidth))
-        guard clamped != scrollOffset else { return }
-        scrollOffset = clamped
-        needsLayout = true
-    }
-
-    /// Room the tabs may occupy: the strip minus the pinned + and its gap.
-    private var tabsViewportWidth: CGFloat {
-        max(0, bounds.width - Self.newTabButtonSize - Self.spacing)
-    }
-
-    /// Total width the tabs want at their readable size.
-    private var contentWidth: CGFloat {
-        guard !items.isEmpty else { return 0 }
-        let widths = items.map(Self.readableWidth)
-        return widths.reduce(0, +) + Self.spacing * CGFloat(items.count - 1)
-    }
-
-    private static func readableWidth(_ item: TabBarItem) -> CGFloat {
-        min(max(TabItemView.idealWidth(for: item), idealMinWidth), idealMaxWidth)
-    }
-
-    /// Forces the next layout pass to re-anchor the selected tab, even if
-    /// neither the selection nor the viewport width has changed since the
-    /// last layout. Existing callers that expect an explicit nudge (e.g.
-    /// after `setItems`) keep working; the re-anchor itself now happens
-    /// synchronously inside `layout()`.
-    func scrollSelectedTabIntoView() {
-        needsSelectedTabReveal = true
-        needsLayout = true
-    }
+    // MARK: - Test hooks
 
     /// Test hook: whether the selected tab is on-screen, unhidden, and
-    /// entirely within the tabs viewport (never under the + button).
+    /// entirely within the strip (never under the + button).
     internal func isSelectedTabFullyVisible() -> Bool {
         guard itemViews.indices.contains(selectedIndex) else { return false }
         let view = itemViews[selectedIndex]
         guard !view.isHidden else { return false }
-        let frame = view.frame
-        return frame.minX >= 0 && frame.maxX <= tabsViewportWidth
+        return view.frame.minX >= 0 && view.frame.maxX <= newTabButton.frame.minX + 0.01
     }
 
     /// Test hook: the titles in their current display order.
     internal var titlesForTesting: [String] { items.map(\.title) }
+
+    /// Test hook: whether the tab at `index` shows the leading file icon
+    /// (the same placeholder symbol for every kind, until per-type artwork
+    /// arrives).
+    internal func hasFileIconForTesting(at index: Int) -> Bool {
+        guard itemViews.indices.contains(index) else { return false }
+        return itemViews[index].iconImageForTesting != nil
+    }
+
+    /// Test hook: the view for the tab at `index`, for hit-testing.
+    internal func tabViewForTesting(at index: Int) -> NSView? {
+        itemViews.indices.contains(index) ? itemViews[index] : nil
+    }
+
+    /// Test hook: every tab's frame, hidden ones included.
+    internal var tabFramesForTesting: [NSRect] { itemViews.map(\.frame) }
+
+    /// Test hook: which tabs are on screen.
+    internal var hiddenTabsForTesting: [Bool] { itemViews.map(\.isHidden) }
+
+    /// Test hook: where the + sits.
+    internal var newTabButtonFrameForTesting: NSRect { newTabButton.frame }
+
+    /// Test hook: closes the tab at `index` the way its ✕ does — ⌘W arrives
+    /// through `setItems` instead and never freezes the widths.
+    internal func closeViaButtonForTesting(at index: Int) {
+        guard itemViews.indices.contains(index) else { return }
+        close(itemViews[index])
+    }
+
+    /// Test hook: whether a ✕ close is still holding the widths still.
+    internal var isFrozenAfterCloseForTesting: Bool { closeFreeze != nil }
 
     /// Test hook: starts a drag on `index`, as if the pointer had just
     /// crossed the threshold there, without going through mouse events.
@@ -221,6 +224,8 @@ final class TabBarView: NSView {
         delegate?.tabBar(self, didMove: index, to: newIndex)
     }
 
+    // MARK: - Items
+
     private func rebuild() {
         while itemViews.count > items.count {
             itemViews.removeLast().removeFromSuperview()
@@ -229,6 +234,7 @@ final class TabBarView: NSView {
             let view = TabItemView()
             view.onSelect = { [weak self] tab in self?.select(tab) }
             view.onClose = { [weak self] tab in self?.close(tab) }
+            view.onHoverChange = { [weak self] tab, hovering in self?.hoverChanged(tab, hovering) }
             view.onDragStart = { [weak self] tab, pointerX in self?.beginDrag(for: tab, pointerX: pointerX) }
             view.onDragMove = { [weak self] tab, pointerX in self?.updateDrag(for: tab, pointerX: pointerX) }
             view.onDragEnd = { [weak self] tab, committed in self?.endDrag(for: tab, committed: committed) }
@@ -252,18 +258,164 @@ final class TabBarView: NSView {
 
     private func close(_ view: TabItemView) {
         guard let index = itemViews.firstIndex(of: view) else { return }
+        freezeWidths(closing: index)
         delegate?.tabBar(self, didRequestCloseAt: index)
+    }
+
+    private func hoverChanged(_ view: TabItemView, _ hovering: Bool) {
+        guard let index = itemViews.firstIndex(of: view) else { return }
+        if hovering {
+            hoveredIndex = index
+        } else if hoveredIndex == index {
+            hoveredIndex = nil
+        }
+        needsDisplay = true
+    }
+
+    // MARK: - Layout
+
+    /// Room the tabs themselves may use: the strip minus the + and its gap.
+    private var tabsWidth: CGFloat {
+        TabStripLayout.tabsWidth(bounds.width)
+    }
+
+    /// The plan the strip is on right now: the frozen one while a ✕ close is
+    /// holding the widths still, otherwise a fresh one.
+    private func currentLayout() -> TabStripLayout {
+        if let freeze = closeFreeze, freeze.widths.count == items.count {
+            return TabStripLayout(
+                widths: freeze.widths,
+                firstVisibleIndex: freeze.firstVisibleIndex,
+                plusX: freeze.plusX,
+                viewportWidth: bounds.width
+            )
+        }
+        // A freeze whose count no longer matches (the close was cancelled by
+        // a save prompt, or a tab was opened meanwhile) is stale.
+        closeFreeze = nil
+        return TabStripLayout(
+            count: items.count,
+            selectedIndex: selectedIndex,
+            viewportWidth: bounds.width,
+            previousFirstVisibleIndex: firstVisibleIndex
+        )
+    }
+
+    /// Snapshots the strip minus the tab that is about to go, so the tabs
+    /// that remain keep their width and simply close the gap — the next ✕
+    /// then lands under the pointer that just clicked one.
+    private func freezeWidths(closing index: Int) {
+        let plan = currentLayout()
+        guard plan.widths.indices.contains(index), plan.widths.count > 1 else { return }
+        var widths = plan.widths
+        widths.remove(at: index)
+        closeFreeze = CloseFreeze(
+            widths: widths,
+            firstVisibleIndex: min(plan.firstVisibleIndex, widths.count - 1),
+            plusX: plan.plusX
+        )
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    /// The pointer leaving the strip is what ends a run of ✕ closes: the
+    /// widths are free to settle again.
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        hoveredIndex = nil
+        guard closeFreeze != nil else { return }
+        closeFreeze = nil
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+
+        // A drag owns the strip's positions while it is underway: the
+        // dragged tab rides the pointer and its siblings sit at their
+        // `visualOrder` slot. A layout arriving mid-drag — a resize, a
+        // dirty-dot refresh from `setItems`, an autosave tick — must not
+        // fight that by resetting every frame back to `items`' plain order,
+        // which would yank the dragged tab out from under the pointer.
+        if let session = dragSession {
+            layoutDuringDrag(session)
+            return
+        }
+
+        let plan = currentLayout()
+        firstVisibleIndex = plan.firstVisibleIndex
+        place(plan)
+        needsDisplay = true
+    }
+
+    private func place(_ plan: TabStripLayout) {
+        let plusSize = Self.newTabButtonSize
+        newTabButton.frame = NSRect(
+            x: plan.plusX,
+            y: (bounds.height - plusSize) / 2,
+            width: plusSize,
+            height: plusSize
+        )
+
+        let y = (bounds.height - Self.tabHeight) / 2
+        for (index, view) in itemViews.enumerated() {
+            guard plan.widths.indices.contains(index) else {
+                view.isHidden = true
+                continue
+            }
+            view.frame = NSRect(
+                x: plan.xs[index], y: y, width: plan.widths[index], height: Self.tabHeight
+            )
+            // Outside the sliding window means off the strip: not drawn, and
+            // not clickable either.
+            view.isHidden = !plan.visibleRange.contains(index)
+        }
+    }
+
+    /// Brave draws a hairline only between two plain tabs — never beside the
+    /// selected one, never beside the one under the pointer. It lives in the
+    /// gap, which belongs to the strip rather than to either tab.
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard itemViews.count > 1 else { return }
+        NSColor.labelColor.withAlphaComponent(0.15).setFill()
+        let y = (bounds.height - Self.separatorHeight) / 2
+        for index in 0..<(itemViews.count - 1) {
+            let left = itemViews[index], right = itemViews[index + 1]
+            guard !left.isHidden, !right.isHidden else { continue }
+            guard index != selectedIndex, index + 1 != selectedIndex else { continue }
+            guard index != hoveredIndex, index + 1 != hoveredIndex else { continue }
+            let center = (left.frame.maxX + right.frame.minX) / 2
+            NSBezierPath(
+                rect: NSRect(x: center - 0.5, y: y, width: 1, height: Self.separatorHeight)
+            ).fill()
+        }
     }
 
     // MARK: - Drag to reorder
 
     private func beginDrag(for view: TabItemView, pointerX: CGFloat) {
         guard dragSession == nil, let index = itemViews.firstIndex(of: view) else { return }
+        let plan = currentLayout()
+        guard plan.widths.count == itemViews.count else { return }
         dragSession = DragSession(
             originalIndex: index,
             currentSlot: index,
             visualOrder: Array(itemViews.indices),
-            widths: items.map(Self.readableWidth),
+            widths: plan.widths,
+            revealedSlots: plan.firstVisibleIndex,
+            originX: plan.xs.first ?? 0,
+            plusX: plan.plusX,
             startPointerX: pointerX,
             startViewX: view.frame.minX,
             lastPointerX: pointerX
@@ -279,7 +431,7 @@ final class TabBarView: NSView {
         guard dragSession != nil else { return }
         dragSession?.lastPointerX = pointerX
         updateDragPositions(pointerX: pointerX)
-        updateAutoScroll(pointerX: pointerX)
+        updateEdgeReveal(pointerX: pointerX)
     }
 
     /// Moves the tab one-to-one with the pointer, then snaps the gap to the
@@ -289,11 +441,10 @@ final class TabBarView: NSView {
     /// also lets a quick gesture skip several tabs in one event.
     private func updateDragPositions(pointerX: CGFloat) {
         guard var session = dragSession, itemViews.indices.contains(session.originalIndex) else { return }
-        let viewport = tabsViewportWidth
         let widths = session.widths
         let draggedWidth = widths[session.originalIndex]
         let proposedX = session.startViewX + (pointerX - session.startPointerX)
-        let clampedX = min(max(0, proposedX), max(0, viewport - draggedWidth))
+        let clampedX = min(max(0, proposedX), max(0, tabsWidth - draggedWidth))
 
         let draggedView = itemViews[session.originalIndex]
         var draggedFrame = draggedView.frame
@@ -306,7 +457,7 @@ final class TabBarView: NSView {
         // The centre the dragged tab would have in each possible resting
         // slot. Adjacent centres define a natural halfway reorder boundary.
         var candidateCenters: [CGFloat] = []
-        var x = -scrollOffset
+        var x = session.originX
         for slot in 0...siblings.count {
             candidateCenters.append(x + draggedWidth / 2)
             if slot < siblings.count {
@@ -330,7 +481,7 @@ final class TabBarView: NSView {
             session.currentSlot = nearestSlot
             session.visualOrder = newOrder
 
-            var siblingX = -scrollOffset
+            var siblingX = session.originX
             for originalIndex in newOrder {
                 if originalIndex != session.originalIndex {
                     animateSibling(itemViews[originalIndex], to: siblingX)
@@ -342,48 +493,70 @@ final class TabBarView: NSView {
         dragSession = session
     }
 
-    /// Starts, adjusts, or stops the auto-scroll timer for how close the
-    /// pointer is sitting to either edge of the viewport.
-    private func updateAutoScroll(pointerX: CGFloat) {
-        guard let session = dragSession else { return stopAutoScroll() }
-        let viewport = tabsViewportWidth
-        let total = session.widths.reduce(0, +) + Self.spacing * CGFloat(max(0, session.widths.count - 1))
-        let canScroll = total > viewport
-        let direction: CGFloat
-        if canScroll, pointerX < Self.autoScrollEdge {
+    /// Total the tabs want, spacing included.
+    private func totalWidth(_ session: DragSession) -> CGFloat {
+        session.widths.reduce(0, +) + Self.spacing * CGFloat(max(0, session.widths.count - 1))
+    }
+
+    /// Only a strip with hidden tabs has an edge behaviour: holding the
+    /// pointer at either end brings one more slot in, so a tab can be
+    /// dropped onto a slot the window is not showing. A strip where
+    /// everything fits has nothing to reveal and stays still.
+    private func updateEdgeReveal(pointerX: CGFloat) {
+        guard let session = dragSession, totalWidth(session) > tabsWidth else {
+            return stopEdgeReveal()
+        }
+        let direction: Int
+        if pointerX < Self.dragRevealEdge {
             direction = -1
-        } else if canScroll, pointerX > viewport - Self.autoScrollEdge {
+        } else if pointerX > tabsWidth - Self.dragRevealEdge {
             direction = 1
         } else {
             direction = 0
         }
-        guard direction != 0 else { return stopAutoScroll() }
-        guard dragAutoScrollTimer == nil else { return }
-        let timer = Timer(timeInterval: Self.autoScrollInterval, repeats: true) { [weak self] timer in
-            guard let self, self.dragAutoScrollTimer === timer, let session = self.dragSession else {
+        guard direction != 0 else { return stopEdgeReveal() }
+        guard dragRevealTimer == nil else { return }
+        let timer = Timer(timeInterval: Self.dragRevealInterval, repeats: true) { [weak self] timer in
+            guard let self, self.dragRevealTimer === timer, self.dragSession != nil else {
                 return timer.invalidate()
             }
-            let viewport = self.tabsViewportWidth
-            let total = session.widths.reduce(0, +) + Self.spacing * CGFloat(max(0, session.widths.count - 1))
-            self.scrollOffset = min(max(0, self.scrollOffset + direction * Self.autoScrollStep),
-                                    max(0, total - viewport))
-            self.repositionSiblingsDuringDrag(session: session)
-            self.updateDragPositions(pointerX: session.lastPointerX)
+            self.revealOneSlot(direction: direction)
         }
         RunLoop.main.add(timer, forMode: .common)
-        dragAutoScrollTimer = timer
+        dragRevealTimer = timer
     }
 
-    private func stopAutoScroll() {
-        dragAutoScrollTimer?.invalidate()
-        dragAutoScrollTimer = nil
+    private func stopEdgeReveal() {
+        dragRevealTimer?.invalidate()
+        dragRevealTimer = nil
     }
 
-    /// Snaps every non-dragged tab to its current slot as the strip
-    /// auto-scrolls under the pointer — a continuous scroll, not a slide,
-    /// so it is not animated.
+    /// Slides the window by one slot, if there is anything to slide towards.
+    private func revealOneSlot(direction: Int) {
+        guard var session = dragSession else { return }
+        if direction < 0 {
+            guard session.revealedSlots > 0 else { return }
+            session.revealedSlots -= 1
+        } else {
+            guard session.revealedSlots < session.widths.count - 1,
+                  session.originX + totalWidth(session) > tabsWidth else { return }
+            session.revealedSlots += 1
+        }
+        var origin: CGFloat = 0
+        for slot in 0..<session.revealedSlots {
+            origin -= session.widths[session.visualOrder[slot]] + Self.spacing
+        }
+        session.originX = origin
+        dragSession = session
+        layoutDuringDrag(session)
+        updateDragPositions(pointerX: session.lastPointerX)
+    }
+
+    /// Snaps every non-dragged tab to its current slot — used when the window
+    /// slides under the pointer, which is a jump rather than a slide, so it
+    /// is not animated.
     private func repositionSiblingsDuringDrag(session: DragSession) {
-        var x = -scrollOffset
+        var x = session.originX
         for slot in session.visualOrder {
             if slot != session.originalIndex {
                 var frame = itemViews[slot].frame
@@ -394,27 +567,28 @@ final class TabBarView: NSView {
         }
     }
 
-    /// The drag-aware half of `layout()`: places the + button's already
-    /// done by the caller, `scrollOffset` is clamped the same as always, but
-    /// positions come from the session rather than `items`' plain order —
-    /// the dragged tab is left exactly where the drag last put it (and is
-    /// never hidden), while its siblings go to their current `visualOrder`
-    /// slot, the same math `repositionSiblingsDuringDrag` already uses for
-    /// an auto-scroll tick.
+    /// The drag-aware half of `layout()`: positions come from the session
+    /// rather than `items`' plain order — the dragged tab is left exactly
+    /// where the drag last put it (and is never hidden), while its siblings
+    /// go to their current `visualOrder` slot.
     private func layoutDuringDrag(_ session: DragSession) {
-        let viewport = tabsViewportWidth
-        let total = session.widths.reduce(0, +) + Self.spacing * CGFloat(max(0, session.widths.count - 1))
-        scrollOffset = min(max(0, scrollOffset), max(0, total - viewport))
+        let plusSize = Self.newTabButtonSize
+        newTabButton.frame = NSRect(
+            x: session.plusX,
+            y: (bounds.height - plusSize) / 2,
+            width: plusSize,
+            height: plusSize
+        )
 
         repositionSiblingsDuringDrag(session: session)
 
-        var x: CGFloat = -scrollOffset
+        var x = session.originX
         for slot in session.visualOrder {
             let width = session.widths[slot]
             if slot == session.originalIndex {
                 itemViews[slot].isHidden = false
             } else {
-                itemViews[slot].isHidden = x + width < 0 || x >= viewport || x + width > viewport
+                itemViews[slot].isHidden = x + width < 0 || x >= tabsWidth || x + width > tabsWidth
             }
             x += width + Self.spacing
         }
@@ -422,13 +596,13 @@ final class TabBarView: NSView {
 
     private func endDrag(for view: TabItemView, committed: Bool) {
         guard let session = dragSession else { return }
-        stopAutoScroll()
+        stopEdgeReveal()
         stopEscMonitor()
         dragSession = nil
 
         if committed, session.currentSlot != session.originalIndex {
             let targetX = slotX(session.currentSlot, order: session.visualOrder, widths: session.widths)
-                - scrollOffset
+                + session.originX
             settle(view, to: targetX) { [weak self] in
                 guard let self else { return }
                 view.alphaValue = 1
@@ -440,7 +614,8 @@ final class TabBarView: NSView {
             // during the drag animates back to where it started.
             let identityOrder = Array(itemViews.indices)
             for index in identityOrder {
-                let targetX = slotX(index, order: identityOrder, widths: session.widths) - scrollOffset
+                let targetX = slotX(index, order: identityOrder, widths: session.widths)
+                    + session.originX
                 settle(itemViews[index], to: targetX, completion: index == session.originalIndex ? {
                     view.alphaValue = 1
                 } : nil)
@@ -455,7 +630,7 @@ final class TabBarView: NSView {
     }
 
     /// Sum of the widths (plus spacing) of every tab before `slot` in
-    /// `order` — the slot's un-scrolled x offset.
+    /// `order` — the slot's offset from the first one.
     private func slotX(_ slot: Int, order: [Int], widths: [CGFloat]) -> CGFloat {
         var x: CGFloat = 0
         for i in 0..<slot { x += widths[order[i]] + Self.spacing }
@@ -508,83 +683,10 @@ final class TabBarView: NSView {
         if let dragEscMonitor { NSEvent.removeMonitor(dragEscMonitor) }
         dragEscMonitor = nil
     }
-
-    override func layout() {
-        super.layout()
-
-        let plusSize = Self.newTabButtonSize
-        newTabButton.frame = NSRect(
-            x: bounds.width - plusSize,
-            y: (bounds.height - plusSize) / 2,
-            width: plusSize,
-            height: plusSize
-        )
-
-        guard !itemViews.isEmpty else { return }
-
-        // A drag owns the strip's positions while it is underway: the
-        // dragged tab rides the pointer and its siblings sit at their
-        // `visualOrder` slot. A layout arriving mid-drag — a resize, a
-        // dirty-dot refresh from `setItems`, an autosave tick — must not
-        // fight that by resetting every frame back to `items`' plain order,
-        // which would yank the dragged tab out from under the pointer.
-        if let session = dragSession {
-            layoutDuringDrag(session)
-            return
-        }
-
-        // Tabs never shrink below a readable width; once they no longer fit,
-        // the strip scrolls rather than squeezing them into slivers. The +
-        // stays pinned at the trailing edge, so they only use the leading
-        // remainder — a tab that would sit under the + is hidden instead.
-        let viewport = tabsViewportWidth
-        let widths = items.map(Self.readableWidth)
-        let total = widths.reduce(0, +) + Self.spacing * CGFloat(itemViews.count - 1)
-        if total <= viewport { scrollOffset = 0 }
-        scrollOffset = min(scrollOffset, max(0, total - viewport))
-
-        // Re-anchor the selected tab whenever the selection changed or the
-        // viewport was resized since the last layout — but not on a manual
-        // trackpad scroll, which is allowed to move it out of view. This
-        // runs before positioning the views so it can adjust `scrollOffset`
-        // in one pass, with no async round trip.
-        let selectionChanged = selectedIndex != lastAnchoredSelectedIndex
-        let viewportChanged = viewport != lastViewportWidth
-        if (selectionChanged || viewportChanged || needsSelectedTabReveal),
-           itemViews.indices.contains(selectedIndex) {
-            let selectedX = widths[0..<selectedIndex].reduce(0, +)
-                + Self.spacing * CGFloat(selectedIndex)
-            let selectedWidth = widths[selectedIndex]
-            let frameMinX = selectedX - scrollOffset
-            let frameMaxX = frameMinX + selectedWidth
-            if frameMaxX > viewport {
-                scrollOffset += frameMaxX - viewport
-            } else if frameMinX < 0 {
-                scrollOffset += frameMinX
-            }
-            scrollOffset = min(max(0, scrollOffset), max(0, total - viewport))
-        }
-        lastAnchoredSelectedIndex = selectedIndex
-        lastViewportWidth = viewport
-        needsSelectedTabReveal = false
-
-        let y = (bounds.height - Self.tabHeight) / 2
-        var x = -scrollOffset
-        for (index, view) in itemViews.enumerated() {
-            view.frame = NSRect(x: x, y: y, width: widths[index], height: Self.tabHeight)
-            // Tabs scrolled off the edge should not be clickable, and a tab
-            // that would cross the + slot is not shown there either — except
-            // the selected tab, which the re-anchoring above always keeps
-            // fully inside the viewport.
-            view.isHidden = index != selectedIndex
-                && (x + widths[index] < 0 || x >= viewport || x + widths[index] > viewport)
-            x += widths[index] + Self.spacing
-        }
-    }
 }
 
 /// Trailing control on the tab strip. Same density as a tab (24pt), not an
-/// iOS-sized hit target; the + never scrolls away with the tabs.
+/// iOS-sized hit target; it rides after the last tab and pins at the edge.
 final class NewTabButton: NSButton {
     private var hoverArea: NSTrackingArea?
     private var isHovered = false {
@@ -650,12 +752,17 @@ final class NewTabButton: NSButton {
 /// A tab in the Safari/Xcode shape: a soft rounded fill when selected, the
 /// title, and a single 16pt slot at the trailing edge.
 ///
-/// The slot is always reserved, so a tab never changes width when it is
-/// selected or hovered. It holds two stacked layers — the unsaved dot and the
-/// close button — which cross-fade as the pointer arrives and leaves.
+/// The slot is always reserved down to `minActiveWidth`, so a tab never
+/// changes width when it is selected or hovered. It holds two stacked layers
+/// — the unsaved dot and the close button — which cross-fade as the pointer
+/// arrives and leaves. Narrower than that there is no room for either: the
+/// dot moves onto the icon and the ✕ is gone, as it is in Chromium.
 private final class TabItemView: NSView {
     var onSelect: ((TabItemView) -> Void)?
     var onClose: ((TabItemView) -> Void)?
+    /// Fired when the pointer arrives or leaves, so the strip knows which
+    /// gaps must not show a separator.
+    var onHoverChange: ((TabItemView, Bool) -> Void)?
     /// Fired once when the press turns into a drag, with the *original*
     /// mouse-down x in the tab bar's coordinates. Keeping that grab point
     /// prevents the tab from lagging behind the pointer by the activation
@@ -675,6 +782,18 @@ private final class TabItemView: NSView {
     private static let titleSlotGap: CGFloat = 4
     private static let crossFadeDuration: TimeInterval = 0.12
     private static let dragThreshold: CGFloat = 3
+    private static let iconSize: CGFloat = 16
+    private static let iconTitleGap: CGFloat = 5
+    /// The title is clipped rather than ellipsized, with the last few points
+    /// faded out; below the shorter figure there is no room worth drawing in.
+    private static let titleFadeWidth: CGFloat = 12
+    private static let minimumTitleWidth: CGFloat = 12
+    /// The unsaved dot when it has to sit on the icon instead of in the slot.
+    private static let compactDotDiameter: CGFloat = 5
+    /// Every tab shows this symbol regardless of file kind for now (SPEC
+    /// Todo 15's first step); keeping the name here means swapping in
+    /// per-type artwork later only touches this one line.
+    private static let fileSymbolName = "text.page"
 
     private var title = ""
     private var isDirty = false
@@ -686,12 +805,20 @@ private final class TabItemView: NSView {
 
     private let dotView = DirtyDotView()
     private let closeButton = TabCloseButton()
+    private let iconView = TabIconView()
     private var hoverArea: NSTrackingArea?
 
     override var mouseDownCanMoveWindow: Bool { false }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+
+        let iconConfig = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+        iconView.image = NSImage(systemSymbolName: Self.fileSymbolName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(iconConfig)
+        iconView.contentTintColor = .secondaryLabelColor
+        iconView.imageScaling = .scaleProportionallyDown
+        addSubview(iconView)
 
         dotView.alphaValue = 0
         addSubview(dotView)
@@ -716,11 +843,9 @@ private final class TabItemView: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// Independent of selection and hover — the slot is always accounted for.
-    static func idealWidth(for item: TabBarItem) -> CGFloat {
-        let titleWidth = (item.title as NSString).size(withAttributes: [.font: font]).width
-        return horizontalPadding * 2 + titleWidth + slotSize
-    }
+    /// Test hook: the icon image currently shown, so a test can confirm
+    /// every tab gets one without launching the app.
+    internal var iconImageForTesting: NSImage? { iconView.image }
 
     func configure(_ item: TabBarItem, isSelected: Bool) {
         title = item.title
@@ -732,6 +857,10 @@ private final class TabItemView: NSView {
         needsLayout = true
     }
 
+    /// Too narrow for the trailing slot: no ✕ even on hover, and the unsaved
+    /// dot rides on the icon instead.
+    private var isCompact: Bool { bounds.width < TabStripLayout.minActiveWidth }
+
     private var slotRect: NSRect {
         NSRect(
             x: bounds.maxX - Self.slotTrailingPadding - Self.slotSize,
@@ -741,10 +870,33 @@ private final class TabItemView: NSView {
         )
     }
 
+    private var iconRect: NSRect {
+        NSRect(
+            x: Self.horizontalPadding,
+            y: (bounds.height - Self.iconSize) / 2,
+            width: Self.iconSize,
+            height: Self.iconSize
+        )
+    }
+
+    /// The room left for the title once the icon, and the slot when there is
+    /// one, have taken theirs.
+    private var titleRect: NSRect {
+        let x = Self.horizontalPadding + Self.iconSize + Self.iconTitleGap
+        let trailing = isCompact
+            ? bounds.maxX - Self.horizontalPadding
+            : slotRect.minX - Self.titleSlotGap
+        return NSRect(x: x, y: 0, width: max(0, trailing - x), height: bounds.height)
+    }
+
     override func layout() {
         super.layout()
+        iconView.frame = iconRect
         dotView.frame = slotRect
         closeButton.frame = slotRect
+        let compact = isCompact
+        dotView.isHidden = compact
+        closeButton.isHidden = compact
     }
 
     /// Hovering swaps the dot for the ✕; a clean, unhovered tab shows neither.
@@ -781,6 +933,7 @@ private final class TabItemView: NSView {
         isHovered = true
         updateSlot(animated: true)
         needsDisplay = true
+        onHoverChange?(self, true)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -788,6 +941,7 @@ private final class TabItemView: NSView {
         isHoveringClose = false
         updateSlot(animated: true)
         needsDisplay = true
+        onHoverChange?(self, false)
     }
 
     /// The strip sits in the title-bar region, so a press while another app
@@ -896,27 +1050,84 @@ private final class TabItemView: NSView {
         }
 
         // Sits behind the ✕, which is a subview and so draws on top of this.
-        if isHoveringClose {
+        if isHoveringClose, !isCompact {
             NSColor.labelColor.withAlphaComponent(0.1).setFill()
             NSBezierPath(ovalIn: slotRect).fill()
         }
 
+        drawTitle()
+
+        // With the slot gone, the only place left to say "unsaved" is the
+        // corner of the icon.
+        if isCompact, isDirty {
+            let diameter = Self.compactDotDiameter
+            NSColor.tertiaryLabelColor.setFill()
+            NSBezierPath(ovalIn: NSRect(
+                x: iconRect.maxX - diameter + 1,
+                y: iconRect.minY - 1,
+                width: diameter,
+                height: diameter
+            )).fill()
+        }
+    }
+
+    /// Draws the title clipped, not ellipsized: a tab strip that shrinks
+    /// wants a title that keeps as many letters as it can and simply runs
+    /// out, so the last few points are faded away instead. Erasing through a
+    /// gradient inside a transparency layer takes the text's own alpha with
+    /// it, which is what makes the fade work whatever sits behind the tab.
+    private func drawTitle() {
+        let available = titleRect
+        guard available.width >= Self.minimumTitleWidth else { return }
+
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byTruncatingTail
+        paragraph.lineBreakMode = .byClipping
         let attributes: [NSAttributedString.Key: Any] = [
             .font: Self.font,
             .foregroundColor: isSelected ? NSColor.labelColor : NSColor.secondaryLabelColor,
             .paragraphStyle: paragraph,
         ]
 
-        let x = Self.horizontalPadding
-        let width = max(0, slotRect.minX - Self.titleSlotGap - x)
-        let height = (title as NSString).size(withAttributes: attributes).height
-        (title as NSString).draw(
-            in: NSRect(x: x, y: (bounds.height - height) / 2, width: width, height: height),
-            withAttributes: attributes
+        let size = (title as NSString).size(withAttributes: attributes)
+        let rect = NSRect(
+            x: available.minX,
+            y: (bounds.height - size.height) / 2,
+            width: available.width,
+            height: size.height
         )
+
+        guard size.width > available.width, let context = NSGraphicsContext.current?.cgContext else {
+            (title as NSString).draw(in: rect, withAttributes: attributes)
+            return
+        }
+
+        context.saveGState()
+        context.clip(to: rect)
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+        (title as NSString).draw(in: rect, withAttributes: attributes)
+        context.setBlendMode(.destinationOut)
+        NSGradient(
+            starting: NSColor(white: 0, alpha: 0),
+            ending: NSColor(white: 0, alpha: 1)
+        )?.draw(
+            in: NSRect(
+                x: rect.maxX - Self.titleFadeWidth,
+                y: rect.minY,
+                width: Self.titleFadeWidth,
+                height: rect.height
+            ),
+            angle: 0
+        )
+        context.endTransparencyLayer()
+        context.restoreGState()
     }
+}
+
+/// The file icon. Hit-testing goes through to the tab: an `NSImageView` is
+/// not opaque, and in the title-bar region a press on any non-opaque view
+/// that does not refuse `mouseDownCanMoveWindow` drags the window instead.
+private final class TabIconView: NSImageView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// The unsaved-changes dot. Transparent to the mouse, so clicking it selects
@@ -939,6 +1150,8 @@ private final class DirtyDotView: NSView {
 
 /// Reports pointer enter/exit so the tab can draw the circle behind the ✕.
 private final class TabCloseButton: NSButton {
+    /// Same reason as `NewTabButton`: a press on the ✕ must never move the window.
+    override var mouseDownCanMoveWindow: Bool { false }
     var onHoverChange: ((Bool) -> Void)?
 
     private var hoverArea: NSTrackingArea?

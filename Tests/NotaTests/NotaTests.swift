@@ -1812,8 +1812,169 @@ final class NotaTests: XCTestCase {
 
     // MARK: - Tab bar
 
-    /// A narrower window or a switch always scrolls the selected tab fully
-    /// into view; only a manual trackpad scroll is allowed to move it out.
+    /// Every tab shows the placeholder `text.page` icon (SPEC Todo 15's
+    /// first step, ahead of per-type artwork).
+    @MainActor
+    func testEveryTabShowsALeadingFileIcon() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 600, height: TabBarView.height))
+        bar.setItems(
+            (0..<3).map { TabBarItem(title: "Note \($0)", isDirty: false) },
+            selectedIndex: 0
+        )
+        bar.layoutSubtreeIfNeeded()
+
+        for index in 0..<3 {
+            XCTAssertTrue(bar.hasFileIconForTesting(at: index))
+        }
+    }
+
+    /// The strip sits in the title-bar region. If it tells AppKit that a
+    /// press may move the window, the window drags *together with* the tab
+    /// being reordered (the tab's own refusal was not honoured), which is
+    /// what made every first drag move the window. The strip refuses and
+    /// starts the empty-area window drag itself; a press on the icon must
+    /// land on the tab, not on the image view.
+    @MainActor
+    func testStripNeverLetsAppKitMoveTheWindowAndIconPressesReachTheTab() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 600, height: TabBarView.height))
+        bar.setItems([TabBarItem(title: "Note", isDirty: false)], selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+        XCTAssertFalse(bar.mouseDownCanMoveWindow)
+
+        let tab = try XCTUnwrap(bar.tabViewForTesting(at: 0))
+        XCTAssertFalse(tab.mouseDownCanMoveWindow)
+        // 14pt in from the tab's leading edge is inside the 16pt icon box.
+        let onIcon = NSPoint(x: tab.frame.minX + 14, y: tab.frame.midY)
+        XCTAssertTrue(bar.hitTest(onIcon) === tab, "a press on the icon is a press on the tab")
+    }
+
+    /// The strip does not scroll: every tab shares one width that shrinks as
+    /// tabs are added, and they all stay on screen.
+    @MainActor
+    func testTabsShareOneWidthAndNoneAreHiddenUntilTheFloor() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 1000, height: TabBarView.height))
+        bar.setItems(
+            (0..<14).map { TabBarItem(title: "Note \($0)", isDirty: false) },
+            selectedIndex: 0
+        )
+        bar.layoutSubtreeIfNeeded()
+
+        let frames = bar.tabFramesForTesting
+        XCTAssertEqual(frames.count, 14)
+        XCTAssertEqual(bar.hiddenTabsForTesting, Array(repeating: false, count: 14),
+                       "14 tabs still fit at 1000pt, so none is hidden")
+
+        // Wide enough that even the selected tab is above its floor, so
+        // every tab — selected included — shares one width.
+        for frame in frames.dropFirst() {
+            XCTAssertEqual(frame.width, frames[0].width, accuracy: 0.01)
+        }
+        for (index, frame) in frames.enumerated().dropFirst() {
+            XCTAssertEqual(frame.minX, frames[index - 1].maxX + 4, accuracy: 0.01,
+                           "tabs sit shoulder to shoulder with one gap")
+        }
+        XCTAssertTrue(bar.isSelectedTabFullyVisible())
+    }
+
+    /// Below the active width there is no trailing slot: no ✕ to hover, and
+    /// the unsaved dot rides on the icon instead. Drawing the whole strip
+    /// here also runs the separators, the clipped title and its fade.
+    @MainActor
+    func testANarrowTabDropsItsTrailingSlotAndTheStripStillDraws() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 300, height: TabBarView.height))
+        bar.setItems(
+            (0..<6).map { TabBarItem(title: "A rather long note title \($0)", isDirty: true) },
+            selectedIndex: 0
+        )
+        bar.layoutSubtreeIfNeeded()
+
+        let narrow = try XCTUnwrap(bar.tabViewForTesting(at: 1))
+        narrow.layoutSubtreeIfNeeded()
+        XCTAssertLessThan(narrow.frame.width, 60, "six tabs at 300pt are past the slot's floor")
+        XCTAssertTrue(
+            narrow.subviews.compactMap { $0 as? NSButton }.allSatisfy(\.isHidden),
+            "there is no ✕ to hover at this width"
+        )
+
+        let selected = try XCTUnwrap(bar.tabViewForTesting(at: 0))
+        selected.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThanOrEqual(selected.frame.width, 60)
+        XCTAssertTrue(
+            selected.subviews.contains { $0 is NSButton && !$0.isHidden },
+            "the selected tab is held wide enough to keep its ✕"
+        )
+
+        // Draws the strip offscreen: separators, the clipped title, its fade
+        // and the dot on the icon all run, and none of them may blow up.
+        let rep = try XCTUnwrap(bar.bitmapImageRepForCachingDisplay(in: bar.bounds))
+        bar.cacheDisplay(in: bar.bounds, to: rep)
+
+        // The same drawing with room to spare, where the title is long
+        // enough to be clipped and faded rather than fitted.
+        let wide = TabBarView(frame: NSRect(x: 0, y: 0, width: 600, height: TabBarView.height))
+        wide.setItems(
+            [TabBarItem(title: String(repeating: "long title ", count: 8), isDirty: false)],
+            selectedIndex: 0
+        )
+        wide.layoutSubtreeIfNeeded()
+        let wideRep = try XCTUnwrap(wide.bitmapImageRepForCachingDisplay(in: wide.bounds))
+        wide.cacheDisplay(in: wide.bounds, to: wideRep)
+    }
+
+    /// The + rides after the last tab and only pins at the trailing edge
+    /// once the strip is full.
+    @MainActor
+    func testThePlusFollowsTheLastTabAndPinsOnceTheStripIsFull() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 600, height: TabBarView.height))
+        bar.setItems(
+            (0..<3).map { TabBarItem(title: "Note \($0)", isDirty: false) },
+            selectedIndex: 0
+        )
+        bar.layoutSubtreeIfNeeded()
+
+        let lastTab = try XCTUnwrap(bar.tabFramesForTesting.last)
+        XCTAssertEqual(bar.newTabButtonFrameForTesting.minX, lastTab.maxX + 4, accuracy: 0.01)
+        XCTAssertLessThan(bar.newTabButtonFrameForTesting.maxX, bar.bounds.maxX,
+                          "a half-empty strip does not park the + at the edge")
+
+        // Twelve tabs at their floors (one at 60, eleven at 40, eleven gaps)
+        // plus the +, its gap and the reserve past it: 612pt, exactly full.
+        bar.frame.size.width = 612
+        bar.setItems(
+            (0..<12).map { TabBarItem(title: "Note \($0)", isDirty: false) },
+            selectedIndex: 0
+        )
+        bar.layoutSubtreeIfNeeded()
+        XCTAssertEqual(bar.newTabButtonFrameForTesting.maxX,
+                       bar.bounds.maxX - TabStripLayout.trailingReserve, accuracy: 0.01,
+                       "a full strip pins the + at the trailing edge, short of the reserve")
+        XCTAssertEqual(bar.hiddenTabsForTesting, Array(repeating: false, count: 12))
+
+        // Past that the strip is a window, and the + still follows whatever
+        // the window's last tab is.
+        bar.setItems(
+            (0..<30).map { TabBarItem(title: "Note \($0)", isDirty: false) },
+            selectedIndex: 0
+        )
+        bar.layoutSubtreeIfNeeded()
+        let lastVisible = try XCTUnwrap(
+            zip(bar.tabFramesForTesting, bar.hiddenTabsForTesting)
+                .filter { !$0.1 }.map(\.0).last
+        )
+        XCTAssertEqual(bar.newTabButtonFrameForTesting.minX, lastVisible.maxX + 4, accuracy: 0.01)
+        XCTAssertLessThanOrEqual(bar.newTabButtonFrameForTesting.maxX,
+                                 bar.bounds.maxX - TabStripLayout.trailingReserve + 0.01,
+                                 "the + never enters the reserve")
+    }
+
+    /// Whatever the strip does, the tab in front is on screen and fully
+    /// inside it — through a resize, a selection change, and a strip so
+    /// crowded that it has gone to a sliding window.
     @MainActor
     func testSelectedTabStaysInViewAcrossResizeAndSelection() throws {
         _ = NSApplication.shared
@@ -1824,19 +1985,87 @@ final class NotaTests: XCTestCase {
         bar.layoutSubtreeIfNeeded()
         XCTAssertTrue(bar.isSelectedTabFullyVisible(), "last tab selected at full width")
 
-        // Narrowing the window past where the strip starts scrolling must
-        // not leave the selected tab stranded off the trailing edge.
         bar.frame = NSRect(x: 0, y: 0, width: 300, height: TabBarView.height)
         bar.layoutSubtreeIfNeeded()
-        XCTAssertTrue(bar.isSelectedTabFullyVisible(),
-                      "resize alone must re-anchor the selected tab")
+        XCTAssertTrue(bar.isSelectedTabFullyVisible(), "a resize alone keeps it in view")
 
-        // Selecting a different tab (e.g. the leading one) must scroll to it
-        // too, without needing an extra layout pass.
+        // Past the floor the strip is a window over the tabs, and the
+        // selected one is what the window is anchored on.
+        let crowd = (0..<30).map { TabBarItem(title: "Note \($0)", isDirty: false) }
+        bar.frame = NSRect(x: 0, y: 0, width: 400, height: TabBarView.height)
+        bar.setItems(crowd, selectedIndex: 29)
+        bar.layoutSubtreeIfNeeded()
+        XCTAssertTrue(bar.hiddenTabsForTesting.contains(true), "30 tabs at 400pt cannot all fit")
+        XCTAssertTrue(bar.isSelectedTabFullyVisible(), "the last tab is what the window shows")
+
+        bar.setItems(crowd, selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+        XCTAssertTrue(bar.isSelectedTabFullyVisible(), "the window slid back to the first tab")
+    }
+
+    /// Chromium's `in_tab_close_`: closing with the ✕ holds the remaining
+    /// tabs at the width they had, so a run of closes leaves each next ✕
+    /// under the pointer. The widths settle once the pointer leaves.
+    @MainActor
+    func testClosingATabWithItsCloseButtonFreezesWidthsUntilThePointerLeaves() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 600, height: TabBarView.height))
+        var tabs = (0..<4).map { TabBarItem(title: "Note \($0)", isDirty: false) }
+
+        final class ClosingDelegate: TabBarViewDelegate {
+            var tabs: [TabBarItem]
+            init(tabs: [TabBarItem]) { self.tabs = tabs }
+            func tabBar(_ bar: TabBarView, didSelect index: Int) {}
+            func tabBarDidRequestNewTab(_ bar: TabBarView) {}
+            func tabBar(_ bar: TabBarView, didMove index: Int, to newIndex: Int) {}
+            func tabBar(_ bar: TabBarView, didRequestCloseAt index: Int) {
+                tabs.remove(at: index)
+                MainActor.assumeIsolated {
+                    bar.setItems(tabs, selectedIndex: 0)
+                    bar.layoutSubtreeIfNeeded()
+                }
+            }
+        }
+        let closer = ClosingDelegate(tabs: tabs)
+        bar.delegate = closer
+
         bar.setItems(tabs, selectedIndex: 0)
         bar.layoutSubtreeIfNeeded()
-        XCTAssertTrue(bar.isSelectedTabFullyVisible(),
-                      "switching selection must re-anchor synchronously")
+        let widthOfFour = try XCTUnwrap(bar.tabFramesForTesting.first).width
+        let plusOfFour = bar.newTabButtonFrameForTesting
+
+        bar.closeViaButtonForTesting(at: 1)
+        tabs = closer.tabs
+        XCTAssertEqual(bar.titlesForTesting, ["Note 0", "Note 2", "Note 3"])
+        XCTAssertTrue(bar.isFrozenAfterCloseForTesting)
+        for frame in bar.tabFramesForTesting {
+            XCTAssertEqual(frame.width, widthOfFour, accuracy: 0.01,
+                           "the tabs that remain keep the width they had")
+        }
+        XCTAssertEqual(bar.newTabButtonFrameForTesting, plusOfFour, "the + stays put too")
+
+        // A second ✕ in the same run behaves the same way.
+        bar.closeViaButtonForTesting(at: 1)
+        XCTAssertEqual(bar.titlesForTesting, ["Note 0", "Note 3"])
+        for frame in bar.tabFramesForTesting {
+            XCTAssertEqual(frame.width, widthOfFour, accuracy: 0.01)
+        }
+
+        // The pointer leaving the strip is what lets them settle.
+        bar.mouseExited(with: try exitEvent(for: bar))
+        bar.layoutSubtreeIfNeeded()
+        XCTAssertFalse(bar.isFrozenAfterCloseForTesting)
+        for frame in bar.tabFramesForTesting {
+            XCTAssertGreaterThan(frame.width, widthOfFour, "two tabs share the strip again")
+        }
+    }
+
+    private func exitEvent(for view: NSView) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.enterExitEvent(
+            with: .mouseExited, location: NSPoint(x: -10, y: -10), modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0, context: nil,
+            eventNumber: 0, trackingNumber: 0, userData: nil
+        ))
     }
 
     /// A completed drag reports `(from, to)` through the delegate; applying
@@ -1902,6 +2131,13 @@ final class NotaTests: XCTestCase {
         XCTAssertEqual(bar.draggedTabXForTesting, xBeforeResize,
                        "a resize mid-drag must not move the dragged tab")
 
+        // A dirty-dot refresh with the same count is safe and must not move
+        // it either.
+        bar.setItems(tabs.map { TabBarItem(title: $0.title, isDirty: true) }, selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+        XCTAssertEqual(bar.draggedTabXForTesting, xBeforeResize,
+                       "a same-count refresh mid-drag must not move it either")
+
         // ⌘W while dragging pushes a shorter item list — the drag can no
         // longer trust its slots, so it is dropped rather than crashing.
         bar.setItems(Array(tabs.dropLast()), selectedIndex: 0)
@@ -1914,24 +2150,28 @@ final class NotaTests: XCTestCase {
     @MainActor
     func testDragChangesSlotAfterHalfATabOfTravel() throws {
         _ = NSApplication.shared
-        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 600, height: TabBarView.height))
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 700, height: TabBarView.height))
         let tabs = (0..<3).map { TabBarItem(title: "Note \($0)", isDirty: false) }
         bar.setItems(tabs, selectedIndex: 0)
         bar.layoutSubtreeIfNeeded()
 
+        // Three tabs in a 700pt strip sit at the comfortable 180pt.
+        let width = try XCTUnwrap(bar.tabFramesForTesting.first).width
+        XCTAssertEqual(width, 180, accuracy: 0.01)
+
         bar.beginDragForTesting(index: 0)
         let startX = try XCTUnwrap(bar.draggedTabXForTesting)
-        // Tabs have a 110 pt minimum width. Moving 60 pt is just over half a
-        // tab, enough for its trailing edge to cross the next tab's centre.
-        bar.updateDragForTesting(pointerX: startX + 55 + 60)
+        // The grab point is the tab's centre. Travelling just over half a
+        // tab takes its trailing edge past the next tab's centre.
+        bar.updateDragForTesting(pointerX: startX + width / 2 + 100)
 
-        XCTAssertEqual(try XCTUnwrap(bar.draggedTabXForTesting), startX + 60,
+        XCTAssertEqual(try XCTUnwrap(bar.draggedTabXForTesting), startX + 100,
                        accuracy: 0.5, "the tab stays attached to its grab point")
         XCTAssertEqual(bar.draggedTabSlotForTesting, 1)
 
         // Crossing the same boundary in reverse restores the original slot,
         // without a wide dead zone or oscillation around the midpoint.
-        bar.updateDragForTesting(pointerX: startX + 55 + 54)
+        bar.updateDragForTesting(pointerX: startX + width / 2 + 80)
         XCTAssertEqual(bar.draggedTabSlotForTesting, 0)
 
         // End the synthetic drag by changing the item count, the same safe
@@ -1975,7 +2215,7 @@ final class NotaTests: XCTestCase {
         let recorder = RecordingDelegate(tabs: tabs)
         bar.delegate = recorder
 
-        let downPoint = NSPoint(x: 140, y: TabBarView.height / 2)
+        let downPoint = NSPoint(x: 250, y: TabBarView.height / 2)
         let draggedPoint = NSPoint(x: 45, y: downPoint.y)
         let tab = try XCTUnwrap(bar.hitTest(downPoint))
 
@@ -2346,8 +2586,9 @@ private final class TabDragLoopHarness {
     let bar: TabBarView
     let recorder: RecordingDelegate
     let tab: NSView
-    /// Inside the second tab, and far enough left of it to land on slot 0.
-    let downPoint = NSPoint(x: 140, y: TabBarView.height / 2)
+    /// Inside the second tab (three tabs in a 600pt strip are 180pt each),
+    /// and far enough left of it to land on slot 0.
+    let downPoint = NSPoint(x: 250, y: TabBarView.height / 2)
     let draggedPoint = NSPoint(x: 45, y: TabBarView.height / 2)
 
     init() throws {

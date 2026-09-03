@@ -196,6 +196,12 @@ final class MainWindowController: NSWindowController {
         window.title = "Nota"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
+        // The tab strip lives inside the full-size title bar and owns its
+        // drag gesture. Native title-bar dragging otherwise runs alongside
+        // that gesture and moves the window while a tab is being reordered.
+        // Empty strip space still moves the window explicitly through
+        // `TabBarView.mouseDown` and `performDrag(with:)`.
+        window.isMovable = false
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 420, height: 260)
         window.delegate = self

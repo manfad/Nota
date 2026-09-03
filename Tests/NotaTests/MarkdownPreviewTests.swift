@@ -1460,8 +1460,8 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertFalse(controller.canShowRenderedPreview, "and the new one is still the second")
     }
 
-    /// When the strip overflows, the tabs scroll in the leading remainder;
-    /// the + stays pinned at the trailing end and is never covered.
+    /// When the strip is full the tabs shrink to fit; the + pins at the
+    /// trailing end and is never covered.
     @MainActor
     func testTheNewTabButtonStaysVisibleWhenTabsOverflow() throws {
         _ = NSApplication.shared

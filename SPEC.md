@@ -201,8 +201,8 @@
 - Orphan assets are never auto-deleted.
 
 ## Tabs
-- Min readable width ~110pt, strip scrolls horizontally past that. A + pinned at the trailing end of the strip opens a new tab (same as ⌘T); overflowing tabs scroll in the remaining space. ⌘P fuzzy tab switcher by title.
-- The selected tab is always fully in view: a narrower window or a switch scrolls the strip to keep it, and only a trackpad scroll can move it out.
+- One width for every tab, `clamp((viewport − plus − gaps) / n, 40, 180)`, shrinking as tabs are added; the strip never scrolls. The selected tab is raised to 60pt so its ✕ fits and the others shrink evenly to pay for it. Titles clip with a fade rather than an ellipsis; under 60pt the trailing slot goes and the unsaved dot rides on the icon. A separator hairline shows only between two plain tabs. The + rides after the last tab and pins at the trailing edge once the strip is full; it opens a new tab (same as ⌘T). ⌘P fuzzy tab switcher by title.
+- The selected tab is always fully in view: at 40pt the strip stops shrinking and becomes a sliding window over the tabs, anchored on the selected one. Closing with the ✕ freezes the widths until the pointer leaves the strip, so a run of closes keeps each next ✕ under it; ⌘W does not freeze.
 - Tabs reorder by drag: the dragged tab rides the pointer and its neighbours slide into the gap; the order is the session's order.
 - Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab.
 
@@ -285,10 +285,34 @@
     gone stays in the list greyed out until removed.
 14. **Copying maths out of the render.** A selection over a formula copies U+FFFC today; the plain-text flavour
     should be the formula's `plainText` (`x²+α`), which the layout already keeps for accessibility.
-15. **Tab strip, browser style (after the LaTeX preview).** Keeps today's minimum width and the fitted strip. An icon per
-    tab (artwork to come), the reorder mechanic revisited, drag a tab out of the strip to open it in a new window (Nota
-    becomes multi-window: one window controller per window, the session remembering which tabs are in which), and a
-    considered answer for many tabs — an overflow menu when the strip is full.
+15. **Tab strip, Chromium style (after the LaTeX preview; design agreed 2026-09-03 with a second reviewer).** Every
+    tab shows a leading icon: the SF Symbol `text.page` for every kind today (done), per-kind artwork later. Then, in
+    this order:
+    - **C. One press to select and drag (done 2026-09-03).** The first drag on a tab moved the window: native
+      title-bar dragging and the tab's reorder gesture were running at the same time. Fix: `window.isMovable = false`
+      turns the native drag off for the whole window; the strip refuses `mouseDownCanMoveWindow` and a press on empty
+      strip space moves the window explicitly with `performDrag(with:)`; the icon and ✕ pass presses to the tab. Zen
+      mode's drag region needs the same explicit drag. The tracking loop on the tab view stays; the strip-owned
+      `NSApp.nextEvent` loop is the shape D needs, so it moves up when D starts.
+    - **A. No scrolling; tabs shrink (done 2026-09-03).** Widths, `plusX`, the sliding window and the close freeze are
+      a pure `TabStripLayout` with its own unit tests; `TabBarView` only places what it says, and the scroll offset,
+      wheel handling and auto-scroll are gone. Titles clip with a 12pt fade, the trailing slot and its ✕ disappear
+      under 60pt (the unsaved dot moves onto the icon), separators show only between two plain tabs, a ✕ close holds
+      the widths still until the pointer leaves the strip, and a drag near either edge reveals one hidden slot at a
+      time. Still to come: the overflow chevron for the tabs the window is not showing.
+    - **B. The + follows the tabs (done 2026-09-03).** `plusX = min(lastVisibleTab.maxX + 4, bounds.width − 24)`: it
+      rides after the last tab and pins at the trailing edge once the strip is full. The ⇧⌘F field already narrows the
+      bar's bounds, and nothing subtracts it twice.
+    - **D. Tear-off (multi-window).** Not `NSWindow.performDrag(with:)` (a modal window move: no further mouse events, so
+      no drop target can highlight) and not `NSDraggingSession` (wrong look). Chromium-on-Mac's way: the same
+      `NSApp.nextEvent` loop watches y; past ~40pt out of the strip it spawns a `MainWindowController`, moves the note
+      across (no save prompt), and places the frame so the tab stays under the pointer (the traffic lights inset the
+      first tab by 82pt); `windowNumber(at:)` finds another Nota strip for an insertion caret; mouse-up docks or leaves
+      the window; the last tab out closes its source; Esc puts the tab back and kills the extra window. App shell:
+      `AppDelegate` keeps a window list instead of one controller, summon and `application(_:open:)` target the key
+      window, `setFrameAutosaveName` goes per-window. `session.json` gains `windows: [{tabs, selectedIndex, frame}]`,
+      with today's flat tab list decoded as one window. ⌘N stays "new tab"; ⌘⇧N is a new window.
+    D next; it moves the tracking loop from the tab view to the strip and onto `NSApp.nextEvent` first.
 16. **Big files, in full** (after the tab strip; see 8). Also: spell checking off for anything that is not prose (by
     extension) and for any file past a size, and `allowsNonContiguousLayout` so word wrap lays out only what is on screen.
 
