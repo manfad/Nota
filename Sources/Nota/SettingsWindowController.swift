@@ -106,7 +106,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     private init() {
         let window = SettingsWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 660, height: 500),
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -119,7 +119,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         // the titlebar is glass and the title itself lives on the page.
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.contentMinSize = NSSize(width: 700, height: 440)
+        // Small enough to shrink well below the opening size — the pages are
+        // narrow — but never so small that a group's control and its label
+        // would have to fight for the same points.
+        window.contentMinSize = NSSize(width: 560, height: 400)
 
         buildUI()
         refresh()
