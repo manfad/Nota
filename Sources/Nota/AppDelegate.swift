@@ -219,6 +219,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menuItem.state = mode == .reading ? .on : .off
             return activeController?.canShowRenderedPreview ?? false
         }
+        // The three size keys are one pair of hands doing two jobs, and the
+        // window in front is what knows which. "Actual Size" is the name of
+        // both jobs, and stays put.
+        if menuItem.action == #selector(zoomIn(_:))
+            || menuItem.action == #selector(zoomOut(_:)) {
+            let titles = activeController?.sizeMenuTitles
+                ?? (increase: "Increase Font Size", decrease: "Decrease Font Size")
+            menuItem.title = menuItem.action == #selector(zoomIn(_:))
+                ? titles.increase : titles.decrease
+        }
         // Reading mode has no editor on screen to jump about in, and a PDF or
         // a picture has no lines to jump to.
         if menuItem.action == #selector(goToLine(_:)) {
@@ -258,18 +268,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeController?.selectPreviousTab()
     }
 
-    @objc private func increaseFontSize(_ sender: Any?) {
-        guard let controller = activeController else { return }
-        controller.setFontSize(controller.currentFontSize + 1)
+    /// ⌘+, ⌘- and ⌘0. What the three mean is the window's business — the
+    /// editor's font size where there is an editor on screen, and the
+    /// content's zoom where the content is all there is — so all three ask
+    /// and none of them decides.
+    @objc private func zoomIn(_ sender: Any?) {
+        activeController?.zoomIn()
     }
 
-    @objc private func decreaseFontSize(_ sender: Any?) {
-        guard let controller = activeController else { return }
-        controller.setFontSize(controller.currentFontSize - 1)
+    @objc private func zoomOut(_ sender: Any?) {
+        activeController?.zoomOut()
     }
 
-    @objc private func resetFontSize(_ sender: Any?) {
-        activeController?.setFontSize(13)
+    @objc private func actualSize(_ sender: Any?) {
+        activeController?.actualSize()
     }
 
     // MARK: - Menu
@@ -361,9 +373,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
 
         submenu("View", in: mainMenu, [
-            item("Increase Font Size", #selector(increaseFontSize(_:)), key: "+", target: self),
-            item("Decrease Font Size", #selector(decreaseFontSize(_:)), key: "-", target: self),
-            item("Actual Size", #selector(resetFontSize(_:)), key: "0", target: self),
+            item("Increase Font Size", #selector(zoomIn(_:)), key: "+", target: self),
+            item("Decrease Font Size", #selector(zoomOut(_:)), key: "-", target: self),
+            item("Actual Size", #selector(actualSize(_:)), key: "0", target: self),
             .separator(),
             item("Show Images", #selector(toggleImageSidebar(_:)), key: "b", target: self),
             item("Markdown Preview", #selector(toggleMarkdownPreview(_:)), key: "p",

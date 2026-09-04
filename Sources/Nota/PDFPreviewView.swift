@@ -14,13 +14,29 @@ import PDFKit
 /// about is which page is in front, which is the one thing worth keeping.
 final class PDFPreviewView: NSView, PreviewContent {
 
-    private let pdfView = PDFView()
+    private let pdfView = NotaPDFView()
     /// Shown instead of the document when the file has gone — deleted while
     /// the tab was open, or missing by the time the session comes back.
     private let missingLabel = NSTextField(labelWithString: "")
 
+    /// The document's own ⌘F bar, floating in the top-trailing corner of the
+    /// column — the same pill the editor and the render use, over PDFKit's
+    /// selections instead of a text storage.
+    private let findBar = FindBarView(placeholder: "Find in document")
+    private lazy var findSession = PDFFindSession(bar: findBar, pdfView: pdfView)
+
     /// Run when the reader moves to another page, with its 0-based index.
     var onPositionChange: ((Int) -> Void)?
+
+    /// Run when that bar opens or closes. A PDF column carries no mode
+    /// control for it to push out of the corner, but the column asks all the
+    /// same and the window keeps its own book on which bar is up.
+    var onFindBarVisibilityChange: ((Bool) -> Void)?
+
+    var isFindBarVisible: Bool { findSession.isVisible }
+
+    var findBarHeight: CGFloat { findBar.stackHeight }
+
     /// The page the pane was last told to be on. A document that would not
     /// open has no page to be asked for, and reporting the first one would
     /// send a tab whose file has gone back to the top of a PDF that is not
@@ -41,7 +57,11 @@ final class PDFPreviewView: NSView, PreviewContent {
         // second margin outside the page's own, with the paper shrinking to
         // pay for it.
         pdfView.translatesAutoresizingMaskIntoConstraints = false
-        pdfView.autoScales = true
+        // Not `autoScales`: that fits the page to the column whatever the
+        // column's width is, so a portrait page in a wide window is drawn
+        // half again past actual size and the type is enormous. The fit is
+        // done here instead, capped at 1.0 — see `fitPage`.
+        pdfView.autoScales = false
         pdfView.displayMode = .singlePageContinuous
         pdfView.displaysPageBreaks = true
         pdfView.backgroundColor = .textBackgroundColor
@@ -69,9 +89,28 @@ final class PDFPreviewView: NSView, PreviewContent {
             ),
         ])
 
+        // Added after the page, so the pill floats over it, and in the same
+        // corner every other column keeps its bars in.
+        pdfView.findSession = findSession
+        findSession.onVisibilityChange = { [weak self] visible in
+            self?.onFindBarVisibilityChange?(visible)
+        }
+        findBar.onHeightChange = { [weak self] in
+            guard let self else { return }
+            onFindBarVisibilityChange?(isFindBarVisible)
+        }
+        findBar.floatStack(
+            in: self, under: topAnchor, gap: ModeControlOverlay.controlTopInset,
+            trailingInset: ModeControlOverlay.controlInset
+        )
+
         NotificationCenter.default.addObserver(
             self, selector: #selector(pageDidChange),
             name: .PDFViewPageChanged, object: pdfView
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(scaleDidChange),
+            name: .PDFViewScaleChanged, object: pdfView
         )
     }
 
@@ -106,7 +145,16 @@ final class PDFPreviewView: NSView, PreviewContent {
 
         // Only on a real change: handing PDFView the document it is already
         // showing throws away the page the reader is on.
-        if pdfView.document !== document { pdfView.document = document }
+        if pdfView.document !== document {
+            // Every selection the bar is holding points into the document
+            // being taken out, so the search goes with it.
+            findSession.close()
+            pdfView.document = document
+            // A fresh document is a fresh page size: the fit the last one
+            // was drawn at says nothing about this one.
+            fittedSize = .zero
+            fitPage()
+        }
         pdfView.isHidden = document == nil
         missingLabel.isHidden = document != nil
         guard document == nil else { return }
@@ -116,6 +164,103 @@ final class PDFPreviewView: NSView, PreviewContent {
 
     /// How many pages there are, and none at all when there is no document.
     var pageCount: Int { pdfView.document?.pageCount ?? 0 }
+
+    // MARK: - How big the page is drawn
+
+    /// The column's size the page was last fitted to. A fit is worth doing
+    /// again when the column changes size and at no other time — in
+    /// particular not on every layout pass.
+    private var fittedSize = NSSize.zero
+
+    /// True while the scale is being set from here, so PDFKit's own
+    /// notification about it is not read back as the reader pinching.
+    private var isScaling = false
+
+    private var zoomStorage: CGFloat = 1
+
+    /// A document zooms rather than changing a font: it is the only thing on
+    /// screen in its tab, and its size has nothing to do with the editor's.
+    var canZoom: Bool { pdfView.document != nil }
+
+    /// Quarter size to eight times it, which is the range a page is still
+    /// something to look at in.
+    private static let zoomRange: ClosedRange<CGFloat> = 0.25 ... 8
+
+    /// How much bigger than the fitted page it is drawn. 1 is the fit itself,
+    /// which is what "Actual Size" goes back to.
+    var zoom: CGFloat {
+        get { zoomStorage }
+        set {
+            let clamped = min(max(newValue, Self.zoomRange.lowerBound),
+                              Self.zoomRange.upperBound)
+            guard clamped != zoomStorage else { return }
+            zoomStorage = clamped
+            fitPage(force: true)
+        }
+    }
+
+    var onZoomChange: ((CGFloat) -> Void)?
+
+    /// Fits the page to the column's width, never larger than actual size,
+    /// and then applies whatever zoom the reader has asked for on top.
+    ///
+    /// `autoScales` would fill the column with one page whatever that costs:
+    /// a 300pt-wide page in a 900pt column is drawn at 3×, which is a page of
+    /// 36pt type. Paper has a size of its own, and past 100% a PDF is being
+    /// magnified rather than read. Below it there is no choice — a page wider
+    /// than the column has to shrink or be cut off — so the cap is one-sided.
+    private func fitPage(force: Bool = false) {
+        guard pdfView.document != nil else { return }
+        let size = pdfView.bounds.size
+        guard size.width > 1, size.height > 1 else { return }
+        guard force || size != fittedSize else { return }
+        fittedSize = size
+        guard let scale = scaleForZoom else { return }
+        // PDFView clamps what it is handed, and neither of its own bounds
+        // knows about the fit this one is measured from.
+        if scale < pdfView.minScaleFactor { pdfView.minScaleFactor = scale }
+        if scale > pdfView.maxScaleFactor { pdfView.maxScaleFactor = scale }
+        isScaling = true
+        pdfView.scaleFactor = scale
+        isScaling = false
+    }
+
+    /// What the page should be drawn at: the fit, capped at actual size, times
+    /// the zoom.
+    private var scaleForZoom: CGFloat? {
+        let fit = fittedScale
+        return fit > 0 ? fit * zoomStorage : nil
+    }
+
+    /// The scale a zoom of 1 means — the page fitted to the column, and never
+    /// past actual size.
+    private var fittedScale: CGFloat { min(pdfView.scaleFactorForSizeToFit, 1) }
+
+    /// A pinch on the trackpad, which PDFKit handles itself. The zoom is read
+    /// back off the scale it landed on rather than being fought over, so the
+    /// next resize keeps it and the tab remembers it.
+    @objc private func scaleDidChange(_ notification: Notification) {
+        guard !isScaling, pdfView.document != nil else { return }
+        let fit = fittedScale
+        guard fit > 0 else { return }
+        let zoom = pdfView.scaleFactor / fit
+        guard abs(zoom - zoomStorage) > 0.0001 else { return }
+        zoomStorage = zoom
+        onZoomChange?(zoom)
+    }
+
+    /// The column changed size, so the page is fitted to it again — at the
+    /// zoom the reader left it at, since that is measured against the fit
+    /// rather than against the paper.
+    override func layout() {
+        super.layout()
+        fitPage()
+    }
+
+    /// What the page is drawn at, and what `autoScales` would have drawn it
+    /// at — for the tests, which have to be able to say the cap did something.
+    var scaleFactor: CGFloat { pdfView.scaleFactor }
+    var scaleFactorToFit: CGFloat { pdfView.scaleFactorForSizeToFit }
 
     /// The page in front, counted from zero — what the footer says and what
     /// the session keeps. Setting it goes to that page; a page number past
@@ -191,5 +336,41 @@ final class PDFPreviewView: NSView, PreviewContent {
         // again, so light and dark are swapped by handing it over afresh.
         pdfView.backgroundColor = .textBackgroundColor
         needsDisplay = true
+    }
+}
+
+// MARK: - The view the Find menu reaches
+
+/// The `PDFView` a PDF tab is read in, and the one thing it is here for: ⌘F.
+///
+/// Find…, Find Next, Find Previous and Use Selection for Find are nil-targeted
+/// `performTextFinderAction:` items, so they land on whatever has the keyboard
+/// — and in reading mode over a PDF that is this view. It hands them to the
+/// document's own session, exactly as the render's text view hands them to
+/// its one, so Nota's pill is the only find UI a PDF tab ever shows.
+///
+/// `performTextFinderAction:` is an override: `PDFView` answers for it itself
+/// with PDFKit's own find bar, and that bar is exactly what must never appear
+/// in a Nota window. `validateUserInterfaceItem` is not — `PDFView` is an
+/// `NSView` rather than an `NSTextView`, so the conformance is written down
+/// here, and Find and Replace… is the item it says no to: a page cannot be
+/// typed into.
+final class NotaPDFView: PDFView, NSUserInterfaceValidations {
+
+    /// The document's find bar. Weak, the way the render's is: the session
+    /// belongs to the pane, and the pane owns this view.
+    weak var findSession: PDFFindSession?
+
+    override func performTextFinderAction(_ sender: Any?) {
+        guard let item = sender as? NSValidatedUserInterfaceItem,
+              let action = NSTextFinder.Action(rawValue: item.tag)
+        else { return }
+        findSession?.perform(action)
+    }
+
+    func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard item.action == #selector(performTextFinderAction(_:)) else { return true }
+        guard let action = NSTextFinder.Action(rawValue: item.tag) else { return false }
+        return PDFFindSession.handles(action)
     }
 }

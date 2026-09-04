@@ -40,6 +40,14 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
     /// moves by the height of the stack rather than being covered by it.
     var onHeightChange: (() -> Void)?
 
+    /// Which of the Find menu's actions the session behind this bar answers
+    /// for — asked while the reader is typing in a field, where the menu
+    /// items reach the field editor rather than the view being searched. A
+    /// text session takes them all; a document's takes everything but the
+    /// replace half. Unset means the text session's answer, which is what
+    /// every bar over an `NSTextView` wants.
+    var handlesAction: ((NSTextFinder.Action) -> Bool)?
+
     /// Whether the replace pill is out. Remembered for as long as the bar
     /// lives, which is as long as the column does: opening ⌘F again in a
     /// column that was replacing brings that pill back with it.
@@ -187,7 +195,7 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
     }
 
     func handles(_ action: NSTextFinder.Action) -> Bool {
-        TextFindSession.handles(action)
+        handlesAction?(action) ?? TextFindSession.handles(action)
     }
 
     @objc private func nextMatch() { perform(.nextMatch) }

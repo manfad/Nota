@@ -58,6 +58,7 @@ final class PreviewPaneView: NSView {
     var onBlockClick: ((NSRange) -> Void)?
     var onFindBarVisibilityChange: ((Bool) -> Void)?
     var onPositionChange: ((Int) -> Void)?
+    var onZoomChange: ((CGFloat) -> Void)?
 
     // MARK: - What is true of the column
 
@@ -161,6 +162,10 @@ final class PreviewPaneView: NSView {
         content.onPositionChange = { [weak self, weak content] position in
             guard let self, isInFront(content) else { return }
             onPositionChange?(position)
+        }
+        content.onZoomChange = { [weak self, weak content] zoom in
+            guard let self, isInFront(content) else { return }
+            onZoomChange?(zoom)
         }
         contentContainer.addSubview(content)
         NSLayoutConstraint.activate([

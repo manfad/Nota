@@ -139,6 +139,26 @@ protocol PreviewContent: NSView {
     /// redrawn under an unchanged token.
     func invalidateRender()
 
+    /// Whether ⌘+ / ⌘- / ⌘0 zoom this content rather than change the editor's
+    /// font size. True where the content is the only thing on screen and its
+    /// size is nothing to do with a font: a document, a picture, a page. A
+    /// render says no — the font *is* the zoom there.
+    var canZoom: Bool { get }
+
+    /// How much bigger than its own default the content is drawn, 1 being
+    /// that default: a document fitted to the column, a picture fitted to it,
+    /// a page at 100%. Relative rather than absolute so it survives the
+    /// column changing width under it, which moves every one of those
+    /// defaults.
+    ///
+    /// Setting it clamps to what the content will actually draw; read it back
+    /// for what it settled on.
+    var zoom: CGFloat { get set }
+
+    /// Run when the content zooms itself — a pinch on a document — with the
+    /// same number `zoom` answers with, so the tab can keep it.
+    var onZoomChange: ((CGFloat) -> Void)? { get set }
+
     /// Where the tab was left, when the content is the only thing that knows:
     /// the page a PDF is open at. `nil` when it is not — a render is read
     /// against the editor's caret, and the window already has that.
@@ -205,6 +225,18 @@ extension PreviewContent {
     func invalidateBlocks() { }
 
     func invalidateRender() { }
+
+    var canZoom: Bool { false }
+
+    var zoom: CGFloat {
+        get { 1 }
+        set { }
+    }
+
+    var onZoomChange: ((CGFloat) -> Void)? {
+        get { nil }
+        set { }
+    }
 
     var rememberedPosition: Int? { nil }
 

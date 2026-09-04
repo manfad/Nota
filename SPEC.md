@@ -157,7 +157,10 @@
 - The tab is locked in reading: the document takes the whole column, the editor stays collapsed, and there is no mode
   control in either corner. ⇧⌘P, ⌥⇧⌘P and both View items do nothing there and are disabled — a PDF has no Markdown
   render to have a mode about.
-- Drawn by PDFKit (`PDFView`, auto-scaled, single page continuous, page breaks shown) on the same background the
+- A page fits the column's width but is never drawn past actual size (done 2026-09-04): `autoScales` is off and the
+  scale is `min(scaleFactorForSizeToFit, 1)`, refitted when the column changes size, so a portrait page in a wide
+  window is paper rather than 36pt type — a wider page still shrinks to fit, since that cap is one-sided.
+- Drawn by PDFKit (`PDFView`, single page continuous, page breaks shown) on the same background the
   editor and the render use, so the column does not change colour between a Markdown tab and a PDF one. No WebView
   and no dependency: PDFKit ships with macOS. The pages are pinned edge to edge rather than inset — `PDFView` scales
   and centres each page in the room it has, so an inset would shrink the paper rather than give the text a margin.
@@ -167,6 +170,24 @@
 - The page you were on comes back: it rides in the session in the same key the caret does, and the tab reopens there.
   A file that has gone — deleted while the tab was open, or missing when the session comes back — keeps its tab, stays
   clean, and shows a quiet centred `Couldn't open "name.pdf".` in the editor's own font.
+- ⌘F searches the document (done 2026-09-04): the same pill in the same corner, "Find in document", over PDFKit's own
+  selections rather than a text storage. Every match wears a quiet band drawn over the page, the one you are on wears
+  `findHighlightColor` and is the page's selection, and the count reads the same `3 of 12` / `12 matches` /
+  `No matches` (`2000+` past the same cap the editor stops at). Typing searches from the page you are reading; ⌘G,
+  ⇧⌘G, Return and ⇧Return walk and wrap; ⌘E seeds from what is selected on the page; Esc puts the bands down, leaves
+  the match selected and hands the keyboard back to the document. A document cannot be typed into, so the glass is
+  only a glass and Find and Replace… is greyed out — the one Find item a PDF turns down. PDFKit's own find bar never
+  appears: `NotaPDFView` takes `performTextFinderAction:` off it.
+- ⌘+ / ⌘- / ⌘0 zoom the page here (done 2026-09-04). The three keys are one pair of hands doing two jobs, and what
+  decides is which of the two the reader can see: with an editor on screen — any text tab in edit or split — they are
+  the font size they have always been, and the Markdown and LaTeX renders follow it. With the content alone on screen
+  and its size nothing to do with a font — a PDF, a picture, an HTML page in reading mode — they zoom that content:
+  ×1.25 a press, "Actual Size" back to however it draws itself (a page or a picture fitted to the column, a page at
+  100%), clamped to 0.25…8 for a document and a picture and 0.5…5 for a page. A render in reading mode stays with the
+  font, since the font already *is* the zoom there. The first two View items say which job they are doing — "Zoom In"
+  / "Zoom Out" against "Increase Font Size" / "Decrease Font Size" — and "Actual Size" is the name of both. The zoom
+  is the tab's for as long as the tab is open and is not in `session.json`: how close you were reading is not where
+  you were reading. A pinch on a document is the same number, read back off the scale PDFKit lands on.
 - Footer: the middle counts pages (`12 pages`, `1 page`), the right says which one (`Page 3 of 12`), and it is empty
   when there is no document to be in. Everything else in the chrome — the strip, the vim badge, zen — is unchanged.
 
@@ -236,7 +257,20 @@
   the browser; an in-page `#` stays. The keyboard belongs to the page in reading mode, and to the editor in the other
   two: a click in split must not steal the caret.
 - No block sync: a DOM is not a list of source ranges, and a click in the page is a click in the page (links still
-  open). ⌘F over the page is a Todo, the same as a PDF (see Todo 12).
+  open).
+- ⌘F searches the page (done 2026-09-04), in reading mode, where the page has the keyboard: the same pill in the same
+  corner, "Find in page", the same counts and the same keys. In split the editor has the keyboard and ⌘F is the
+  editor's, unchanged. The search itself is a script injected into every page alongside the scroll reporter, in the
+  same separate world: every text node is gathered into one string — so a match across an inline element, `ca<b>fe</b>`,
+  is still a match — folded a character at a time (decomposed, combining marks stripped, lowercased, with a map back
+  to where each folded character came from, since `İ` lowercases to two), matched, and turned into DOM `Range`s. The
+  bands are CSS custom highlights (`CSS.highlights`, `::highlight(nota-find)` and `nota-find-current`), so nothing is
+  added to the author's DOM and no attribute is written on it — the same promise the editor's temporary attributes
+  make. Stepping is by index in the page, which is what makes `3 of 12` exact and wrapping trivial, and Esc puts the
+  bands down and leaves the match as a real selection. Never WebKit's own find: `WKWebView.find` selects one match at
+  a time, cannot band or count the rest, and takes the selection away from the reader. Every answer crosses a process
+  boundary, so the session is asynchronous and carries a token — a reply about the query two keystrokes ago is not
+  news about the one being typed now. A page loaded again puts the query to the new document.
 - Untitled notes and every other extension have no HTML preview. Save As to `.html` is what turns a note into one.
 - An `.svg` is the same arrangement (decided 2026-09-04): text you edit, a drawing beside it, the same pane and the
   same three modes, and the View item says "SVG Preview". It is handed to WebKit as `image/svg+xml`, so the root
@@ -376,9 +410,11 @@
 10. **Ship it.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on another Mac
     without the Gatekeeper dance; `Nota.app.zip` as the release artifact next to the tag.
 11. Fix the word-wrap re-flow lag in the split slide (Known issues above).
-12. **⌘F inside a PDF and Print of a PDF tab.** The find bar over a PDF tab searching the document itself
-    (`PDFDocument.findString`, selections drawn on the page, ⌘G walking them), and ⌥⌘P printing the PDF rather than
-    the render.
+12. **⌘F inside a PDF (done 2026-09-04) and Print of a PDF tab.** The find half is shipped: the same `FindBarView`
+    pill the editor and the render use, driven by a `PDFFindSession` over PDFKit's selections — `findString` for the
+    list and for each step, `highlightedSelections` for the bands and `currentSelection` for the one being stood on —
+    with `NotaPDFView` taking `performTextFinderAction:` off `PDFView` so PDFKit's own bar never appears. See the PDF
+    section for what it does. Still open: ⌥⌘P printing the PDF rather than the render.
 13. **Bookmarks (v0.5 or v0.6).** A tab can be bookmarked (⌘D-style toggle in File and in the tab's context menu; a
     dot or pin on the tab). A bookmark is the file's path, kept in `session.json` beside the tabs, so closing the tab
     does not lose the note: File › Bookmarks lists them and ⌘P's switcher offers them under the open tabs, and choosing

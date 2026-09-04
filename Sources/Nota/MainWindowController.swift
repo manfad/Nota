@@ -706,6 +706,9 @@ final class MainWindowController: NSWindowController {
         previewColumn.onPositionChange = { [weak self] position in
             self?.previewPositionDidChange(position)
         }
+        previewColumn.onZoomChange = { [weak self] zoom in
+            self?.previewZoomDidChange(zoom)
+        }
 
         installModeOverlay(previewModeOverlay, over: previewColumn)
     }
@@ -1948,7 +1951,7 @@ final class MainWindowController: NSWindowController {
         sessionWriter()
     }
 
-    // MARK: - Font size
+    // MARK: - Font size and zoom
 
     /// Writes through to `Preferences`; the change notification restyles the
     /// editor and moves the Settings window's stepper.
@@ -1957,6 +1960,73 @@ final class MainWindowController: NSWindowController {
     }
 
     var currentFontSize: CGFloat { fontSize }
+
+    /// Whether ⌘+ / ⌘- / ⌘0 zoom the content in the column rather than change
+    /// the editor's font size.
+    ///
+    /// The rule is which of the two the reader can actually see. With an
+    /// editor on screen — any text tab in edit or split — the keys are the
+    /// font's, and the Markdown and LaTeX renders follow it as they always
+    /// have. With the content alone on screen they are the content's, unless
+    /// the content is a render, where the font already *is* the zoom.
+    /// What the tab asks for rather than what is installed: a mode change
+    /// slides, and the keys are the reader's the moment they ask for the
+    /// mode rather than a fifth of a second later.
+    var zoomsContent: Bool {
+        guard previewMode == .reading, let note = currentNote else { return false }
+        return previewColumn.content(for: note).canZoom
+    }
+
+    /// What the View menu's first two size items are called on the tab in
+    /// front. They are one pair of hands doing two jobs, so they say which
+    /// job it is; "Actual Size" is the name of both and stays put.
+    var sizeMenuTitles: (increase: String, decrease: String) {
+        zoomsContent
+            ? ("Zoom In", "Zoom Out")
+            : ("Increase Font Size", "Decrease Font Size")
+    }
+
+    /// One press of ⌘+ or ⌘-. A quarter more or less each time, which is the
+    /// step every document reader takes.
+    private static let zoomStep: CGFloat = 1.25
+
+    func zoomIn() {
+        guard zoomsContent else { return setFontSize(currentFontSize + 1) }
+        zoomContent(by: Self.zoomStep)
+    }
+
+    func zoomOut() {
+        guard zoomsContent else { return setFontSize(currentFontSize - 1) }
+        zoomContent(by: 1 / Self.zoomStep)
+    }
+
+    /// ⌘0. Back to the editor's own 13pt, or — where the keys are the
+    /// content's — back to however the content draws itself: a page fitted to
+    /// the column, a picture fitted to it, an HTML page at 100%.
+    func actualSize() {
+        guard zoomsContent else { return setFontSize(13) }
+        setContentZoom(1)
+    }
+
+    private func zoomContent(by factor: CGFloat) {
+        guard let note = currentNote else { return }
+        setContentZoom(previewColumn.content(for: note).zoom * factor)
+    }
+
+    /// The content clamps what it is handed, so what it settled on is what the
+    /// tab remembers — not what was asked for.
+    private func setContentZoom(_ zoom: CGFloat) {
+        guard let note = currentNote else { return }
+        var content = previewColumn.content(for: note)
+        content.zoom = zoom
+        note.previewZoom = content.zoom
+    }
+
+    /// The content zoomed itself — a pinch on a document. Where the reader
+    /// left it is the tab's, the same as the page they left it on.
+    private func previewZoomDidChange(_ zoom: CGFloat) {
+        currentNote?.previewZoom = zoom
+    }
 
     @objc private func openSettings(_ sender: Any?) {
         SettingsWindowController.shared.show()
@@ -2781,6 +2851,11 @@ extension MainWindowController {
             assets: store.assets,
             isVisible: previewIsVisible
         ))
+        // How close this tab was being read at. The content clamps it, so
+        // what it settled on goes back into the tab.
+        var content = previewColumn.content(for: note)
+        content.zoom = note.previewZoom
+        note.previewZoom = content.zoom
         highlightPreviewBlock()
     }
 

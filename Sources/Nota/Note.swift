@@ -138,6 +138,11 @@ final class Note {
     /// Where the tab was left: the caret in a text note, the page being read
     /// in a PDF. One number either way, so the session keeps both the same.
     var selectionLocation: Int = 0
+    /// How far the tab's content is zoomed — a document, a picture or a page,
+    /// 1 being however it draws itself by default. Per tab and for as long as
+    /// the tab is open, and no longer: it is not in `session.json`, since how
+    /// close you were reading is not where you were reading.
+    var previewZoom: CGFloat = 1
     /// What this tab does with its render — editor, split or reading. Per
     /// tab, not per app: ⇧⌘P on a Markdown note must not follow you into the
     /// next ⌘T. The editor until asked for.
