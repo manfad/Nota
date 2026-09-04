@@ -157,6 +157,20 @@ final class ImageTests: XCTestCase {
         XCTAssertNil(status.position, "there is nowhere in a picture to be")
     }
 
+    /// A picture has no encoding or line endings either — Todo 2's field is
+    /// empty over it, same as a PDF.
+    @MainActor
+    func testTheEncodingAndLineEndingFieldIsEmptyOverAPictureTab() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeController(in: directory)
+        let picture = try write(pngData(width: 20, height: 10), named: "photo.png",
+                                in: directory)
+        controller.open(url: picture)
+
+        XCTAssertEqual(controller.footerRegions.encoding.stringValue, "")
+        XCTAssertEqual(controller.footerRegions.lineEnding.stringValue, "")
+    }
+
     // MARK: - The session
 
     @MainActor

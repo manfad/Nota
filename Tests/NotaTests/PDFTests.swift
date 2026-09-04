@@ -246,6 +246,23 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(controller.footerRegions.cursor.stringValue, "Ln 1, Col 1")
     }
 
+    /// A PDF has no encoding or line endings — Todo 2's field is empty there,
+    /// the same way the counts and the caret position are their own thing.
+    @MainActor
+    func testTheEncodingAndLineEndingFieldIsEmptyOverAPDFTab() throws {
+        let controller = try makeController(store: try makeStore())
+        let pdf = try makePDF(pages: 1, named: "paper.pdf", in: try makeTemporaryDirectory())
+        controller.open(url: pdf)
+
+        XCTAssertEqual(controller.footerRegions.encoding.stringValue, "")
+        XCTAssertEqual(controller.footerRegions.lineEnding.stringValue, "")
+
+        // And back the moment a text tab is in front.
+        controller.newTab()
+        XCTAssertEqual(controller.footerRegions.encoding.stringValue, "UTF-8 ·")
+        XCTAssertEqual(controller.footerRegions.lineEnding.stringValue, "LF")
+    }
+
     // MARK: - Nothing to save
 
     @MainActor

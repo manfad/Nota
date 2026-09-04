@@ -194,6 +194,12 @@ final class MainWindowController: NSWindowController {
     private let modeBadge = VimModeBadge()
     private let pendingKeysLabel = NSTextField(labelWithString: "")
     private let cursorLabel = NSTextField(labelWithString: "")
+    /// A text note's shape, at the right of the counts and left of the
+    /// caret position: `UTF-8 ·` and `LF`, two clickable halves rather than
+    /// one label, each popping its own menu. Empty over a PDF or a picture,
+    /// which has no encoding or line endings to speak of.
+    private let formatEncodingLabel = FooterMenuLabel()
+    private let formatLineEndingLabel = FooterMenuLabel()
     private var countsLeadingToVim: NSLayoutConstraint?
     private var countsLeadingToEdge: NSLayoutConstraint?
     private var vimMode: VimMode = .normal
@@ -455,6 +461,15 @@ final class MainWindowController: NSWindowController {
         cursorLabel.textColor = .secondaryLabelColor
         workspace.addSubview(cursorLabel)
 
+        for label in [formatEncodingLabel, formatLineEndingLabel] {
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            label.textColor = .secondaryLabelColor
+            workspace.addSubview(label)
+        }
+        formatEncodingLabel.onClick = { [weak self] in self?.showEncodingMenu() }
+        formatLineEndingLabel.onClick = { [weak self] in self?.showLineEndingMenu() }
+
         zenDragRegion.translatesAutoresizingMaskIntoConstraints = false
         zenDragRegion.isHidden = true
         content.addSubview(zenDragRegion)
@@ -509,9 +524,18 @@ final class MainWindowController: NSWindowController {
                                                   constant: -Layout.statusInset),
             cursorLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
 
+            formatLineEndingLabel.trailingAnchor.constraint(equalTo: cursorLabel.leadingAnchor,
+                                                            constant: -12),
+            formatLineEndingLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
+            formatEncodingLabel.trailingAnchor.constraint(
+                equalTo: formatLineEndingLabel.leadingAnchor, constant: -4
+            ),
+            formatEncodingLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
+
             statusLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
-            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: cursorLabel.leadingAnchor,
-                                                  constant: -12),
+            statusLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: formatEncodingLabel.leadingAnchor, constant: -12
+            ),
         ])
 
         NSLayoutConstraint.activate([
@@ -1319,6 +1343,131 @@ final class MainWindowController: NSWindowController {
         }
         updateCountsLabel()
         updateCursorPosition()
+        updateFormatLabel()
+    }
+
+    /// The note's own shape, at the right of the counts: `UTF-8 ·` and `LF`,
+    /// read straight off `note.format` since it is already what ⌘S would
+    /// write. Empty for a PDF or a picture, which has no such thing.
+    private func updateFormatLabel() {
+        guard let note = currentNote, note.kind == .text else {
+            formatEncodingLabel.stringValue = ""
+            formatLineEndingLabel.stringValue = ""
+            return
+        }
+        formatEncodingLabel.stringValue = TextFileFormat.displayName(for: note.format.encoding) + " ·"
+        formatLineEndingLabel.stringValue = note.format.lineEnding.displayName
+    }
+
+    // MARK: - Encoding and line endings
+
+    private func showEncodingMenu() {
+        guard let menu = encodingMenu() else { return }
+        popUpFooterMenu(menu, over: formatEncodingLabel)
+    }
+
+    private func showLineEndingMenu() {
+        guard let menu = lineEndingMenu() else { return }
+        popUpFooterMenu(menu, over: formatLineEndingLabel)
+    }
+
+    private func popUpFooterMenu(_ menu: NSMenu, over view: NSView) {
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 4), in: view)
+    }
+
+    /// What clicking the encoding half offers for the tab in front: UTF-8,
+    /// UTF-16, Latin-1, Windows-1252 — Todo 2's own order — the current one
+    /// ticked, and one this note's text cannot survive disabled rather than
+    /// picked, with the tool tip saying why. `nil` off a PDF, a picture, or
+    /// no note at all. Exposed (not private) so tests can inspect it without
+    /// going through a real click.
+    func encodingMenu() -> NSMenu? {
+        guard let note = currentNote, note.kind == .text else { return nil }
+        let menu = NSMenu()
+        let text = note.text
+        let currentName = TextFileFormat.displayName(for: note.format.encoding)
+        for encoding in TextFileFormat.selectableEncodings {
+            let name = TextFileFormat.displayName(for: encoding)
+            let item = NSMenuItem(
+                title: name, action: #selector(chooseEncoding(_:)), keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = encoding.rawValue
+            item.state = name == currentName ? .on : .off
+            if !TextFile.canRepresent(text, in: encoding) {
+                item.isEnabled = false
+                item.toolTip = "“\(note.title)” has characters \(name) can’t hold."
+            }
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    /// What clicking the line-ending half offers for the tab in front: LF
+    /// and CRLF, the current one ticked. Always both enabled — nothing a
+    /// line ending cannot hold. `nil` off a PDF, a picture, or no note.
+    func lineEndingMenu() -> NSMenu? {
+        guard let note = currentNote, note.kind == .text else { return nil }
+        let menu = NSMenu()
+        for ending in [LineEnding.lf, .crlf] {
+            let item = NSMenuItem(
+                title: ending.displayName, action: #selector(chooseLineEnding(_:)), keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = ending.rawValue
+            item.state = ending == note.format.lineEnding ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func chooseEncoding(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? UInt else { return }
+        convertEncoding(to: String.Encoding(rawValue: raw))
+    }
+
+    @objc private func chooseLineEnding(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let ending = LineEnding(rawValue: raw)
+        else { return }
+        convertLineEnding(to: ending)
+    }
+
+    /// What picking another encoding from the footer's menu does, for the
+    /// tab in front: the note's format changes, the tab goes dirty, and ⌘S
+    /// writes the new shape — `write(note:to:)` already reads `note.format`.
+    /// UTF-16 is one menu item for either byte order, so picking it while the
+    /// file is already UTF-16 (of either kind) is a no-op rather than a
+    /// silent LE/BE flip. A conversion the text cannot survive is refused —
+    /// the menu already keeps it from being asked for, this is the belt to
+    /// that braces.
+    func convertEncoding(to encoding: String.Encoding) {
+        guard let note = currentNote, note.kind == .text else { return }
+        let name = TextFileFormat.displayName(for: encoding)
+        guard name != TextFileFormat.displayName(for: note.format.encoding) else { return }
+        guard TextFile.canRepresent(note.text, in: encoding) else { return }
+        note.format.encoding = encoding
+        // Consistent with what `TextFile.decode` would produce for this
+        // shape: UTF-16 is only ever recognised by its byte-order mark, so a
+        // converted file gets one; UTF-8 and the 8-bit encodings never do.
+        note.format.hadBOM = encoding == .utf16LittleEndian || encoding == .utf16BigEndian
+        markFormatChanged(note)
+    }
+
+    /// What picking another line ending does, for the tab in front — the
+    /// same shape of change as the encoding above, with nothing to refuse:
+    /// every line ending can hold every note.
+    func convertLineEnding(to ending: LineEnding) {
+        guard let note = currentNote, note.kind == .text, ending != note.format.lineEnding
+        else { return }
+        note.format.lineEnding = ending
+        markFormatChanged(note)
+    }
+
+    private func markFormatChanged(_ note: Note) {
+        note.isDirty = true
+        refreshTabs()
+        updateFormatLabel()
     }
 
     /// Count the words and characters of a big note away from the run loop.
@@ -1411,8 +1560,10 @@ final class MainWindowController: NSWindowController {
         if statusLabel.stringValue != text { statusLabel.stringValue = text }
     }
 
-    /// The gap between the left region and the caret position, with the 12pt
-    /// breathing space at each end already taken off.
+    /// The gap between the left region and whatever bounds the counts on the
+    /// right — the format field when a text note has one to show, the caret
+    /// position otherwise — with the 12pt breathing space at each end already
+    /// taken off.
     private var availableCountsWidth: CGFloat {
         // Before the first layout pass there are no frames to measure, so
         // nothing is ruled out yet.
@@ -1422,7 +1573,7 @@ final class MainWindowController: NSWindowController {
         let leading = preferences.vimMode
             ? pendingKeysLabel.frame.maxX + 12
             : Layout.statusInset
-        return max(0, cursorLabel.frame.minX - 12 - leading)
+        return max(0, formatEncodingLabel.frame.minX - 12 - leading)
     }
 
     /// What the tab in front has to say about its own size and where you are
@@ -1527,11 +1678,15 @@ final class MainWindowController: NSWindowController {
         tabBar.showDropCaret(at: slot)
     }
 
-    /// The footer's three regions, for the layout tests: the vim badge, the
-    /// centred counts, and the caret position.
+    /// The footer's regions, for the layout tests: the vim badge, the
+    /// centred counts, the caret position, and the note's own shape —
+    /// `encoding` reads `"UTF-8 ·"`, `lineEnding` reads `"LF"`, both empty
+    /// over a PDF or a picture.
     var footerRegions: (badge: NSView, pendingKeys: NSTextField,
-                        counts: NSTextField, cursor: NSTextField) {
-        (modeBadge, pendingKeysLabel, statusLabel, cursorLabel)
+                        counts: NSTextField, cursor: NSTextField,
+                        encoding: NSTextField, lineEnding: NSTextField) {
+        (modeBadge, pendingKeysLabel, statusLabel, cursorLabel,
+         formatEncodingLabel, formatLineEndingLabel)
     }
 
     /// The badge and its pending keys belong to vim mode; the caret position
@@ -1544,6 +1699,8 @@ final class MainWindowController: NSWindowController {
         pendingKeysLabel.isHidden =
             isZenMode || !isVim || pendingKeysLabel.stringValue.isEmpty
         cursorLabel.isHidden = isZenMode
+        formatEncodingLabel.isHidden = isZenMode
+        formatLineEndingLabel.isHidden = isZenMode
         // Nothing to count means no label at all, rather than an empty gap.
         statusLabel.isHidden = isZenMode || preferences.footerSegments.isEmpty
     }
@@ -2111,6 +2268,7 @@ extension MainWindowController {
         let chrome: [NSView] = [
             tabBar, statusSeparator, statusLabel,
             modeBadge, pendingKeysLabel, cursorLabel,
+            formatEncodingLabel, formatLineEndingLabel,
         ]
 
         workspaceSplitTopToTabBar?.isActive = !enabled
@@ -2305,6 +2463,33 @@ final class VimCommandPane: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         needsDisplay = true
+    }
+}
+
+/// One clickable half of the footer's format field — `UTF-8 ·` or `LF` — in
+/// the footer's own secondary-label look, popping its own menu on a click
+/// rather than opening on hover: nothing else in the footer is hover-only, so
+/// this is not either.
+private final class FooterMenuLabel: NSTextField {
+    var onClick: (() -> Void)?
+
+    init() {
+        super.init(frame: .zero)
+        isEditable = false
+        isSelectable = false
+        isBordered = false
+        isBezeled = false
+        drawsBackground = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func mouseDown(with event: NSEvent) {
+        onClick?()
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
     }
 }
 
