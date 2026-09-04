@@ -240,6 +240,12 @@ final class MainWindowController: NSWindowController {
         // swaps documents, and that lives on NSLayoutManager.
         let storage = NSTextStorage()
         let layoutManager = NSLayoutManager()
+        // A 100 MB log has millions of glyphs a screen will never show. Without
+        // this, `usedRect(for:)` — which sizing the text view and scrolling
+        // both lean on — lays out the whole document just to answer; with it,
+        // the height past what has been laid out is an estimate that firms up
+        // as scrolling brings more of the document into view.
+        layoutManager.allowsNonContiguousLayout = true
         let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
         storage.addLayoutManager(layoutManager)
@@ -743,6 +749,10 @@ final class MainWindowController: NSWindowController {
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
+        // The real answer is per tab — a `.log` gets no dictionary, a big note
+        // gets no dictionary regardless of its extension — and is set again in
+        // `installCurrentNote` once there is a note to ask. This default is
+        // only what a brand-new, empty text view starts out with.
         textView.isContinuousSpellCheckingEnabled = true
         textView.isGrammarCheckingEnabled = false
         textView.drawsBackground = true
@@ -903,7 +913,15 @@ final class MainWindowController: NSWindowController {
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude
         )
-        textView.layoutManager?.ensureLayout(for: container)
+        // `sizeToFit` asks the layout manager for the container's used rect,
+        // which — with `allowsNonContiguousLayout` — is happy to answer with
+        // an estimate for whatever is not laid out yet. Forcing full layout
+        // first, the way this used to, defeated that: a container switch or a
+        // word-wrap toggle on a big note would lay out the whole thing right
+        // here. Laying out only what is on screen is enough to make the used
+        // rect (and so the frame `sizeToFit` computes) correct for the part
+        // that matters; the rest firms up as the reader scrolls into it.
+        textView.layoutManager?.ensureLayout(forBoundingRect: scrollView.contentView.bounds, in: container)
         textView.sizeToFit()
         lineNumberRuler?.refresh()
     }
@@ -1091,6 +1109,11 @@ final class MainWindowController: NSWindowController {
         // keyboard does not. A PDF has no text behind it to type into either.
         textView.isEditable = note.isEditable
         vimEngine.isModifiable = note.isEditable
+        // A PDF or a picture has no dictionary to run either way; the policy
+        // itself already says no for anything that is not prose (by
+        // extension) and for anything past `BigFile.threshold`.
+        textView.isContinuousSpellCheckingEnabled =
+            SpellCheckPolicy.shouldCheck(url: note.fileURL, length: note.storage.length)
         // Temporary attributes belong to the layout manager, not the note, so
         // the highlights are laid on again for whatever is now in it.
         vimEngine.refreshSearchHighlights()
@@ -1529,10 +1552,14 @@ final class MainWindowController: NSWindowController {
         note.isDirty = false
         preferences.lastSaveDirectory = destination.deletingLastPathComponent()
         refreshTabs()
-        // Save As can change whether this tab is Markdown at all.
+        // Save As can change whether this tab is Markdown at all, and it can
+        // change whether it is prose — an untitled note is prose until it is
+        // given a name, and `Untitled` saved as `notes.log` is not.
         if note === currentNote {
             applyPreviewMode()
             updateModeControlOverlays()
+            textView.isContinuousSpellCheckingEnabled =
+                SpellCheckPolicy.shouldCheck(url: note.fileURL, length: note.storage.length)
         }
         flushAll()
         return true
@@ -1634,12 +1661,16 @@ final class MainWindowController: NSWindowController {
 
     // MARK: - Persistence
 
-    /// Debounced: fires ~300 ms after the last edit.
+    /// Debounced: fires ~300 ms after the last edit — 2 s for a big note,
+    /// since `flush` serializes and writes the whole thing to the cache, and
+    /// that must not land in the middle of the next keystroke.
     private func scheduleSave() {
         saveWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in self?.flush() }
         saveWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+        let isBig = currentNote.map { BigFile.isBig(length: $0.storage.length) } ?? false
+        let delay = isBig ? 2.0 : 0.3
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     /// Writes the visible tab's text plus `session.json`.
@@ -2562,14 +2593,19 @@ extension MainWindowController {
     /// Where a piece of the note sits in the editor's document.
     private func editorRect(for range: NSRange) -> NSRect? {
         guard let layoutManager = textView.layoutManager,
-              let container = textView.textContainer,
+              textView.textContainer != nil,
               let length = currentNote?.storage.length, length > 0
         else { return nil }
-        // Nothing below the last laid-out line has a rectangle yet, and a
-        // jump is usually to somewhere that has never been on screen.
-        layoutManager.ensureLayout(for: container)
+        // A jump is usually to somewhere that has never been on screen, so it
+        // has no rectangle yet — but only its own neighbourhood needs laying
+        // out to find one; a 100 MB note must not pay for the rest of itself
+        // just to answer where one line sits.
         let character = min(max(0, range.location), length - 1)
-        let glyph = layoutManager.glyphIndexForCharacter(at: character)
+        let characterRange = NSRange(location: character, length: 1)
+        layoutManager.ensureLayout(forCharacterRange: characterRange)
+        let glyph = layoutManager.glyphRange(
+            forCharacterRange: characterRange, actualCharacterRange: nil
+        ).location
         var rect = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
         rect.origin.y += textView.textContainerOrigin.y
         rect.origin.x += textView.textContainerOrigin.x
