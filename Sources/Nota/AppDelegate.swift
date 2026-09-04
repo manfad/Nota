@@ -6,6 +6,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// and the summon key all mean whichever window is in front.
     private let windows: WindowRegistry
     private let hotKey = GlobalHotKey()
+    /// File › Open Recent. `NSMenu.delegate` is weak, so this is what keeps
+    /// it alive for as long as the app is.
+    private lazy var recentDocumentsMenu = RecentDocumentsMenu { [weak self] url in
+        self?.openRecentDocument(url)
+    }
 
     /// The window every action means — nil only before the first one exists.
     private var activeController: MainWindowController? { windows.activeController }
@@ -256,6 +261,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeController?.openFiles()
     }
 
+    /// Choosing a File › Open Recent item — the same funnel Finder's own
+    /// "Open With" and a drag onto the Dock icon use.
+    private func openRecentDocument(_ url: URL) {
+        showWindow()
+        activeController?.open(url: url)
+    }
+
     @objc private func selectTab(_ sender: NSMenuItem) {
         activeController?.selectTab(at: sender.tag)
     }
@@ -325,6 +337,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Quit Nota", #selector(NSApplication.terminate(_:)), key: "q"),
         ])
 
+        let recentMenu = NSMenu(title: "Open Recent")
+        recentMenu.delegate = recentDocumentsMenu
+        let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        recentItem.submenu = recentMenu
+
         submenu("File", in: mainMenu, [
             item("New Tab", #selector(newTab(_:)), key: "t", target: self),
             // ⌘N is Nota's older new-tab key, and also what brings a hidden
@@ -333,6 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("New Window", #selector(newWindowItem(_:)), key: "n",
                  modifiers: [.command, .shift], target: self),
             item("Open…", #selector(openNote(_:)), key: "o", target: self),
+            recentItem,
             .separator(),
             item("Close Tab", #selector(closeTab(_:)), key: "w", target: self),
             .separator(),

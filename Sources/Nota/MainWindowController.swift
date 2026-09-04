@@ -1793,6 +1793,7 @@ final class MainWindowController: NSWindowController {
     func open(url: URL) {
         let target = url.standardizedFileURL
         if let index = notes.firstIndex(where: { $0.fileURL?.standardizedFileURL == target }) {
+            noteRecentDocument(target)
             selectTab(at: index)
             return
         }
@@ -1801,8 +1802,10 @@ final class MainWindowController: NSWindowController {
         // whatever any of them is called.
         switch FileSniff.classify(at: target) {
         case .pdf:
+            noteRecentDocument(target)
             addTab(fileURL: target, kind: .pdf)
         case .image:
+            noteRecentDocument(target)
             addTab(fileURL: target, kind: .image)
         case .text:
             openAsText(target)
@@ -1812,6 +1815,7 @@ final class MainWindowController: NSWindowController {
             // `NSImage` may yet make sense of it; if neither does, that is
             // the pane's own missing message, not this alert.
             if let kind = Note.viewerKind(target) {
+                noteRecentDocument(target)
                 addTab(fileURL: target, kind: kind)
             } else {
                 presentFailure("Couldn’t open “\(target.lastPathComponent)”.",
@@ -1820,7 +1824,8 @@ final class MainWindowController: NSWindowController {
         case .unreadable:
             // Nothing about the file could be read at all — missing, or no
             // permission — so the name is all that is left to say what it
-            // was going to be.
+            // was going to be. Not a successful open, so the recent list
+            // does not learn about it.
             presentFailure("Couldn’t open “\(target.lastPathComponent)”.", nil,
                            detail: Note.viewerKind(target) != nil
                                ? nil : "Nota only opens text files.")
@@ -1833,12 +1838,22 @@ final class MainWindowController: NSWindowController {
                            nil, detail: "Nota only opens text files.")
             return
         }
+        noteRecentDocument(target)
         addTab(fileURL: target, text: opened.text, format: opened.format)
         // The setting is about opening files, not about restoring them: a tab
         // coming back from the session keeps the mode it was left in.
         if preferences.opensMarkdownInReadingMode, Note.supportsRenderedPreview(target) {
             setPreviewMode(.reading)
         }
+    }
+
+    /// File › Open Recent's list, kept by `NSDocumentController` rather than
+    /// Nota's own session: every named-file open funnels through `open(url:)`
+    /// or `openAsText`, so this is the one place that has to say so. Session
+    /// restore never calls either — a tab coming back on launch is not a
+    /// reason to reorder what the reader chose to open by hand.
+    private func noteRecentDocument(_ url: URL) {
+        NSDocumentController.shared.noteNewRecentDocumentURL(url)
     }
 
     private func presentFailure(_ message: String, _ error: Error?, detail: String? = nil) {

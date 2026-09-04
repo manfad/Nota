@@ -17,6 +17,8 @@
   (missing, unreadable, or a real binary). What a file is *rendered as* (Markdown vs. LaTeX vs. HTML) is the one
   exception — that stays by extension, since it is the author's own word for it (see Markdown preview).
 - ⌘S default for a new note: `.md`, opens in the last-used folder; any extension typed in the panel is kept.
+- File › Open Recent (done 2026-09-04): `NSDocumentController`'s own list, noted on every named-file open (not on
+  session restore) and rebuilt into the submenu each time it opens; Clear Menu empties it.
 - Multi-window: ⇧⌘N opens another window, ⌘N and ⌘T stay new tabs, and every menu action means the window in front.
   `session.json` keeps `windows: [{tabs, selectedTabID, frame}]` — one entry per window, in order, each with its own
   frame; a file written before that (a flat tab list) comes back as one window, and the first window is still mirrored
@@ -385,7 +387,13 @@
 3. **Go to line (done 2026-09-04).** ⌘L opens a pill in the find bar's own corner — the same `PillView` chrome, one
    row — taking `N` or `N:M` and moving the caret as you type, off the note's `LineIndex` rather than a scan. See the
    Search section above for what it does; `:N` still does it in vim, untouched.
-4. **File › Open Recent** (NSDocumentController's list, cleared from the same submenu) and tab reorder by drag in the strip.
+4. **File › Open Recent (done 2026-09-04).** A submenu after Open… in `AppDelegate`, built by `RecentDocumentsMenu` —
+   an `NSMenuDelegate` that rebuilds itself from `NSDocumentController.shared.recentDocumentURLs` on
+   `menuNeedsUpdate`, most recent first, a separator, then Clear Menu (`clearRecentDocuments(nil)`).
+   `MainWindowController.open(url:)` notes every named file it opens (`noteNewRecentDocumentURL`) — Open…, drag and
+   drop, Finder's "Open With" and `:e` all funnel through it — but session restore does not, so launching never
+   reorders what the reader chose to open by hand. Choosing an item opens the file the way `application(_:open:)`
+   does, in the window in front. Tab reorder by drag in the strip was already shipped; see Tabs above.
 5. **Task lists** in the render: `- [ ]` / `- [x]` as real checkboxes, ticking one rewrites the source character; counted
    `3 / 7 done` in the footer for a `.md` that has any.
 6. **Print / PDF of the render.** ⌥⌘P prints the reading layout (⌘P is the tab switcher); Export as PDF… in File, same
