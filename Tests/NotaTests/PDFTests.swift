@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import Foundation
 import PDFKit
 import XCTest
@@ -263,6 +264,175 @@ final class PDFTests: XCTestCase {
         XCTAssertFalse(controller.currentTabState.isDirty)
     }
 
+    // MARK: - ⌘F in the document
+
+    /// ⌘F over a PDF is the same pill it is everywhere else, floating in the
+    /// document's own column. The editor is collapsed behind it and its bar
+    /// stays where it is.
+    @MainActor
+    func testCommandFOverAPDFOpensThePillInTheDocumentsColumn() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makeTextPDF(pages: ["alpha beta"], named: "paper.pdf",
+                                             in: try makeTemporaryDirectory()))
+        let (pdfView, bar) = try findChrome(of: controller)
+        XCTAssertEqual(bar.field.placeholderString, "Find in document")
+        XCTAssertFalse(bar.isShown)
+        XCTAssertFalse(bar.canReplace, "there is nothing in a document to replace")
+
+        XCTAssertTrue(pdfView.validateUserInterfaceItem(finderItem(.showFindInterface)),
+                      "the menu item has to stay enabled or ⌘F never arrives here")
+        pdfView.performTextFinderAction(finderItem(.showFindInterface))
+
+        XCTAssertTrue(bar.isShown)
+        XCTAssertTrue(controller.previewPanes.pdf.isFindBarVisible)
+        XCTAssertEqual(controller.previewMode, .reading, "the search happens where you are")
+        // One bar in the window is up, and it is the document's.
+        let shown = allFindBars(in: controller).filter(\.isShown)
+        XCTAssertEqual(shown.count, 1)
+        XCTAssertTrue(shown.first === bar, "the editor's own bar stayed down")
+    }
+
+    /// Typing searches the document as you go: every match wears a band, the
+    /// one being stood on wears the loud one and is the page's selection, and
+    /// the count says where in the document it is.
+    @MainActor
+    func testTypingSearchesTheDocumentAndLandsOnTheFirstMatch() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makeAlphaPDF())
+        let (pdfView, bar) = try findChrome(of: controller)
+        pdfView.performTextFinderAction(finderItem(.showFindInterface))
+
+        type("alpha", into: bar)
+
+        XCTAssertEqual(bar.status, "1 of 3")
+        XCTAssertEqual(pdfView.currentSelection?.string?.lowercased(), "alpha",
+                       "the match is the page's own selection")
+        let bands = try XCTUnwrap(pdfView.highlightedSelections)
+        XCTAssertEqual(bands.count, 3, "every match wears one")
+        XCTAssertEqual(bands.filter { $0.color == .findHighlightColor }.count, 1,
+                       "and exactly one of them is the loud one")
+        let session = try XCTUnwrap(pdfView.findSession)
+        XCTAssertEqual(session.matches.count, 3)
+        XCTAssertFalse(session.isCapped)
+        // Case- and diacritic-insensitive, the same as the editor's bar.
+        type("ALPHA", into: bar)
+        XCTAssertEqual(bar.status, "1 of 3")
+    }
+
+    /// ⌘G walks the matches and wraps round the end of the document; ⇧⌘G
+    /// walks them back. Both work in a document of more than one page.
+    @MainActor
+    func testCommandGStepsThroughTheDocumentAndWraps() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makeAlphaPDF())
+        let (pdfView, bar) = try findChrome(of: controller)
+        pdfView.performTextFinderAction(finderItem(.showFindInterface))
+        type("alpha", into: bar)
+        XCTAssertEqual(bar.status, "1 of 3")
+
+        pdfView.performTextFinderAction(finderItem(.nextMatch))
+        XCTAssertEqual(bar.status, "2 of 3")
+        pdfView.performTextFinderAction(finderItem(.nextMatch))
+        XCTAssertEqual(bar.status, "3 of 3")
+        XCTAssertEqual(controller.previewPanes.pdf.currentPageIndex, 1,
+                       "the third is on the second page, and the reader went there")
+
+        pdfView.performTextFinderAction(finderItem(.nextMatch))
+        XCTAssertEqual(bar.status, "1 of 3", "round the end")
+        pdfView.performTextFinderAction(finderItem(.previousMatch))
+        XCTAssertEqual(bar.status, "3 of 3", "and round the other way")
+        pdfView.performTextFinderAction(finderItem(.previousMatch))
+        XCTAssertEqual(bar.status, "2 of 3")
+    }
+
+    /// Escape puts the bands down and hands the match over: it stays selected
+    /// on the page, and the keyboard goes back to the document.
+    @MainActor
+    func testEscapeClosesTheBarAndLeavesTheMatchSelected() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makeAlphaPDF())
+        let (pdfView, bar) = try findChrome(of: controller)
+        pdfView.performTextFinderAction(finderItem(.showFindInterface))
+        type("alpha", into: bar)
+        XCTAssertNotNil(pdfView.highlightedSelections)
+
+        pdfView.performTextFinderAction(finderItem(.hideFindInterface))
+
+        XCTAssertFalse(bar.isShown)
+        XCTAssertFalse(controller.previewPanes.pdf.isFindBarVisible)
+        XCTAssertNil(pdfView.highlightedSelections, "the bands are down")
+        XCTAssertEqual(pdfView.currentSelection?.string?.lowercased(), "alpha",
+                       "and the match the reader was on is theirs")
+        let responder = controller.window?.firstResponder as? NSView
+        XCTAssertTrue(responder === pdfView || responder?.isDescendant(of: pdfView) == true,
+                      "the keyboard went back to the document")
+        // The query outlives the bar, so ⌘G keeps walking with it closed.
+        pdfView.performTextFinderAction(finderItem(.nextMatch))
+        XCTAssertEqual(bar.status, "2 of 3")
+    }
+
+    /// ⌘E takes the query from what is selected on the page, and puts it on
+    /// the find pasteboard the way the editor's does.
+    @MainActor
+    func testUseSelectionForFindSeedsTheQueryFromThePage() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makeAlphaPDF())
+        let (pdfView, bar) = try findChrome(of: controller)
+        let document = try XCTUnwrap(pdfView.document)
+        let selection = try XCTUnwrap(
+            document.findString("gamma", withOptions: [.caseInsensitive]).first
+        )
+        pdfView.setCurrentSelection(selection, animate: false)
+
+        pdfView.performTextFinderAction(finderItem(.setSearchString))
+
+        XCTAssertEqual(bar.query.lowercased(), "gamma")
+        XCTAssertEqual(NSPasteboard(name: .find).string(forType: .string)?.lowercased(), "gamma")
+        XCTAssertFalse(bar.isShown, "⌘E does not open the bar")
+        // And ⌘F now comes up holding it.
+        pdfView.performTextFinderAction(finderItem(.showFindInterface))
+        XCTAssertEqual(bar.status, "1 of 1")
+    }
+
+    /// A query the document does not hold says so, and lights nothing.
+    @MainActor
+    func testAQueryWithNoHitsSaysNoMatches() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makeAlphaPDF())
+        let (pdfView, bar) = try findChrome(of: controller)
+        pdfView.performTextFinderAction(finderItem(.showFindInterface))
+
+        type("zeta", into: bar)
+
+        XCTAssertEqual(bar.status, "No matches")
+        XCTAssertNil(pdfView.highlightedSelections)
+        XCTAssertEqual(try XCTUnwrap(pdfView.findSession).matches.count, 0)
+    }
+
+    /// Find, Find Next, Find Previous and Use Selection all mean something
+    /// over a page. Find and Replace… does not: there is nothing to replace.
+    @MainActor
+    func testFindAndReplaceIsTheOneFindItemAPDFTurnsDown() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makeAlphaPDF())
+        let (pdfView, _) = try findChrome(of: controller)
+
+        for action in [NSTextFinder.Action.showFindInterface, .hideFindInterface,
+                       .nextMatch, .previousMatch, .setSearchString] {
+            XCTAssertTrue(pdfView.validateUserInterfaceItem(finderItem(action)),
+                          "\(action) belongs over a document")
+        }
+        for action in [NSTextFinder.Action.showReplaceInterface, .replace, .replaceAll] {
+            XCTAssertFalse(pdfView.validateUserInterfaceItem(finderItem(action)),
+                           "\(action) has nothing to act on")
+        }
+        // And the pill's own field says the same, so ⌥⌘F is greyed out while
+        // the reader is typing in it too.
+        let bar = try findChrome(of: controller).bar
+        XCTAssertFalse(bar.handles(.showReplaceInterface))
+        XCTAssertTrue(bar.handles(.nextMatch))
+    }
+
     // MARK: - Helpers
 
     @MainActor
@@ -303,6 +473,107 @@ final class PDFTests: XCTestCase {
         }
         let url = directory.appendingPathComponent(name)
         XCTAssertTrue(document.write(to: url), "the fixture has to be a real PDF")
+        return url
+    }
+
+    /// A controller whose window is key and laid out, without a frame of it
+    /// reaching the screen: the find bar needs a first responder, and the
+    /// suite is not a thing anybody asked to watch.
+    @MainActor
+    private func makeKeyController() throws -> MainWindowController {
+        let controller = try makeController(store: try makeStore())
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        window.layoutIfNeeded()
+        return controller
+    }
+
+    /// The document's view and its pill, which is all a find test reaches for.
+    @MainActor
+    private func findChrome(
+        of controller: MainWindowController
+    ) throws -> (pdfView: NotaPDFView, bar: FindBarView) {
+        let pane = controller.previewPanes.pdf
+        return (try XCTUnwrap(descendant(of: pane, ofType: NotaPDFView.self)),
+                try XCTUnwrap(descendant(of: pane, ofType: FindBarView.self)))
+    }
+
+    /// Every find pill in the window — the editor's, the render's and the
+    /// document's — so a test can say which one of them came up.
+    @MainActor
+    private func allFindBars(in controller: MainWindowController) -> [FindBarView] {
+        guard let root = controller.window?.contentView else { return [] }
+        var found: [FindBarView] = []
+        var stack = [root]
+        while let view = stack.popLast() {
+            if let bar = view as? FindBarView { found.append(bar) }
+            stack.append(contentsOf: view.subviews)
+        }
+        return found
+    }
+
+    /// A Find menu item as the menu builds it: nil-targeted, with the action
+    /// in its tag.
+    private func finderItem(_ action: NSTextFinder.Action) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.action = #selector(NSTextView.performTextFinderAction(_:))
+        item.tag = action.rawValue
+        return item
+    }
+
+    /// The reader typing in the field, which is what drives an incremental
+    /// search.
+    private func type(_ query: String, into bar: FindBarView) {
+        bar.query = query
+        bar.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: bar.field)
+        )
+    }
+
+    private func descendant<T: NSView>(of view: NSView, ofType type: T.Type) -> T? {
+        if let match = view as? T { return match }
+        for subview in view.subviews {
+            if let match = descendant(of: subview, ofType: type) { return match }
+        }
+        return nil
+    }
+
+    /// Three `alpha`s over two pages, with something else to search for on
+    /// each: the fixture every stepping test walks.
+    private func makeAlphaPDF() throws -> URL {
+        try makeTextPDF(
+            pages: ["alpha beta", "gamma alpha\ndelta alpha"],
+            named: "paper.pdf", in: try makeTemporaryDirectory()
+        )
+    }
+
+    /// A real PDF with real extractable text, drawn rather than checked in:
+    /// each string is laid into a page of a `CGPDFContext` with Core Text, so
+    /// PDFKit reads back words rather than the blank paper `makePDF` writes.
+    private func makeTextPDF(pages: [String], named name: String, in directory: URL) throws -> URL {
+        let url = directory.appendingPathComponent(name)
+        var box = CGRect(x: 0, y: 0, width: 300, height: 400)
+        let context = try XCTUnwrap(
+            CGContext(url as CFURL, mediaBox: &box, nil), "the fixture has to be a real PDF"
+        )
+        for text in pages {
+            context.beginPDFPage(nil)
+            let attributed = NSAttributedString(
+                string: text,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 16),
+                    .foregroundColor: NSColor.black,
+                ]
+            )
+            let setter = CTFramesetterCreateWithAttributedString(attributed)
+            let path = CGPath(rect: box.insetBy(dx: 24, dy: 24), transform: nil)
+            let frame = CTFramesetterCreateFrame(
+                setter, CFRange(location: 0, length: 0), path, nil
+            )
+            CTFrameDraw(frame, context)
+            context.endPDFPage()
+        }
+        context.closePDF()
         return url
     }
 

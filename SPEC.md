@@ -167,6 +167,14 @@
 - The page you were on comes back: it rides in the session in the same key the caret does, and the tab reopens there.
   A file that has gone — deleted while the tab was open, or missing when the session comes back — keeps its tab, stays
   clean, and shows a quiet centred `Couldn't open "name.pdf".` in the editor's own font.
+- ⌘F searches the document (done 2026-09-04): the same pill in the same corner, "Find in document", over PDFKit's own
+  selections rather than a text storage. Every match wears a quiet band drawn over the page, the one you are on wears
+  `findHighlightColor` and is the page's selection, and the count reads the same `3 of 12` / `12 matches` /
+  `No matches` (`2000+` past the same cap the editor stops at). Typing searches from the page you are reading; ⌘G,
+  ⇧⌘G, Return and ⇧Return walk and wrap; ⌘E seeds from what is selected on the page; Esc puts the bands down, leaves
+  the match selected and hands the keyboard back to the document. A document cannot be typed into, so the glass is
+  only a glass and Find and Replace… is greyed out — the one Find item a PDF turns down. PDFKit's own find bar never
+  appears: `NotaPDFView` takes `performTextFinderAction:` off it.
 - Footer: the middle counts pages (`12 pages`, `1 page`), the right says which one (`Page 3 of 12`), and it is empty
   when there is no document to be in. Everything else in the chrome — the strip, the vim badge, zen — is unchanged.
 
@@ -236,7 +244,8 @@
   the browser; an in-page `#` stays. The keyboard belongs to the page in reading mode, and to the editor in the other
   two: a click in split must not steal the caret.
 - No block sync: a DOM is not a list of source ranges, and a click in the page is a click in the page (links still
-  open). ⌘F over the page is a Todo, the same as a PDF (see Todo 12).
+  open). ⌘F over the page is a Todo (see Todo 12): WebKit's own find is a page away in its own process, so it is
+  nothing like the pill over a note or over a PDF.
 - Untitled notes and every other extension have no HTML preview. Save As to `.html` is what turns a note into one.
 - An `.svg` is the same arrangement (decided 2026-09-04): text you edit, a drawing beside it, the same pane and the
   same three modes, and the View item says "SVG Preview". It is handed to WebKit as `image/svg+xml`, so the root
@@ -376,9 +385,11 @@
 10. **Ship it.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on another Mac
     without the Gatekeeper dance; `Nota.app.zip` as the release artifact next to the tag.
 11. Fix the word-wrap re-flow lag in the split slide (Known issues above).
-12. **⌘F inside a PDF and Print of a PDF tab.** The find bar over a PDF tab searching the document itself
-    (`PDFDocument.findString`, selections drawn on the page, ⌘G walking them), and ⌥⌘P printing the PDF rather than
-    the render.
+12. **⌘F inside a PDF (done 2026-09-04) and Print of a PDF tab.** The find half is shipped: the same `FindBarView`
+    pill the editor and the render use, driven by a `PDFFindSession` over PDFKit's selections — `findString` for the
+    list and for each step, `highlightedSelections` for the bands and `currentSelection` for the one being stood on —
+    with `NotaPDFView` taking `performTextFinderAction:` off `PDFView` so PDFKit's own bar never appears. See the PDF
+    section for what it does. Still open: ⌥⌘P printing the PDF rather than the render.
 13. **Bookmarks (v0.5 or v0.6).** A tab can be bookmarked (⌘D-style toggle in File and in the tab's context menu; a
     dot or pin on the tab). A bookmark is the file's path, kept in `session.json` beside the tabs, so closing the tab
     does not lose the note: File › Bookmarks lists them and ⌘P's switcher offers them under the open tabs, and choosing

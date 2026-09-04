@@ -14,13 +14,29 @@ import PDFKit
 /// about is which page is in front, which is the one thing worth keeping.
 final class PDFPreviewView: NSView, PreviewContent {
 
-    private let pdfView = PDFView()
+    private let pdfView = NotaPDFView()
     /// Shown instead of the document when the file has gone — deleted while
     /// the tab was open, or missing by the time the session comes back.
     private let missingLabel = NSTextField(labelWithString: "")
 
+    /// The document's own ⌘F bar, floating in the top-trailing corner of the
+    /// column — the same pill the editor and the render use, over PDFKit's
+    /// selections instead of a text storage.
+    private let findBar = FindBarView(placeholder: "Find in document")
+    private lazy var findSession = PDFFindSession(bar: findBar, pdfView: pdfView)
+
     /// Run when the reader moves to another page, with its 0-based index.
     var onPositionChange: ((Int) -> Void)?
+
+    /// Run when that bar opens or closes. A PDF column carries no mode
+    /// control for it to push out of the corner, but the column asks all the
+    /// same and the window keeps its own book on which bar is up.
+    var onFindBarVisibilityChange: ((Bool) -> Void)?
+
+    var isFindBarVisible: Bool { findSession.isVisible }
+
+    var findBarHeight: CGFloat { findBar.stackHeight }
+
     /// The page the pane was last told to be on. A document that would not
     /// open has no page to be asked for, and reporting the first one would
     /// send a tab whose file has gone back to the top of a PDF that is not
@@ -69,6 +85,21 @@ final class PDFPreviewView: NSView, PreviewContent {
             ),
         ])
 
+        // Added after the page, so the pill floats over it, and in the same
+        // corner every other column keeps its bars in.
+        pdfView.findSession = findSession
+        findSession.onVisibilityChange = { [weak self] visible in
+            self?.onFindBarVisibilityChange?(visible)
+        }
+        findBar.onHeightChange = { [weak self] in
+            guard let self else { return }
+            onFindBarVisibilityChange?(isFindBarVisible)
+        }
+        findBar.floatStack(
+            in: self, under: topAnchor, gap: ModeControlOverlay.controlTopInset,
+            trailingInset: ModeControlOverlay.controlInset
+        )
+
         NotificationCenter.default.addObserver(
             self, selector: #selector(pageDidChange),
             name: .PDFViewPageChanged, object: pdfView
@@ -106,7 +137,12 @@ final class PDFPreviewView: NSView, PreviewContent {
 
         // Only on a real change: handing PDFView the document it is already
         // showing throws away the page the reader is on.
-        if pdfView.document !== document { pdfView.document = document }
+        if pdfView.document !== document {
+            // Every selection the bar is holding points into the document
+            // being taken out, so the search goes with it.
+            findSession.close()
+            pdfView.document = document
+        }
         pdfView.isHidden = document == nil
         missingLabel.isHidden = document != nil
         guard document == nil else { return }
@@ -191,5 +227,41 @@ final class PDFPreviewView: NSView, PreviewContent {
         // again, so light and dark are swapped by handing it over afresh.
         pdfView.backgroundColor = .textBackgroundColor
         needsDisplay = true
+    }
+}
+
+// MARK: - The view the Find menu reaches
+
+/// The `PDFView` a PDF tab is read in, and the one thing it is here for: ⌘F.
+///
+/// Find…, Find Next, Find Previous and Use Selection for Find are nil-targeted
+/// `performTextFinderAction:` items, so they land on whatever has the keyboard
+/// — and in reading mode over a PDF that is this view. It hands them to the
+/// document's own session, exactly as the render's text view hands them to
+/// its one, so Nota's pill is the only find UI a PDF tab ever shows.
+///
+/// `performTextFinderAction:` is an override: `PDFView` answers for it itself
+/// with PDFKit's own find bar, and that bar is exactly what must never appear
+/// in a Nota window. `validateUserInterfaceItem` is not — `PDFView` is an
+/// `NSView` rather than an `NSTextView`, so the conformance is written down
+/// here, and Find and Replace… is the item it says no to: a page cannot be
+/// typed into.
+final class NotaPDFView: PDFView, NSUserInterfaceValidations {
+
+    /// The document's find bar. Weak, the way the render's is: the session
+    /// belongs to the pane, and the pane owns this view.
+    weak var findSession: PDFFindSession?
+
+    override func performTextFinderAction(_ sender: Any?) {
+        guard let item = sender as? NSValidatedUserInterfaceItem,
+              let action = NSTextFinder.Action(rawValue: item.tag)
+        else { return }
+        findSession?.perform(action)
+    }
+
+    func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard item.action == #selector(performTextFinderAction(_:)) else { return true }
+        guard let action = NSTextFinder.Action(rawValue: item.tag) else { return false }
+        return PDFFindSession.handles(action)
     }
 }
