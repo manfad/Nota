@@ -25,8 +25,10 @@ final class PreviewPaneView: NSView {
         let html: HTMLPreviewView
         let pdf: PDFPreviewView
         let image: ImagePreviewView
+        let epub: EPUBPreviewView
         let kind: PreviewContentKind
         var showsPDF: Bool { kind == .pdf }
+        var showsBook: Bool { kind == .epub }
     }
 
     private let markdownContent = MarkdownPreviewView()
@@ -34,6 +36,7 @@ final class PreviewPaneView: NSView {
     private let htmlContent = HTMLPreviewView()
     private let pdfContent = PDFPreviewView()
     private let imageContent = ImagePreviewView()
+    private let epubContent = EPUBPreviewView()
     private var currentKind: PreviewContentKind = .markdown
 
     /// The content on screen.
@@ -197,6 +200,7 @@ final class PreviewPaneView: NSView {
         case .html: htmlContent
         case .pdf: pdfContent
         case .image: imageContent
+        case .epub: epubContent
         }
     }
 
@@ -264,6 +268,6 @@ final class PreviewPaneView: NSView {
 
     var panes: Panes {
         Panes(markdown: markdownContent, latex: latexContent, html: htmlContent,
-              pdf: pdfContent, image: imageContent, kind: currentKind)
+              pdf: pdfContent, image: imageContent, epub: epubContent, kind: currentKind)
     }
 }

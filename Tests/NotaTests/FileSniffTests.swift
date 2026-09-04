@@ -41,6 +41,42 @@ final class FileSniffTests: XCTestCase {
         XCTAssertEqual(FileSniff.classify(at: url), .text)
     }
 
+    /// A book is a zip, and what tells it from every other zip is the entry
+    /// at the front of the file: a stored `mimetype` reading
+    /// `application/epub+zip` (SPEC Todo 3).
+    func testABookIsKnownByItsFirstEntryAndAPlainZipIsNot() throws {
+        let directory = try makeTemporaryDirectory()
+        let staging = try makeTemporaryDirectory()
+        try Data("just some notes".utf8).write(to: staging.appendingPathComponent("notes.txt"))
+
+        let book = directory.appendingPathComponent("novel.epub")
+        try Data("application/epub+zip".utf8)
+            .write(to: staging.appendingPathComponent("mimetype"))
+        try zip(["-X", "-0", book.path, "mimetype"], in: staging)
+        try zip(["-X", "-r", book.path, "notes.txt"], in: staging)
+
+        let archive = directory.appendingPathComponent("bundle.zip")
+        try zip(["-X", "-r", archive.path, "notes.txt"], in: staging)
+
+        XCTAssertEqual(FileSniff.classify(at: book), .epub)
+        XCTAssertNotEqual(FileSniff.classify(at: archive), .epub,
+                          "an archive with no mimetype entry is only an archive")
+        XCTAssertTrue(Note.isOpenable(book))
+        XCTAssertFalse(Note.isOpenable(archive))
+    }
+
+    private func zip(_ arguments: [String], in directory: URL) throws {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+        task.arguments = arguments
+        task.currentDirectoryURL = directory
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try task.run()
+        task.waitUntilExit()
+        XCTAssertEqual(task.terminationStatus, 0)
+    }
+
     func testBytesWithANULAreBinary() throws {
         let directory = try makeTemporaryDirectory()
         let url = directory.appendingPathComponent("blob")

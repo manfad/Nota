@@ -167,38 +167,125 @@ final class NotaTests: XCTestCase {
         XCTAssertFalse(window?.styleMask.contains(.resizable) ?? true)
         XCTAssertFalse(window?.isReleasedWhenClosed ?? true)
 
-        // Four label/control rows, laid out in one grid.
-        let grid = window?.contentView?.subviews.compactMap { $0 as? NSGridView }.first
-        XCTAssertEqual(grid?.numberOfRows, 13)
-        XCTAssertEqual(grid?.numberOfColumns, 2)
+        func allViews(in root: NSView) -> [NSView] {
+            [root] + root.subviews.flatMap(allViews)
+        }
+        let views = window?.contentView.map(allViews) ?? []
 
         // Font popup offers the four designs plus "Other…".
-        let fontPopUp = grid?.cell(atColumnIndex: 1, rowIndex: 0).contentView as? NSPopUpButton
+        let fontPopUp = views.compactMap { $0 as? NSPopUpButton }.first {
+            $0.itemTitles.contains("Other…")
+        }
         XCTAssertEqual(
             fontPopUp?.itemTitles.filter { !$0.isEmpty },
             ["System", "Serif", "Rounded", "Monospaced", "Other…"]
         )
 
-        // Word wrap is a plain checkbox on the "Editor" row.
-        let wordWrap = grid?.cell(atColumnIndex: 1, rowIndex: 4).contentView as? NSButton
-        XCTAssertEqual(wordWrap?.title, "Word wrap")
-
-        // The gutter row carries both switches, numbers first.
-        let gutterRow = grid?.cell(atColumnIndex: 1, rowIndex: 5).contentView as? NSStackView
-        XCTAssertEqual(
-            gutterRow?.views.compactMap { ($0 as? NSButton)?.title },
-            ["Line numbers", "Gutter separator"]
-        )
-
-        // Row labels, right-aligned in the first column.
-        let labels = (0..<12).compactMap {
-            (grid?.cell(atColumnIndex: 0, rowIndex: $0).contentView as? NSTextField)?.stringValue
+        let buttonTitles = Set(views.compactMap { ($0 as? NSButton)?.title })
+        for title in ["Word wrap", "Line numbers", "Gutter separator", "Words", "Characters",
+                      "Images", "Lines", "Text encoding", "Line endings", "Cursor position",
+                      "Show status bar", "Vim mode", "Start supported files in preview mode",
+                      "Save"] {
+            XCTAssertTrue(buttonTitles.contains(title), "missing \(title)")
         }
-        XCTAssertEqual(
-            labels,
-            ["Font", "Size", "Line spacing", "Padding", "Editor", "Gutter", "Status bar",
-             "Image sidebar", "Copy images as", "Markdown", "Vim mode", "Summon"]
-        )
+
+        let labels = Set(views.compactMap { ($0 as? NSTextField)?.stringValue })
+        for heading in ["General", "Appearance", "Editor", "Preview", "Status bar"] {
+            XCTAssertTrue(labels.contains(heading), "missing \(heading) section")
+        }
+
+        let language = views.compactMap { $0 as? NSPopUpButton }.first {
+            $0.itemTitles.contains("简体中文")
+        }
+        XCTAssertEqual(language?.itemTitles, ["System Default", "English", "简体中文"])
+
+        let theme = views.compactMap { $0 as? NSPopUpButton }.first {
+            $0.itemTitles.contains("Dark")
+        }
+        XCTAssertEqual(theme?.itemTitles, ["System Default", "Light", "Dark"])
+    }
+
+    /// Theme is General's second row: Save puts it on the app as a whole,
+    /// and System Default hands the choice back to the Mac.
+    @MainActor
+    func testSavingAThemeDraftSetsTheAppsAppearance() throws {
+        _ = NSApplication.shared
+        let original = Preferences.shared.theme
+        defer {
+            Preferences.shared.theme = original
+            NSApp.appearance = original.appearance
+        }
+        Preferences.shared.theme = .system
+        NSApp.appearance = nil
+
+        let controller = SettingsWindowController.shared
+        let root = try XCTUnwrap(controller.window?.contentView)
+        func allViews(in view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(allViews)
+        }
+        let views = allViews(in: root)
+        let theme = try XCTUnwrap(views.compactMap { $0 as? NSPopUpButton }.first {
+            $0.itemTitles.contains("Dark")
+        })
+        let save = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Save" })
+
+        theme.selectItem(at: 2)
+        _ = NSApp.sendAction(try XCTUnwrap(theme.action), to: theme.target, from: theme)
+        XCTAssertTrue(save.isEnabled)
+        save.performClick(nil)
+        XCTAssertEqual(Preferences.shared.theme, .dark)
+        XCTAssertEqual(NSApp.appearance?.name, .darkAqua)
+
+        theme.selectItem(at: 0)
+        _ = NSApp.sendAction(try XCTUnwrap(theme.action), to: theme.target, from: theme)
+        save.performClick(nil)
+        XCTAssertEqual(Preferences.shared.theme, .system)
+        XCTAssertNil(NSApp.appearance, "System Default lets the Mac decide")
+    }
+
+    @MainActor
+    func testSavingAChineseLanguageDraftRerendersSettings() throws {
+        _ = NSApplication.shared
+        let original = Preferences.shared.language
+        defer { Preferences.shared.language = original }
+        Preferences.shared.language = .english
+
+        let controller = SettingsWindowController.shared
+        let root = try XCTUnwrap(controller.window?.contentView)
+        func allViews(in view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(allViews)
+        }
+        let views = allViews(in: root)
+        let language = try XCTUnwrap(views.compactMap { $0 as? NSPopUpButton }.first {
+            $0.itemTitles.contains("简体中文")
+        })
+        let save = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Save" })
+
+        language.selectItem(at: 2)
+        _ = NSApp.sendAction(try XCTUnwrap(language.action), to: language.target, from: language)
+        XCTAssertTrue(save.isEnabled)
+        save.performClick(nil)
+
+        XCTAssertEqual(controller.window?.title, "设置")
+        XCTAssertEqual(save.title, "保存")
+    }
+
+    @MainActor
+    func testStatusBarPreferenceHidesEveryFooterRegion() throws {
+        _ = NSApplication.shared
+        let original = Preferences.shared.showsStatusBar
+        defer { Preferences.shared.showsStatusBar = original }
+        let directory = try makeTemporaryDirectory()
+        let controller = MainWindowController(store: SessionStore(directory: directory))
+
+        Preferences.shared.showsStatusBar = false
+        let footer = controller.footerRegions
+        XCTAssertTrue(footer.badge.isHidden)
+        XCTAssertTrue(footer.pendingKeys.isHidden)
+        XCTAssertTrue(footer.counts.isHidden)
+        XCTAssertTrue(footer.cursor.isHidden)
+        XCTAssertTrue(footer.encoding.isHidden)
+        XCTAssertTrue(footer.lineEnding.isHidden)
     }
 
     // MARK: - Images
@@ -1232,10 +1319,23 @@ final class NotaTests: XCTestCase {
         XCTAssertTrue(preferences.footerShowsCharacters)
         XCTAssertFalse(preferences.footerShowsImages)
         XCTAssertFalse(preferences.footerShowsLines)
+        XCTAssertTrue(preferences.footerShowsEncoding)
+        XCTAssertTrue(preferences.footerShowsLineEndings)
+        XCTAssertTrue(preferences.footerShowsCursorPosition)
+        XCTAssertTrue(preferences.showsStatusBar)
+        XCTAssertEqual(preferences.language, .system)
         preferences.footerShowsLines = true
         preferences.footerShowsWords = false
+        preferences.footerShowsEncoding = false
+        preferences.footerShowsCursorPosition = false
+        preferences.showsStatusBar = false
         XCTAssertEqual(preferences.footerSegments, [.characters, .lines])
         XCTAssertEqual(Preferences(defaults: defaults).footerSegments, [.characters, .lines])
+        XCTAssertFalse(Preferences(defaults: defaults).footerShowsEncoding)
+        XCTAssertFalse(Preferences(defaults: defaults).footerShowsCursorPosition)
+        XCTAssertFalse(Preferences(defaults: defaults).showsStatusBar)
+        preferences.language = .simplifiedChinese
+        XCTAssertEqual(Preferences(defaults: defaults).language, .simplifiedChinese)
 
         XCTAssertFalse(preferences.vimMode)
         preferences.vimMode = true
@@ -1785,7 +1885,7 @@ final class NotaTests: XCTestCase {
         perform(.showFindInterface, on: textView)
         type("alpha", into: bar)
 
-        let quiet = NSColor.labelColor.withAlphaComponent(0.12)
+        let quiet = NSTextView.quietFindBand(alpha: 0.12)
         XCTAssertEqual(background(of: textView, at: 0), .findHighlightColor)
         XCTAssertEqual(
             foreground(of: textView, at: 0), .black, "black text on AppKit's find yellow"
@@ -1802,6 +1902,22 @@ final class NotaTests: XCTestCase {
         XCTAssertEqual(foreground(of: textView, at: 11), .black)
         XCTAssertEqual(background(of: textView, at: 0), quiet, "and leaves the one it came from")
         XCTAssertNil(foreground(of: textView, at: 0))
+
+        // The quiet band is the faint label wash in light mode, and a dimmed
+        // find yellow in dark mode, where the wash was invisible.
+        func resolved(in appearance: NSAppearance.Name) -> NSColor? {
+            var colour: NSColor?
+            NSAppearance(named: appearance)?.performAsCurrentDrawingAppearance {
+                colour = quiet.usingColorSpace(.sRGB)
+            }
+            return colour
+        }
+        let light = try XCTUnwrap(resolved(in: .aqua))
+        let dark = try XCTUnwrap(resolved(in: .darkAqua))
+        XCTAssertEqual(light.alphaComponent, 0.12, accuracy: 0.001)
+        XCTAssertEqual(dark.alphaComponent, 0.3, accuracy: 0.001)
+        XCTAssertGreaterThan(dark.redComponent + dark.greenComponent, dark.blueComponent * 2,
+                             "yellow, not a grey wash")
 
         // Closing puts all of it down, the black text with it.
         try escape(bar)
@@ -2357,49 +2473,6 @@ final class NotaTests: XCTestCase {
         XCTAssertEqual(
             (window.contentViewController as? NSSplitViewController)?.splitViewItems.count, 2
         )
-    }
-
-    // MARK: - Sidebar utility row
-
-    @MainActor
-    func testSidebarUtilityRowSitsBelowTheThumbnails() throws {
-        _ = NSApplication.shared
-        let sidebar = ImageSidebarView(topInset: 8)
-        sidebar.frame = NSRect(x: 0, y: 0, width: ImageSidebarView.width, height: 400)
-        sidebar.layoutSubtreeIfNeeded()
-
-        let (row, gear, list) = sidebar.utilityRowViews
-
-        // Pinned to the bottom, full width, 28pt tall.
-        XCTAssertEqual(row.frame.minY, 0)
-        XCTAssertEqual(row.frame.height, ImageSidebarView.utilityRowHeight)
-        XCTAssertEqual(row.frame.width, sidebar.bounds.width)
-
-        // The gear sits inside the row, against its leading edge. AppKit pads
-        // a button's frame out past the rect it lays out, so the alignment
-        // rect is the one that has to land where it was asked to.
-        XCTAssertEqual(gear.superview, row)
-        let gearRect = gear.alignmentRect(forFrame: gear.frame)
-        XCTAssertEqual(gearRect.minX, 8)
-        XCTAssertTrue(row.bounds.contains(gearRect), "the gear must fit inside the row")
-        XCTAssertEqual(gearRect.midY, row.bounds.midY, accuracy: 0.5)
-
-        // The thumbnails stop where the row starts — nothing overlaps.
-        XCTAssertEqual(list.frame.minY, row.frame.maxY)
-        XCTAssertFalse(list.frame.intersects(row.frame))
-        XCTAssertEqual(list.frame.maxY, sidebar.bounds.maxY)
-
-        // Monochrome, labelled, and it opens Settings.
-        XCTAssertEqual(gear.toolTip, "Settings")
-        XCTAssertEqual(gear.accessibilityLabel(), "Settings")
-        XCTAssertEqual(gear.contentTintColor, .secondaryLabelColor)
-        XCTAssertFalse(gear.isBordered)
-        XCTAssertTrue(gear.image?.isTemplate ?? false)
-
-        var opened = 0
-        sidebar.onSettings = { opened += 1 }
-        gear.performClick(nil)
-        XCTAssertEqual(opened, 1)
     }
 
     // MARK: - Gutter separator
@@ -3316,6 +3389,70 @@ final class NotaTests: XCTestCase {
         XCTAssertEqual(view.writablePasteboardTypes.first, .notaNote)
     }
 
+    // MARK: - Hovering the tab picker with the mouse
+
+    /// Moving the pointer onto a row selects it, the same path ↓/↑ use — so
+    /// choosing right after picks whatever the pointer last landed on.
+    @MainActor
+    func testHoverMovesSelectionDownTheList() throws {
+        let (picker, _, delegate) = try makeHoverTestPicker(titles: ["Alpha", "Beta", "Gamma"])
+        defer { picker.hide() }
+
+        picker.simulateHover(atRow: 1)
+        picker.simulateHover(atRow: 2)
+        picker.chooseSelection()
+
+        XCTAssertEqual(delegate.chosenTabIndex, 2, "the selection followed the pointer down")
+    }
+
+    /// Hovering the fixed row above the field takes the selection there,
+    /// exactly as ↑ from the top of the list does — deselecting the list.
+    @MainActor
+    func testHoverOnTheTopRowSelectsItAndDeselectsTheList() throws {
+        let (picker, _, delegate) = try makeHoverTestPicker(titles: ["Alpha", "Beta"])
+        defer { picker.hide() }
+
+        picker.moveSelectionDown()
+        XCTAssertFalse(picker.isTopRowSelected, "the list holds the selection to begin with")
+
+        picker.simulateHoverOverTopRow()
+        XCTAssertTrue(picker.isTopRowSelected)
+
+        picker.chooseSelection()
+        XCTAssertTrue(delegate.requestedNewTab, "the top row's own action fired")
+        XCTAssertNil(delegate.chosenTabIndex, "not a row from the list")
+    }
+
+    /// A second "move" that lands at the exact point the last one did is the
+    /// synthetic repeat a still pointer can produce — a no-op, not a second
+    /// hover.
+    @MainActor
+    func testARepeatedMoveAtTheIdenticalLocationDoesNothing() throws {
+        let (picker, _, delegate) = try makeHoverTestPicker(titles: ["Alpha", "Beta", "Gamma"])
+        defer { picker.hide() }
+
+        picker.simulateHover(atRow: 1)
+        // A real key press, unrelated to the pointer, moves the selection on.
+        picker.moveSelectionDown()
+        // The identical point as the first hover: nothing about it moved.
+        picker.simulateHover(atRow: 1)
+
+        picker.chooseSelection()
+        XCTAssertEqual(delegate.chosenTabIndex, 2, "the repeat did not pull the selection back")
+    }
+
+    /// Return after a hover chooses whatever row the pointer is resting on.
+    @MainActor
+    func testReturnAfterAHoverChoosesTheHoveredItem() throws {
+        let (picker, _, delegate) = try makeHoverTestPicker(titles: ["Alpha", "Beta", "Gamma"])
+        defer { picker.hide() }
+
+        picker.simulateHover(atRow: 2)
+        picker.chooseSelection()
+
+        XCTAssertEqual(delegate.chosenTabIndex, 2)
+    }
+
     // MARK: - Helpers
 
     private func solidImage(_ width: Int, _ height: Int) -> NSImage {
@@ -3420,6 +3557,40 @@ final class NotaTests: XCTestCase {
         window.layoutIfNeeded()
         return controller
     }
+
+    /// A bare `TabPickerPanel` over an offscreen window, wired to a delegate
+    /// that just records what it was told — for the hover tests, which only
+    /// need to know which row `chooseSelection()` landed on.
+    @MainActor
+    private func makeHoverTestPicker(titles: [String], selectedIndex: Int = 0) throws
+        -> (picker: TabPickerPanel, window: NSWindow, delegate: RecordingHoverDelegate) {
+        _ = NSApplication.shared
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.makeKeyAndOrderFrontOffscreen()
+        let picker = TabPickerPanel()
+        let delegate = RecordingHoverDelegate()
+        picker.delegate = delegate
+        picker.show(titles: titles, selectedIndex: selectedIndex, loadHeadings: { _ in }, over: window)
+        return (picker, window, delegate)
+    }
+}
+
+/// Records what the picker was told to do, for the hover tests.
+private final class RecordingHoverDelegate: TabPickerPanelDelegate {
+    var chosenTabIndex: Int?
+    var requestedNewTab = false
+
+    func tabPicker(_ picker: TabPickerPanel, didChoose tabIndex: Int) {
+        chosenTabIndex = tabIndex
+    }
+    func tabPicker(_ picker: TabPickerPanel, didChooseHeading heading: MarkdownHeadings.Heading) {}
+    func tabPickerDidRequestNewTab(_ picker: TabPickerPanel) { requestedNewTab = true }
+    func tabPickerDidRequestBookmarkCurrentTab(_ picker: TabPickerPanel) {}
+    func tabPicker(_ picker: TabPickerPanel, didChooseBookmark path: String) {}
+    func tabPicker(_ picker: TabPickerPanel, didRemoveBookmark path: String) {}
 }
 
 /// Sets up a real `NSWindow` around a tab strip so `TabItemView.mouseDown`

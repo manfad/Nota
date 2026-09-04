@@ -6,35 +6,40 @@ import XCTest
 /// Todo 15).
 final class FileKindIconTests: XCTestCase {
 
-    /// The name decides the symbol. A couple of kinds name an older spelling
-    /// behind their preferred symbol, so those are asserted as either.
-    func testTheExtensionPicksTheSymbol() {
-        XCTAssertTrue(
-            ["text.document", "doc.text"].contains(FileKindIcon.symbolName(forTitle: "notes.md")),
-            "Markdown, however this system spells it"
-        )
-        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "notes.txt"), "doc.plaintext")
+    /// The name decides the icon. Most kinds draw this app's own art, named
+    /// `"filetype-<stem>"`; a kind the set has no art for still falls back
+    /// to an SF Symbol, and a couple of those name an older spelling behind
+    /// their preferred symbol, so those are asserted as either.
+    func testTheExtensionPicksTheIcon() {
+        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "notes.md"), "filetype-md")
+        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "notes.txt"), "filetype-txt")
         XCTAssertEqual(
-            FileKindIcon.symbolName(forTitle: "README"), "doc.plaintext",
+            FileKindIcon.symbolName(forTitle: "README"), "filetype-txt",
             "no extension reads as plain text"
         )
-        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "shot.png"), "photo")
-        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "index.html"), "globe")
-        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "main.swift"),
-                       "chevron.left.forwardslash.chevron.right")
-        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "data.json"), "curlybraces")
-        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "rows.csv"), "tablecells")
-        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "run.log"), "list.bullet.rectangle")
-        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "db.sql"), "cylinder")
-        XCTAssertTrue(
-            ["function", "x.squareroot"].contains(FileKindIcon.symbolName(forTitle: "paper.tex"))
+        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "shot.png"), "filetype-png")
+        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "index.html"), "filetype-html")
+        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "main.swift"), "filetype-swift")
+        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "data.json"), "filetype-json")
+        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "rows.csv"), "filetype-csv")
+        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "db.sql"), "filetype-sql")
+        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "paper.tex"), "filetype-tex")
+        XCTAssertEqual(FileKindIcon.symbolName(forTitle: "book.pdf"), "filetype-pdf")
+        XCTAssertEqual(
+            FileKindIcon.symbolName(forTitle: "novel.epub"), "filetype-epub",
+            "a book, the third kind Nota views rather than edits"
         )
-        XCTAssertTrue(
-            ["doc.richtext", "doc.fill"].contains(FileKindIcon.symbolName(forTitle: "book.pdf"))
+        XCTAssertEqual(
+            FileKindIcon.symbolName(forTitle: "run.log"), "list.bullet.rectangle",
+            "a kind the art set has nothing for keeps its SF Symbol"
         )
         XCTAssertTrue(
             ["text.page", "doc"].contains(FileKindIcon.symbolName(forTitle: "thing.wat")),
             "a kind nobody named keeps the old generic page"
+        )
+        XCTAssertEqual(
+            FileKindIcon.symbolName(forTitle: "shot.webp"), "photo",
+            "a photo format the art set has no drawing for keeps its SF Symbol"
         )
     }
 
@@ -44,30 +49,39 @@ final class FileKindIconTests: XCTestCase {
         XCTAssertEqual(FileKindIcon.untitledSymbolName, "doc")
         XCTAssertEqual(FileKindIcon.symbolName(for: nil), "doc")
         XCTAssertEqual(
-            FileKindIcon.symbolName(for: URL(fileURLWithPath: "/tmp/notes.txt")), "doc.plaintext"
+            FileKindIcon.symbolName(for: URL(fileURLWithPath: "/tmp/notes.txt")), "filetype-txt"
         )
     }
 
-    /// Every symbol handed back is one this system can actually draw —
-    /// the point of the fallbacks, since a missing symbol draws nothing.
-    func testEverySymbolExistsOnThisSystem() {
+    /// Every icon name handed back can actually be drawn: the custom art
+    /// exists for every `"filetype-*"` name and comes back a template image
+    /// at the requested size, and every SF Symbol fallback is one this
+    /// system actually has — the point of the fallback chains, since a
+    /// missing symbol draws nothing.
+    func testEveryIconExistsOnThisSystem() {
         let names = ["notes.md", "notes.txt", "README", "shot.png", "index.html", "main.swift",
                      "data.json", "rows.csv", "run.log", "db.sql", "paper.tex", "book.pdf",
-                     "thing.wat"]
+                     "novel.epub", "thing.wat"]
+        let pointSize: CGFloat = 16
         for name in names + [""] {
             let symbol = FileKindIcon.symbolName(forTitle: name)
+            let image = FileKindIcon.image(named: symbol, pointSize: pointSize)
             XCTAssertNotNil(
-                NSImage(systemSymbolName: symbol, accessibilityDescription: nil),
-                "\(name) asked for \(symbol), which this system does not have"
+                image, "\(name) asked for \(symbol), which this system does not have"
             )
+            if symbol.hasPrefix("filetype-") {
+                XCTAssertEqual(image?.isTemplate, true, "\(symbol) should tint like an SF Symbol")
+                XCTAssertEqual(image?.size.width, image?.size.height, "square, whatever the size")
+            }
         }
         XCTAssertNotNil(
-            NSImage(systemSymbolName: FileKindIcon.untitledSymbolName, accessibilityDescription: nil)
+            FileKindIcon.image(named: FileKindIcon.untitledSymbolName, pointSize: pointSize)
         )
     }
 
     /// The strip draws whatever kind each tab says it is, not one symbol for
-    /// all of them.
+    /// all of them, and a kind with custom art draws that art rather than an
+    /// SF Symbol.
     @MainActor
     func testTheStripDrawsEachTabsOwnKind() throws {
         _ = NSApplication.shared
@@ -93,5 +107,24 @@ final class FileKindIconTests: XCTestCase {
         for index in titles.indices {
             XCTAssertTrue(bar.hasFileIconForTesting(at: index))
         }
+        XCTAssertEqual(
+            bar.iconImagesForTesting[0]?.isTemplate, true,
+            "notes.md draws this app's own art, not an SF Symbol"
+        )
+    }
+
+    /// An untitled tab still draws the plain `doc` SF Symbol, not custom art.
+    @MainActor
+    func testAnUntitledTabStillDrawsThePlainDocSymbol() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 600, height: TabBarView.height))
+        bar.setItems(
+            [TabBarItem(title: "Untitled", isDirty: false, symbolName: FileKindIcon.untitledSymbolName)],
+            selectedIndex: 0
+        )
+        bar.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(bar.iconSymbolNamesForTesting, ["doc"])
+        XCTAssertTrue(bar.hasFileIconForTesting(at: 0))
     }
 }

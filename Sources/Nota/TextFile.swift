@@ -283,6 +283,9 @@ enum TextFile {
 enum FileClass {
     /// `%PDF-` at the start of the file, a byte-order mark or not.
     case pdf
+    /// A zip whose first entry is a stored `mimetype` reading
+    /// `application/epub+zip` — which is what an EPUB is, by specification.
+    case epub
     /// One of the picture formats `NSImage` draws, known by the bytes every
     /// one of them starts with.
     case image
@@ -300,14 +303,20 @@ enum FileClass {
 enum FileSniff {
     private static let pdfMagic: [UInt8] = Array("%PDF-".utf8)
     private static let utf8BOM: [UInt8] = [0xEF, 0xBB, 0xBF]
+    /// A zip's local file header, which every archive starts with.
+    private static let zipMagic: [UInt8] = [0x50, 0x4B, 0x03, 0x04]
+    private static let epubEntryName: [UInt8] = Array("mimetype".utf8)
+    private static let epubMediaType: [UInt8] = Array("application/epub+zip".utf8)
 
     /// Classifies a file by its first 8 KB, in order: the PDF signature, the
-    /// picture signatures, then whether `TextFile.decode` reads the bytes as
-    /// text, and binary for everything else that could still be read.
+    /// picture signatures, the EPUB container's own first entry, then whether
+    /// `TextFile.decode` reads the bytes as text, and binary for everything
+    /// else that could still be read.
     static func classify(at url: URL) -> FileClass {
         guard let head = TextFile.head(of: url) else { return .unreadable }
         if isPDF(head) { return .pdf }
         if isImage(head) { return .image }
+        if isEPUB(head) { return .epub }
         if TextFile.decode(head) != nil { return .text }
         return .binary
     }
@@ -335,6 +344,40 @@ enum FileSniff {
     /// The brands of the ISO container HEIC and its relatives use. They sit
     /// four bytes in, after the box length, rather than at the front.
     private static let heifBrands = ["heic", "heix", "hevc", "hevx", "mif1", "msf1"]
+
+    /// An EPUB, told from every other zip by the one thing the OCF
+    /// specification insists on: the archive's first entry is called
+    /// `mimetype`, is stored rather than deflated, and holds exactly
+    /// `application/epub+zip`. That makes it a fixed-offset read into the
+    /// local file header at the front of the file — no zip library, and no
+    /// walking a central directory that sits at the other end of a file the
+    /// sniff never reads.
+    ///
+    /// A plain `.zip`, and a zip whose first entry says something else, are
+    /// archives and stay archives: Nota does not open one.
+    private static func isEPUB(_ head: Data) -> Bool {
+        let bytes = [UInt8](head.prefix(128))
+        guard bytes.starts(with: zipMagic), bytes.count >= 30 else { return false }
+        // The mimetype entry is stored, never compressed, so what follows the
+        // header is the media type itself rather than a deflate stream.
+        guard word(bytes, at: 8) == 0 else { return false }
+        let nameLength = word(bytes, at: 26)
+        let extraLength = word(bytes, at: 28)
+        let nameEnd = 30 + nameLength
+        guard nameLength == epubEntryName.count, bytes.count >= nameEnd,
+              Array(bytes[30 ..< nameEnd]) == epubEntryName
+        else { return false }
+        let start = nameEnd + extraLength
+        let end = start + epubMediaType.count
+        guard bytes.count >= end else { return false }
+        return Array(bytes[start ..< end]) == epubMediaType
+    }
+
+    /// A little-endian 16-bit field of a zip header.
+    private static func word(_ bytes: [UInt8], at offset: Int) -> Int {
+        guard bytes.count >= offset + 2 else { return -1 }
+        return Int(bytes[offset]) | Int(bytes[offset + 1]) << 8
+    }
 
     private static func isImage(_ head: Data) -> Bool {
         let bytes = [UInt8](head.prefix(16))

@@ -477,6 +477,27 @@ extension NSTextView {
     /// therefore neither the cache nor the file. An empty list and no current
     /// puts them all out.
     ///
+    /// The band the matches not being stood on wear. In light mode it is
+    /// the label colour at `alpha`, the faint grey it has always been. In
+    /// dark mode that same wash — white over near-black — all but vanishes,
+    /// so there the band is the find yellow itself, dimmed to a third: still
+    /// plainly a match, still plainly not the one the reader is on, and the
+    /// white text over it stays readable. One colour object per alpha, so a
+    /// band can be compared with what painted it.
+    static func quietFindBand(alpha: CGFloat) -> NSColor {
+        if let cached = quietFindBands[alpha] { return cached }
+        let band = NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return isDark
+                ? NSColor.findHighlightColor.withAlphaComponent(0.3)
+                : NSColor.labelColor.withAlphaComponent(alpha)
+        }
+        quietFindBands[alpha] = band
+        return band
+    }
+
+    private static var quietFindBands: [CGFloat: NSColor] = [:]
+
     /// `current` is the match ⌘F is standing on. Vim's `'hlsearch'` has no
     /// such thing and passes `nil`, which leaves every match quiet.
     func setFindHighlights(_ ranges: [NSRange], current: NSRange?, alpha: CGFloat) {
@@ -484,7 +505,7 @@ extension NSTextView {
         let whole = NSRange(location: 0, length: storage.length)
         layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: whole)
         layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: whole)
-        let quiet = NSColor.labelColor.withAlphaComponent(alpha)
+        let quiet = NSTextView.quietFindBand(alpha: alpha)
         for range in ranges where range != current {
             let clamped = NSIntersectionRange(range, whole)
             guard clamped.length > 0 else { continue }

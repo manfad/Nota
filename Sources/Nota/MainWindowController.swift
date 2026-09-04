@@ -89,7 +89,7 @@ final class MainWindowController: NSWindowController {
     /// The editor's own ⌘F bar, floating in the top-trailing corner of the
     /// editor column — the corner the mode control floats in, which the bar
     /// takes for as long as it is up.
-    private let findBar = FindBarView(placeholder: "Find in note")
+    private let findBar = FindBarView(placeholder: L10n.text("Find in note"))
     private lazy var findSession = TextFindSession(bar: findBar, textView: textView)
     /// ⌘L's pill, sharing that corner with the find bar: one or the other, and
     /// opening either sends the other away.
@@ -230,6 +230,9 @@ final class MainWindowController: NSWindowController {
     /// which has no encoding or line endings to speak of.
     private let formatEncodingLabel = FooterMenuLabel()
     private let formatLineEndingLabel = FooterMenuLabel()
+    private lazy var footerTrailingStack = NSStackView(
+        views: [formatEncodingLabel, formatLineEndingLabel, cursorLabel]
+    )
     private var countsLeadingToVim: NSLayoutConstraint?
     private var countsLeadingToEdge: NSLayoutConstraint?
     private var vimMode: VimMode = .normal
@@ -511,16 +514,20 @@ final class MainWindowController: NSWindowController {
         cursorLabel.translatesAutoresizingMaskIntoConstraints = false
         cursorLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         cursorLabel.textColor = .secondaryLabelColor
-        workspace.addSubview(cursorLabel)
 
         for label in [formatEncodingLabel, formatLineEndingLabel] {
             label.translatesAutoresizingMaskIntoConstraints = false
             label.font = .systemFont(ofSize: 11, weight: .medium)
             label.textColor = .secondaryLabelColor
-            workspace.addSubview(label)
         }
         formatEncodingLabel.onClick = { [weak self] in self?.showEncodingMenu() }
         formatLineEndingLabel.onClick = { [weak self] in self?.showLineEndingMenu() }
+        footerTrailingStack.translatesAutoresizingMaskIntoConstraints = false
+        footerTrailingStack.orientation = .horizontal
+        footerTrailingStack.alignment = .centerY
+        footerTrailingStack.spacing = 8
+        footerTrailingStack.detachesHiddenViews = true
+        workspace.addSubview(footerTrailingStack)
 
         zenDragRegion.translatesAutoresizingMaskIntoConstraints = false
         zenDragRegion.isHidden = true
@@ -572,21 +579,14 @@ final class MainWindowController: NSWindowController {
                                                       constant: 8),
             pendingKeysLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
 
-            cursorLabel.trailingAnchor.constraint(equalTo: workspace.trailingAnchor,
-                                                  constant: -Layout.statusInset),
-            cursorLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
-
-            formatLineEndingLabel.trailingAnchor.constraint(equalTo: cursorLabel.leadingAnchor,
-                                                            constant: -12),
-            formatLineEndingLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
-            formatEncodingLabel.trailingAnchor.constraint(
-                equalTo: formatLineEndingLabel.leadingAnchor, constant: -6
+            footerTrailingStack.trailingAnchor.constraint(
+                equalTo: workspace.trailingAnchor, constant: -Layout.statusInset
             ),
-            formatEncodingLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
+            footerTrailingStack.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
 
             statusLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
             statusLabel.trailingAnchor.constraint(
-                lessThanOrEqualTo: formatEncodingLabel.leadingAnchor, constant: -12
+                lessThanOrEqualTo: footerTrailingStack.leadingAnchor, constant: -12
             ),
         ])
 
@@ -648,7 +648,6 @@ final class MainWindowController: NSWindowController {
             equalTo: workspace.bottomAnchor
         )
         workspaceSplitTopToTabBar?.isActive = true
-        workspaceSplitBottomToStatus?.isActive = true
 
         editorTopToContent = scrollView.topAnchor.constraint(equalTo: content.topAnchor)
         editorTopToZenInset = scrollView.topAnchor.constraint(
@@ -656,6 +655,7 @@ final class MainWindowController: NSWindowController {
         )
         scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor).isActive = true
         editorTopToContent?.isActive = true
+        applyStatusBarLayout()
 
         installModeOverlay(editorModeOverlay, over: content)
         installFindBar(over: content)
@@ -775,7 +775,6 @@ final class MainWindowController: NSWindowController {
         imageSidebar.translatesAutoresizingMaskIntoConstraints = false
         imageSidebar.assets = store.assets
         imageSidebar.delegate = self
-        imageSidebar.onSettings = { [weak self] in self?.openSettings(nil) }
         container.addSubview(imageSidebar)
         NSLayoutConstraint.activate([
             imageSidebar.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
@@ -1177,6 +1176,7 @@ final class MainWindowController: NSWindowController {
     /// Restyles every tab, not just the visible one, so switching tabs after a
     /// settings change never shows stale type.
     @objc private func preferencesChanged() {
+        findBar.field.placeholderString = L10n.text("Find in note")
         let attributes = defaultAttributes
         let font = preferences.font()
         for note in notes {
@@ -1207,7 +1207,7 @@ final class MainWindowController: NSWindowController {
         previewColumn.invalidateRenders()
         refreshPreviewContent()
         vimEngine.isEnabled = preferences.vimMode
-        applyFooterVisibility()
+        applyStatusBarLayout()
         updateStatus()
         scheduleSave()
     }
@@ -1302,6 +1302,7 @@ final class MainWindowController: NSWindowController {
         switch FileSniff.classify(at: url) {
         case .pdf: NoteKind.pdf
         case .image: NoteKind.image
+        case .epub: NoteKind.epub
         case .unreadable: Note.viewerKind(url)
         case .text, .binary: nil
         }
@@ -1324,6 +1325,9 @@ final class MainWindowController: NSWindowController {
             kind: kind
         )
         note.selectionLocation = max(0, tab.selection)
+        // Only a book writes one, and only a book reads it back: the chapter
+        // alone would come back to the top of a chapter half read.
+        note.scrollFraction = min(1, max(0, tab.scroll ?? 0))
         watchFile(of: note)
         return note
     }
@@ -1694,13 +1698,22 @@ final class MainWindowController: NSWindowController {
     private var availableCountsWidth: CGFloat {
         // Before the first layout pass there are no frames to measure, so
         // nothing is ruled out yet.
-        guard cursorLabel.frame.maxX > 0 else { return .greatestFiniteMagnitude }
+        guard let workspace = statusLabel.superview, workspace.bounds.width > 0,
+              footerTrailingStack.isHidden || footerTrailingStack.frame.maxX > 0
+        else { return .greatestFiniteMagnitude }
         // Mirrors the two leading constraints exactly: 12pt clear of the
         // pending keys with vim mode on, the status inset without it.
         let leading = preferences.vimMode
             ? pendingKeysLabel.frame.maxX + 12
             : Layout.statusInset
-        return max(0, formatEncodingLabel.frame.minX - 12 - leading)
+        // The stack is what stands in the workspace; the labels inside it lay
+        // out in the stack's own space, so their frames say nothing about
+        // where the counts have to stop. With every region off, the stack is
+        // gone and the counts run to the inset.
+        let trailingBound = footerTrailingStack.isHidden
+            ? workspace.bounds.maxX - Layout.statusInset
+            : footerTrailingStack.frame.minX
+        return max(0, trailingBound - 12 - leading)
     }
 
     /// What the tab in front has to say about its own size and where you are
@@ -1816,20 +1829,36 @@ final class MainWindowController: NSWindowController {
          formatEncodingLabel, formatLineEndingLabel)
     }
 
-    /// The badge and its pending keys belong to vim mode; the caret position
-    /// is always there. Zen takes the lot away.
+    /// The badge and pending keys belong to vim mode. Every other region can
+    /// be kept or hidden independently in Settings. Zen takes the lot away.
     private func applyFooterVisibility() {
+        let hidesStatusBar = isZenMode || !preferences.showsStatusBar
         let isVim = preferences.vimMode
         countsLeadingToEdge?.isActive = !isVim
         countsLeadingToVim?.isActive = isVim
-        modeBadge.isHidden = isZenMode || !isVim
+        modeBadge.isHidden = hidesStatusBar || !isVim
         pendingKeysLabel.isHidden =
-            isZenMode || !isVim || pendingKeysLabel.stringValue.isEmpty
-        cursorLabel.isHidden = isZenMode
-        formatEncodingLabel.isHidden = isZenMode
-        formatLineEndingLabel.isHidden = isZenMode
+            hidesStatusBar || !isVim || pendingKeysLabel.stringValue.isEmpty
+        cursorLabel.isHidden = hidesStatusBar || !preferences.footerShowsCursorPosition
+        formatEncodingLabel.isHidden = hidesStatusBar || !preferences.footerShowsEncoding
+        formatLineEndingLabel.isHidden = hidesStatusBar || !preferences.footerShowsLineEndings
+        footerTrailingStack.isHidden = hidesStatusBar || (
+            !preferences.footerShowsCursorPosition
+                && !preferences.footerShowsEncoding
+                && !preferences.footerShowsLineEndings
+        )
         // Nothing to count means no label at all, rather than an empty gap.
-        statusLabel.isHidden = isZenMode || preferences.footerSegments.isEmpty
+        statusLabel.isHidden = hidesStatusBar || preferences.footerSegments.isEmpty
+        statusSeparator.isHidden = hidesStatusBar
+    }
+
+    private func applyStatusBarLayout() {
+        let hidesStatusBar = isZenMode || !preferences.showsStatusBar
+        workspaceSplitBottomToStatus?.isActive = !hidesStatusBar
+        workspaceSplitBottomToPane?.isActive = hidesStatusBar
+        paneBottomToStatus?.isActive = !hidesStatusBar
+        paneBottomToContent?.isActive = hidesStatusBar
+        applyFooterVisibility()
     }
 
     func selectTab(at index: Int) {
@@ -2154,6 +2183,9 @@ final class MainWindowController: NSWindowController {
         case .image:
             noteRecentDocument(target)
             addTab(fileURL: target, kind: .image)
+        case .epub:
+            noteRecentDocument(target)
+            addTab(fileURL: target, kind: .epub)
         case .text:
             openAsText(target)
         case .binary:
@@ -2430,6 +2462,11 @@ final class MainWindowController: NSWindowController {
         }
         guard note === currentNote else { return }
         note.selectionLocation = position
+        // And how far down it, for the content that has somewhere to be
+        // inside the place it is remembering — a chapter of a book.
+        if let scroll = previewColumn.content(for: note).rememberedScroll {
+            note.scrollFraction = scroll
+        }
     }
 
     /// This window as the session file holds it. Scratch tabs are left out
@@ -2634,22 +2671,17 @@ extension MainWindowController {
 
         let chrome: [NSView] = [
             tabBar, statusSeparator, statusLabel,
-            modeBadge, pendingKeysLabel, cursorLabel,
-            formatEncodingLabel, formatLineEndingLabel,
+            modeBadge, pendingKeysLabel, footerTrailingStack,
         ]
 
         workspaceSplitTopToTabBar?.isActive = !enabled
         workspaceSplitTopToPane?.isActive = enabled
-        workspaceSplitBottomToStatus?.isActive = !enabled
-        workspaceSplitBottomToPane?.isActive = enabled
         editorTopToContent?.isActive = !enabled
         editorTopToZenInset?.isActive = enabled
         // Split survives zen, so the render column takes the same drop and
         // gets a drag band of its own rather than running to the frame.
         previewColumn.isZenMode = enabled
         // The footer goes; the pane does not — `:` has to work in zen mode.
-        paneBottomToStatus?.isActive = !enabled
-        paneBottomToContent?.isActive = enabled
         zenDragRegion.isHidden = !enabled
 
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
@@ -2677,7 +2709,7 @@ extension MainWindowController {
             }
             // The badge and its pending keys only come back if vim mode
             // actually wants them.
-            applyFooterVisibility()
+            applyStatusBarLayout()
         }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.15
@@ -3063,6 +3095,13 @@ extension MainWindowController {
     /// never waits on the run loop for it; an ordinary note answers on the
     /// spot, the same call either way.
     private func loadFrontTabHeadings(completion: @escaping ([MarkdownHeadings.Heading]) -> Void) {
+        // A book's headings are its own table of contents rather than a scan
+        // of any text: the chapters are already named, and choosing one goes
+        // to that chapter (SPEC Todo 3).
+        if let note = currentNote, note.kind == .epub {
+            completion(note.epubBook?.tocHeadings ?? [])
+            return
+        }
         guard let note = currentNote, note.previewKind == .markdown else {
             completion([])
             return
@@ -3464,6 +3503,12 @@ extension MainWindowController {
     /// The tab in front, as much of it as a test can otherwise not reach:
     /// what kind of thing it is holding, whether it has edits its file does
     /// not, and where it was left.
+    /// How far down the place the front tab is remembering the reader had
+    /// got — a book's chapter, and 0 for everything else. Its own accessor
+    /// rather than a fourth member of `currentTabState`, which every other
+    /// suite already destructures by name.
+    var currentTabScroll: Double { currentNote?.scrollFraction ?? 0 }
+
     var currentTabState: (kind: NoteKind, isDirty: Bool, selection: Int) {
         let note = currentNote
         return (note?.kind ?? .text, note?.isDirty ?? false, note?.selectionLocation ?? 0)
@@ -3593,6 +3638,10 @@ extension MainWindowController {
     private func previewPositionDidChange(_ position: Int) {
         guard let note = currentNote else { return }
         note.selectionLocation = position
+        // What the footer says about the content is part of what just moved —
+        // a page turned, a chapter turned to — so the answer it is holding is
+        // a step behind until it is asked for again.
+        previewStatus = currentPreviewFooterStatus
         updateCursorPosition()
         scheduleSave()
     }
@@ -3653,6 +3702,14 @@ extension MainWindowController {
     /// so the keyboard is left where it was rather than jumping to it.
     private func goToHeading(_ heading: MarkdownHeadings.Heading) {
         guard let note = currentNote else { return }
+        // Over a book the location is a line of its contents rather than an
+        // offset into text there is none of: the chapter it names is turned
+        // to, at the anchor it named if it named one.
+        if note.kind == .epub {
+            (previewColumn.content(for: note) as? EPUBPreviewView)?
+                .goToContentsLine(heading.location)
+            return
+        }
         let location = max(0, min(heading.location, note.storage.length))
         if preferences.vimMode, vimEngine.mode != .normal { vimEngine.enterNormalMode() }
         textView.setSelectedRange(NSRange(location: location, length: 0))

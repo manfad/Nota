@@ -95,12 +95,12 @@ enum RenderedPreviewKind {
     }
 }
 
-/// What a tab is holding. Everything Nota edits is text; a PDF and a picture
-/// are the binaries it opens at all, and they open as viewers — there is no
-/// text storage behind either, nothing to save, and nothing to keep in the
-/// cache.
+/// What a tab is holding. Everything Nota edits is text; a PDF, a picture and
+/// a book are the binaries it opens at all, and they open as viewers — there
+/// is no text storage behind any of them, nothing to save, and nothing to keep
+/// in the cache.
 enum NoteKind {
-    case text, pdf, image
+    case text, pdf, image, epub
 
     /// Whether the tab is read rather than edited. Everything that follows
     /// from that — locked in reading, never dirty, never cached, never
@@ -155,8 +155,15 @@ final class Note {
     /// note, so nothing about it is worth keeping.
     var isScratch: Bool = false
     /// Where the tab was left: the caret in a text note, the page being read
-    /// in a PDF. One number either way, so the session keeps both the same.
+    /// in a PDF, the chapter being read in a book. One number every way, so
+    /// the session keeps them all the same.
     var selectionLocation: Int = 0
+    /// How far down that place the reader had got, 0 the top and 1 the
+    /// bottom. Only a book has one: a chapter is a page of its own with a
+    /// length of its own, and the chapter alone would put you back at the top
+    /// of a chapter you were halfway through. A caret and a PDF page are
+    /// already exact, so both leave this at 0.
+    var scrollFraction: Double = 0
     /// How far the tab's content is zoomed — a document, a picture or a page,
     /// 1 being however it draws itself by default. Per tab and for as long as
     /// the tab is open, and no longer: it is not in `session.json`, since how
@@ -203,6 +210,8 @@ final class Note {
     private var hasLoadedPDF = false
     private var loadedImage: NSImage?
     private var hasLoadedImage = false
+    private var loadedBook: EPUBBook?
+    private var hasLoadedBook = false
 
     /// The watch on `fileURL`, while there is a file to watch.
     private var watcher: FileWatcher?
@@ -303,6 +312,10 @@ final class Note {
         hasLoadedPDF = false
         loadedImage = nil
         hasLoadedImage = false
+        // Letting the book go is what removes the folder it was unpacked
+        // into: the next ask unpacks the file as it is now.
+        loadedBook = nil
+        hasLoadedBook = false
     }
 
     /// Fold every character edit into the line table as the storage makes it.
@@ -390,7 +403,14 @@ final class Note {
     static func viewerKind(_ url: URL) -> NoteKind? {
         if isPDFFile(url) { return .pdf }
         if isImageFile(url) { return .image }
+        if isEPUBFile(url) { return .epub }
         return nil
+    }
+
+    /// A book, by name — the same fallback a PDF has, for a file that is not
+    /// there to be sniffed.
+    static func isEPUBFile(_ url: URL) -> Bool {
+        url.pathExtension.caseInsensitiveCompare("epub") == .orderedSame
     }
 
     /// A PDF, by name. The spelling answers first, since that is all a file
@@ -426,7 +446,7 @@ final class Note {
     /// real binary — does the old name-based guess take over.
     static func isOpenable(_ url: URL) -> Bool {
         switch FileSniff.classify(at: url) {
-        case .pdf, .image:
+        case .pdf, .image, .epub:
             return true
         case .text:
             return !TextFile.isDeliberatelyExcluded(url)
@@ -459,6 +479,18 @@ final class Note {
         return loadedImage
     }
 
+    /// The book behind an EPUB tab, unpacked and parsed the first time it is
+    /// asked for and held afterwards, the same way the document and the
+    /// picture are. `nil` when the file is missing, or is not a book that
+    /// comes apart — which is what the pane shows a message for.
+    var epubBook: EPUBBook? {
+        guard kind == .epub else { return nil }
+        if hasLoadedBook { return loadedBook }
+        hasLoadedBook = true
+        loadedBook = fileURL.flatMap { EPUBBook.open($0) }
+        return loadedBook
+    }
+
     /// Whether the editor takes the keyboard for this tab. A scratch tab is
     /// vim's `'nomodifiable'`; a viewer has no text storage worth typing
     /// into.
@@ -486,6 +518,7 @@ final class Note {
             // Only a real text file has a shape worth keeping; an untitled
             // note comes back as the default whatever happened in between,
             // and a viewer has no encoding or line endings to speak of.
+            scroll: scrollFraction == 0 ? nil : scrollFraction,
             format: (fileURL == nil || kind.isViewer) ? nil : format,
             previewMode: previewMode
         )

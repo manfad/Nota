@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// and the summon key all mean whichever window is in front.
     private let windows: WindowRegistry
     private let hotKey = GlobalHotKey()
+    private var installedLanguage: AppLanguage?
     /// File › Open Recent. `NSMenu.delegate` is weak, so this is what keeps
     /// it alive for as long as the app is.
     private lazy var recentDocumentsMenu = RecentDocumentsMenu { [weak self] url in
@@ -43,6 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before the first window is made, so nothing flashes the other
+        // appearance on launch. From then on the setting applies itself.
+        Preferences.shared.theme.apply()
         buildMenu()
         restoreWindows()
         showWindow()
@@ -77,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func preferencesChanged() {
         registerHotKey()
+        if installedLanguage != Preferences.shared.language { buildMenu() }
     }
 
     /// Whether the last registration attempt failed — Settings shows a
@@ -219,11 +224,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleImageSidebar(_:)) {
             let showing = activeController?.isImageSidebarVisible ?? false
-            menuItem.title = showing ? "Hide Images" : "Show Images"
+            menuItem.title = L10n.text(showing ? "Hide Images" : "Show Images")
         }
         if menuItem.action == #selector(toggleZenMode(_:)) {
             let zen = activeController?.isZenMode ?? false
-            menuItem.title = zen ? "Exit Zen Mode" : "Zen Mode"
+            menuItem.title = L10n.text(zen ? "Exit Zen Mode" : "Zen Mode")
         }
         // The preview is a place, not a verb: the titles stay put and the
         // checkmarks say which mode the tab in front is in. ⇧⌘P cycles
@@ -232,9 +237,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let mode = activeController?.previewMode ?? .off
         if menuItem.action == #selector(toggleMarkdownPreview(_:)) {
             menuItem.state = mode == .off ? .off : .on
-            menuItem.title = RenderedPreviewKind.previewMenuTitle(
+            menuItem.title = L10n.text(RenderedPreviewKind.previewMenuTitle(
                 activeController?.currentRenderedPreviewKind
-            )
+            ))
             return activeController?.canShowRenderedPreview ?? false
         }
         if menuItem.action == #selector(toggleReadingMode(_:)) {
@@ -248,8 +253,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || menuItem.action == #selector(zoomOut(_:)) {
             let titles = activeController?.sizeMenuTitles
                 ?? (increase: "Increase Font Size", decrease: "Decrease Font Size")
-            menuItem.title = menuItem.action == #selector(zoomIn(_:))
-                ? titles.increase : titles.decrease
+            menuItem.title = L10n.text(menuItem.action == #selector(zoomIn(_:))
+                ? titles.increase : titles.decrease)
         }
         // Reading mode has no editor on screen to jump about in, and a PDF or
         // a picture has no lines to jump to.
@@ -323,7 +328,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         target: AnyObject? = nil,
         tag: Int = 0
     ) -> NSMenuItem {
-        let menuItem = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        let menuItem = NSMenuItem(title: L10n.text(title), action: action, keyEquivalent: key)
         if !key.isEmpty { menuItem.keyEquivalentModifierMask = modifiers }
         menuItem.target = target
         menuItem.tag = tag
@@ -332,7 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func submenu(_ title: String, in mainMenu: NSMenu, _ items: [NSMenuItem]) {
         let holder = NSMenuItem()
-        let menu = NSMenu(title: title)
+        let menu = NSMenu(title: L10n.text(title))
         for item in items { menu.addItem(item) }
         holder.submenu = menu
         mainMenu.addItem(holder)
@@ -365,6 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func buildMenu() {
+        installedLanguage = Preferences.shared.language
         let mainMenu = NSMenu()
 
         submenu("Nota", in: mainMenu, [
@@ -380,12 +386,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Quit Nota", #selector(NSApplication.terminate(_:)), key: "q"),
         ])
 
-        let recentMenu = NSMenu(title: "Open Recent")
+        let recentMenu = NSMenu(title: L10n.text("Open Recent"))
         recentMenu.delegate = recentDocumentsMenu
-        let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        let recentItem = NSMenuItem(title: L10n.text("Open Recent"), action: nil, keyEquivalent: "")
         recentItem.submenu = recentMenu
 
-        let bookmarksItem = NSMenuItem(title: "Bookmarks", action: nil, keyEquivalent: "")
+        let bookmarksItem = NSMenuItem(title: L10n.text("Bookmarks"), action: nil, keyEquivalent: "")
         bookmarksItem.submenu = bookmarksMenu.makeMenu()
 
         submenu("File", in: mainMenu, [
@@ -406,7 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                  modifiers: [.command, .shift], target: self),
         ])
 
-        let findMenu = NSMenu(title: "Find")
+        let findMenu = NSMenu(title: L10n.text("Find"))
         let findAction = #selector(NSTextView.performTextFinderAction(_:))
         for entry in [
             ("Find…", "f", NSEvent.ModifierFlags.command, NSTextFinder.Action.showFindInterface),
@@ -422,7 +428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         findMenu.addItem(.separator())
         findMenu.addItem(item("Search All Notes…", #selector(searchAllNotes(_:)),
                               key: "f", modifiers: [.command, .shift], target: self))
-        let findItem = NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
+        let findItem = NSMenuItem(title: L10n.text("Find"), action: nil, keyEquivalent: "")
         findItem.submenu = findMenu
 
         submenu("Edit", in: mainMenu, [

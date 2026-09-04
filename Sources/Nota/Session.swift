@@ -176,6 +176,19 @@ enum TextStats {
         "Page \(current) of \(total)"
     }
 
+    /// `"9 chapters"` — the middle of the footer for a book tab, where there
+    /// are no words to count and how long it is means how many chapters.
+    static func chapterCounts(_ chapters: Int) -> String {
+        "\(chapters) \(chapters == 1 ? "chapter" : "chapters")"
+    }
+
+    /// `"Chapter 3 of 9"` — the right of the footer for a book tab, in place
+    /// of the caret's line and column. Both numbers are 1-based, the way a
+    /// reader counts them.
+    static func chapterPosition(current: Int, total: Int) -> String {
+        "Chapter \(current) of \(total)"
+    }
+
     /// `"13 pt"` — shown next to the gear at the right of the status bar.
     static func pointSize(_ size: Int) -> String {
         "\(size) pt"
@@ -236,9 +249,16 @@ struct SessionTab: Codable, Equatable {
     var untitledName: String?
     var isDirty: Bool
     /// Cursor location, restored on launch — and, for a PDF tab, the page
-    /// that was being read, counted from zero. Both are one number about
-    /// where the tab was left, so both come back through the same key.
+    /// that was being read, counted from zero; for a book, the chapter. All
+    /// three are one number about where the tab was left, so they come back
+    /// through the same key.
     var selection: Int
+    /// How far down that place the reader had got, 0 the top and 1 the
+    /// bottom. Only a book writes one: a chapter has a length of its own, and
+    /// coming back to the chapter alone would come back to the top of it.
+    /// `nil` for every other tab, and for a session written before books
+    /// opened at all.
+    var scroll: Double?
     /// The file's encoding, byte-order mark and line endings, so a CRLF
     /// Latin-1 file is still one after a relaunch. `nil` for a note with no
     /// file, and for a session written before Nota remembered any of this.
@@ -250,7 +270,7 @@ struct SessionTab: Codable, Equatable {
 
     /// Named, so the old yes/no key is decoded without being written back.
     enum CodingKeys: String, CodingKey {
-        case id, path, untitledName, isDirty, selection, format, previewMode
+        case id, path, untitledName, isDirty, selection, scroll, format, previewMode
     }
 
     private enum LegacyKeys: String, CodingKey {
@@ -269,6 +289,7 @@ extension SessionTab {
         untitledName = try container.decodeIfPresent(String.self, forKey: .untitledName)
         isDirty = try container.decode(Bool.self, forKey: .isDirty)
         selection = try container.decode(Int.self, forKey: .selection)
+        scroll = try container.decodeIfPresent(Double.self, forKey: .scroll)
         format = try container.decodeIfPresent(TextFileFormat.self, forKey: .format)
         if let mode = try container.decodeIfPresent(PreviewMode.self, forKey: .previewMode) {
             previewMode = mode

@@ -17,11 +17,11 @@ enum EditorFontFamily: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .system: "System"
-        case .serif: "Serif"
-        case .rounded: "Rounded"
-        case .monospaced: "Monospaced"
-        case .custom: "Other…"
+        case .system: L10n.text("System")
+        case .serif: L10n.text("Serif")
+        case .rounded: L10n.text("Rounded")
+        case .monospaced: L10n.text("Monospaced")
+        case .custom: L10n.text("Other…")
         }
     }
 }
@@ -39,9 +39,9 @@ enum LineSpacingOption: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .tight: "Tight"
-        case .normal: "Normal"
-        case .relaxed: "Relaxed"
+        case .tight: L10n.text("Tight")
+        case .normal: L10n.text("Normal")
+        case .relaxed: L10n.text("Relaxed")
         }
     }
 }
@@ -52,8 +52,8 @@ enum SidebarSide: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .left: "Left"
-        case .right: "Right"
+        case .left: L10n.text("Left")
+        case .right: L10n.text("Right")
         }
     }
 }
@@ -65,8 +65,8 @@ enum PlainTextImageStyle: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .path: "File path"
-        case .marker: "Placeholder character"
+        case .path: L10n.text("File path")
+        case .marker: L10n.text("Placeholder character")
         }
     }
 }
@@ -84,9 +84,61 @@ enum EditorPaddingOption: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .compact: "Compact"
-        case .normal: "Normal"
-        case .wide: "Wide"
+        case .compact: L10n.text("Compact")
+        case .normal: L10n.text("Normal")
+        case .wide: L10n.text("Wide")
+        }
+    }
+}
+
+/// Light, dark, or whatever the Mac is doing. Applied to the app as a whole
+/// through `NSApp.appearance`, so every window, panel and menu follows.
+enum AppTheme: String, CaseIterable {
+    case system, light, dark
+
+    var title: String {
+        switch self {
+        case .system: L10n.text("System Default", chinese: "跟随系统")
+        case .light: L10n.text("Light")
+        case .dark: L10n.text("Dark")
+        }
+    }
+
+    /// Puts this theme on the app as a whole, every window, panel and menu
+    /// with it. Done here, by the setting itself, rather than by a listener
+    /// somewhere else, so the value and what is on screen cannot drift.
+    func apply() {
+        let appearance = appearance
+        if NSApp.appearance?.name != appearance?.name { NSApp.appearance = appearance }
+    }
+
+    /// The appearance to force, or `nil` to let the system decide.
+    var appearance: NSAppearance? {
+        switch self {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
+enum AppLanguage: String, CaseIterable {
+    case system, english, simplifiedChinese
+
+    var title: String {
+        switch self {
+        case .system: L10n.text("System Default", chinese: "跟随系统")
+        case .english: "English"
+        case .simplifiedChinese: "简体中文"
+        }
+    }
+
+    var usesChinese: Bool {
+        switch self {
+        case .simplifiedChinese: true
+        case .english: false
+        case .system:
+            Locale.preferredLanguages.first?.hasPrefix("zh") == true
         }
     }
 }
@@ -123,6 +175,12 @@ final class Preferences {
         static let footerCharacters = "footerShowsCharacters"
         static let footerImages = "footerShowsImages"
         static let footerLines = "footerShowsLines"
+        static let footerEncoding = "footerShowsEncoding"
+        static let footerLineEndings = "footerShowsLineEndings"
+        static let footerCursorPosition = "footerShowsCursorPosition"
+        static let statusBar = "showsStatusBar"
+        static let language = "appLanguage"
+        static let theme = "appTheme"
         static let hotKeyCode = "hotKeyCode"
         static let hotKeyModifiers = "hotKeyModifiers"
         static let hotKeyDisabled = "hotKeyDisabled"
@@ -323,6 +381,26 @@ final class Preferences {
         set { setFooterSegment(newValue, current: footerShowsLines, key: Key.footerLines) }
     }
 
+    var footerShowsEncoding: Bool {
+        get { defaults.object(forKey: Key.footerEncoding) as? Bool ?? true }
+        set { setBoolean(newValue, current: footerShowsEncoding, key: Key.footerEncoding) }
+    }
+
+    var footerShowsLineEndings: Bool {
+        get { defaults.object(forKey: Key.footerLineEndings) as? Bool ?? true }
+        set { setBoolean(newValue, current: footerShowsLineEndings, key: Key.footerLineEndings) }
+    }
+
+    var footerShowsCursorPosition: Bool {
+        get { defaults.object(forKey: Key.footerCursorPosition) as? Bool ?? true }
+        set { setBoolean(newValue, current: footerShowsCursorPosition, key: Key.footerCursorPosition) }
+    }
+
+    var showsStatusBar: Bool {
+        get { defaults.object(forKey: Key.statusBar) as? Bool ?? true }
+        set { setBoolean(newValue, current: showsStatusBar, key: Key.statusBar) }
+    }
+
     private func setFooterSegment(_ newValue: Bool, current: Bool, key: String) {
         guard newValue != current else { return }
         defaults.set(newValue, forKey: key)
@@ -349,6 +427,31 @@ final class Preferences {
             defaults.set(newValue, forKey: Key.vimMode)
             announce()
         }
+    }
+
+    var language: AppLanguage {
+        get { defaults.string(forKey: Key.language).flatMap(AppLanguage.init) ?? .system }
+        set {
+            guard newValue != language else { return }
+            defaults.set(newValue.rawValue, forKey: Key.language)
+            announce()
+        }
+    }
+
+    var theme: AppTheme {
+        get { defaults.string(forKey: Key.theme).flatMap(AppTheme.init) ?? .system }
+        set {
+            guard newValue != theme else { return }
+            defaults.set(newValue.rawValue, forKey: Key.theme)
+            newValue.apply()
+            announce()
+        }
+    }
+
+    private func setBoolean(_ newValue: Bool, current: Bool, key: String) {
+        guard newValue != current else { return }
+        defaults.set(newValue, forKey: key)
+        announce()
     }
 
     /// The summon shortcut. `nil` means the user cleared it.

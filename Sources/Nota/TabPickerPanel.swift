@@ -62,9 +62,9 @@ final class TabPickerPanel: NSObject {
     private let panel: NSPanel
     private let searchField = NSTextField()
     /// The fixed row above the field: a table one row deep, never scrolled.
-    private let topRowTable = NSTableView()
+    private let topRowTable = HoverTrackingTableView()
     private let topRowScrollView = NSScrollView()
-    private let tableView = NSTableView()
+    private let tableView = HoverTrackingTableView()
     private let scrollView = NSScrollView()
     private var titles: [String] = []
     /// One per title, in the same order — the file-kind symbol each tab's
@@ -205,7 +205,7 @@ final class TabPickerPanel: NSObject {
         panel.contentView = background
 
         searchField.translatesAutoresizingMaskIntoConstraints = false
-        searchField.placeholderString = "Go to tab"
+        searchField.placeholderString = L10n.text("Go to tab")
         searchField.font = .systemFont(ofSize: 15)
         searchField.isBordered = false
         searchField.drawsBackground = false
@@ -220,6 +220,7 @@ final class TabPickerPanel: NSObject {
         topRowTable.target = self
         topRowTable.action = #selector(topRowClicked)
         topRowTable.refusesFirstResponder = true
+        topRowTable.onHover = { [weak self] _ in self?.hoverOverTopRow() }
 
         topRowScrollView.translatesAutoresizingMaskIntoConstraints = false
         topRowScrollView.documentView = topRowTable
@@ -239,6 +240,7 @@ final class TabPickerPanel: NSObject {
         configureRowTable(tableView)
         tableView.target = self
         tableView.action = #selector(rowClicked)
+        tableView.onHover = { [weak self] row in self?.hoverOverListRow(row) }
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = tableView
@@ -304,7 +306,7 @@ final class TabPickerPanel: NSObject {
         headingsGeneration += 1
         frontTab = (canBookmark: false, isBookmarked: false)
         mode = .tabs
-        searchField.placeholderString = "Go to tab"
+        searchField.placeholderString = L10n.text("Go to tab")
         searchField.stringValue = ""
         reload(preferring: selectedIndex)
         present(over: window)
@@ -326,7 +328,7 @@ final class TabPickerPanel: NSObject {
         isLoadingHeadings = false
         headingsGeneration += 1
         mode = .bookmarks
-        searchField.placeholderString = "Go to bookmark"
+        searchField.placeholderString = L10n.text("Go to bookmark")
         searchField.stringValue = ""
         reload()
         present(over: window)
@@ -350,6 +352,7 @@ final class TabPickerPanel: NSObject {
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(searchField)
         pinTopRowIntoView()
+        primeHoverBaseline()
     }
 
     /// The bookmarks the panel is listing right now — the app's list minus
@@ -381,12 +384,66 @@ final class TabPickerPanel: NSObject {
     func moveSelectionUp() {
         guard !isTopRowSelected else { return }
         if activeRowCount == 0 || tableView.selectedRow <= 0 {
-            guard isTopRowEnabled else { return }
-            tableView.deselectAll(nil)
-            isTopRowSelected = true
+            selectTopRow()
             return
         }
         moveListSelection(by: -1)
+    }
+
+    /// Takes the selection onto the fixed row above the field — what ↑ does
+    /// once it reaches the top of the list, and what hovering that row with
+    /// the mouse does too. A no-op over the inert row, the same as ↑.
+    private func selectTopRow() {
+        guard isTopRowEnabled else { return }
+        tableView.deselectAll(nil)
+        isTopRowSelected = true
+    }
+
+    /// Real pointer movement over a list row selects it — the same path
+    /// ↓/↑ use, so Return then chooses whatever the pointer is resting on
+    /// (Spotlight, VS Code's command palette). The empty-list message row,
+    /// and any row `shouldSelectRow` rejects, take no hover.
+    private func hoverOverListRow(_ row: Int) {
+        guard row < activeRowCount, tableView(tableView, shouldSelectRow: row) else { return }
+        isTopRowSelected = false
+        selectListRow(row)
+    }
+
+    /// Real pointer movement over the fixed row above the field takes the
+    /// selection there, exactly as ↑ from the top of the list does.
+    private func hoverOverTopRow() {
+        selectTopRow()
+    }
+
+    /// So the synthetic `mouseMoved` AppKit sends when the panel opens (or
+    /// reloads) under a pointer that never left is not mistaken for the
+    /// pointer having moved: both tables start out already knowing where it
+    /// is, the same way a real `mouseMoved` at an unchanged point is a no-op.
+    private func primeHoverBaseline() {
+        let windowLocation = panel.mouseLocationOutsideOfEventStream
+        tableView.primeHoverBaseline(windowLocation: windowLocation)
+        topRowTable.primeHoverBaseline(windowLocation: windowLocation)
+    }
+
+    /// As if the pointer had moved onto row `row` of the list — for the
+    /// tests, which have no window server to move a pointer through. Runs
+    /// the exact dedup-and-select code a real `mouseMoved` runs, so calling
+    /// this twice for the same row is the repeated-location no-op a real
+    /// stationary `mouseMoved` would be.
+    func simulateHover(atRow row: Int) {
+        panel.layoutIfNeeded()
+        tableView.layoutSubtreeIfNeeded()
+        let midpoint = NSPoint(x: tableView.bounds.midX, y: tableView.rect(ofRow: row).midY)
+        tableView.handleMove(toWindowLocation: tableView.convert(midpoint, to: nil))
+    }
+
+    /// As if the pointer had moved onto the fixed row above the field — same
+    /// reason as `simulateHover(atRow:)`.
+    func simulateHoverOverTopRow() {
+        panel.layoutIfNeeded()
+        topRowTable.layoutSubtreeIfNeeded()
+        let midpoint = NSPoint(x: topRowTable.bounds.midX, y: topRowTable.rect(ofRow: 0).midY)
+        topRowTable.handleMove(toWindowLocation: topRowTable.convert(midpoint, to: nil))
     }
 
     /// The symbol for the tab at `index` in the titles handed to `show`.
@@ -472,6 +529,9 @@ final class TabPickerPanel: NSObject {
             selectListRow(row)
         }
         panel.setContentSize(NSSize(width: Self.panelWidth, height: panelHeight))
+        // The list just reshuffled under whatever the pointer was resting on;
+        // that is not a move of its own, so hover starts fresh from here.
+        primeHoverBaseline()
     }
 
     /// The open tabs, and under them the bookmarks that are not open. Both
@@ -588,9 +648,9 @@ final class TabPickerPanel: NSObject {
 
     private var emptyListMessage: String {
         switch mode {
-        case .tabs: return "No tabs"
-        case .headings: return "No headings"
-        case .bookmarks: return "No bookmarks"
+        case .tabs: return L10n.text("No tabs")
+        case .headings: return L10n.text("No headings")
+        case .bookmarks: return L10n.text("No bookmarks")
         }
     }
 
@@ -637,8 +697,10 @@ final class TabPickerPanel: NSObject {
     /// In bookmarks mode the row is the front tab's bookmark toggle; in the
     /// other two it is the new-tab row it has always been.
     private var topRowTitle: String {
-        guard mode == .bookmarks else { return "Add new tab" }
-        return frontTab.isBookmarked ? "Remove bookmark from this tab" : "Bookmark this tab"
+        guard mode == .bookmarks else { return L10n.text("Add new tab") }
+        return L10n.text(
+            frontTab.isBookmarked ? "Remove bookmark from this tab" : "Bookmark this tab"
+        )
     }
 
     private var topRowSymbolName: String {
@@ -819,6 +881,65 @@ extension TabPickerPanel: NSTableViewDataSource, NSTableViewDelegate {
     }
 }
 
+// MARK: - Hover
+
+/// A table view that tells a genuine pointer movement over one of its rows
+/// apart from a row moving out from under a pointer that never left —
+/// the wheel scrolling the list, or the table reloading or resizing under a
+/// still cursor. Only the former should move the selection, the way Spotlight
+/// and VS Code's command palette follow the mouse.
+///
+/// The wheel does not raise `mouseMoved` at all, so scrolling under a still
+/// pointer is already silent; what needs guarding against is AppKit's own
+/// synthetic `mouseMoved`, sent at the pointer's *unchanged* location when a
+/// window opens under it or a tracking area is rebuilt. `handleMove` compares
+/// against the last location a move actually landed at and drops a repeat,
+/// which is also what makes the panel's `primeHoverBaseline()` work: seeding
+/// that "last location" with where the pointer already is turns the first
+/// synthetic move into a no-op too.
+private final class HoverTrackingTableView: NSTableView {
+    /// Called with the row a genuine pointer movement landed on.
+    var onHover: ((Int) -> Void)?
+
+    private var trackingArea: NSTrackingArea?
+    private var lastMovedWindowLocation: NSPoint?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds, options: [.mouseMoved, .activeInActiveApp, .inVisibleRect],
+            owner: self, userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        handleMove(toWindowLocation: event.locationInWindow)
+    }
+
+    /// Seeds the "last real move" location without treating it as a move —
+    /// called when the panel opens or reloads, so the synthetic `mouseMoved`
+    /// AppKit may send right after (reporting that same, unchanged point) is
+    /// filtered out by `handleMove` exactly as a real repeat would be.
+    func primeHoverBaseline(windowLocation: NSPoint) {
+        lastMovedWindowLocation = windowLocation
+    }
+
+    /// The dedup-and-dispatch a real `mouseMoved` runs, in window
+    /// coordinates — shared with the tests, which have no window server to
+    /// move a pointer through.
+    func handleMove(toWindowLocation location: NSPoint) {
+        guard lastMovedWindowLocation != location else { return }
+        lastMovedWindowLocation = location
+        let row = row(at: convert(location, from: nil))
+        guard row >= 0 else { return }
+        onHover?(row)
+    }
+}
+
 // MARK: - Rows
 
 /// A list row: the file-kind icon, then the title. A heading row passes no
@@ -880,7 +1001,7 @@ private final class TabPickerRowView: NSTableCellView {
         textField?.attributedStringValue = text
         icon.contentTintColor = isDimmed ? .tertiaryLabelColor : .secondaryLabelColor
         if let symbolName {
-            icon.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+            icon.image = FileKindIcon.image(named: symbolName, pointSize: Self.iconSize)
             icon.isHidden = false
             titleAtMargin.isActive = false
             titleAfterIcon.isActive = true

@@ -13,21 +13,11 @@ final class ImageSidebarView: NSView {
     static let cellSize: CGFloat = 116
     private static let margin: CGFloat = 8
     private static let gap: CGFloat = 12
-    /// The bottom utility strip: room for a comfortable hit target without
-    /// stealing height from the pictures.
-    static let utilityRowHeight: CGFloat = 28
-    private static let utilityInset: CGFloat = 8
-    private static let gearSize: CGFloat = 22
 
     weak var delegate: ImageSidebarViewDelegate?
     var assets: AssetStore?
 
     private let scrollView = NSScrollView()
-    /// Bottom-pinned strip for the sidebar's small utilities — the Settings
-    /// gear for now — sitting under a hairline of its own.
-    private let utilityRow = NSView()
-    private let utilitySeparator = NSBox()
-    private let settingsButton = NSButton()
     private let container = FlippedView()
     private let stack = NSStackView()
     private let emptyLabel = NSTextField(labelWithString: "No images")
@@ -36,10 +26,6 @@ final class ImageSidebarView: NSView {
     /// What is currently on show, in document order. Duplicates are kept:
     /// the same picture used twice gets two rows, matching the two chips.
     private(set) var assetIDs: [String] = []
-
-    /// Run when the gear is clicked. The window controller opens Settings,
-    /// the same window ⌘, does.
-    var onSettings: (() -> Void)?
 
     init(topInset: CGFloat) {
         super.init(frame: .zero)
@@ -59,30 +45,6 @@ final class ImageSidebarView: NSView {
         stack.spacing = Self.gap
         container.addSubview(stack)
 
-        utilityRow.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(utilityRow)
-
-        utilitySeparator.boxType = .separator
-        utilitySeparator.translatesAutoresizingMaskIntoConstraints = false
-        utilityRow.addSubview(utilitySeparator)
-
-        settingsButton.translatesAutoresizingMaskIntoConstraints = false
-        settingsButton.image = NSImage(
-            systemSymbolName: "gear", accessibilityDescription: "Settings"
-        )?.withSymbolConfiguration(
-            NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-        )
-        settingsButton.image?.isTemplate = true
-        settingsButton.isBordered = false
-        settingsButton.bezelStyle = .inline
-        settingsButton.imagePosition = .imageOnly
-        settingsButton.contentTintColor = .secondaryLabelColor
-        settingsButton.toolTip = "Settings"
-        settingsButton.setAccessibilityLabel("Settings")
-        settingsButton.target = self
-        settingsButton.action = #selector(settingsClicked)
-        utilityRow.addSubview(settingsButton)
-
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         emptyLabel.font = .systemFont(ofSize: 12)
         emptyLabel.textColor = .secondaryLabelColor
@@ -92,23 +54,7 @@ final class ImageSidebarView: NSView {
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: utilityRow.topAnchor),
-
-            utilityRow.leadingAnchor.constraint(equalTo: leadingAnchor),
-            utilityRow.trailingAnchor.constraint(equalTo: trailingAnchor),
-            utilityRow.bottomAnchor.constraint(equalTo: bottomAnchor),
-            utilityRow.heightAnchor.constraint(equalToConstant: Self.utilityRowHeight),
-
-            utilitySeparator.topAnchor.constraint(equalTo: utilityRow.topAnchor),
-            utilitySeparator.leadingAnchor.constraint(equalTo: utilityRow.leadingAnchor),
-            utilitySeparator.trailingAnchor.constraint(equalTo: utilityRow.trailingAnchor),
-
-            settingsButton.leadingAnchor.constraint(
-                equalTo: utilityRow.leadingAnchor, constant: Self.utilityInset
-            ),
-            settingsButton.centerYAnchor.constraint(equalTo: utilityRow.centerYAnchor),
-            settingsButton.widthAnchor.constraint(equalToConstant: Self.gearSize),
-            settingsButton.heightAnchor.constraint(equalToConstant: Self.gearSize),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             // Only the width is tied to the clip view, so the container is
             // free to grow taller than it and scroll.
@@ -125,14 +71,6 @@ final class ImageSidebarView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
-
-    @objc private func settingsClicked() { onSettings?() }
-
-    /// The utility strip, for the layout test: the row, the gear inside it,
-    /// and the thumbnail list that has to sit clear of both.
-    var utilityRowViews: (row: NSView, gear: NSButton, list: NSScrollView) {
-        (utilityRow, settingsButton, scrollView)
-    }
 
     // MARK: - Content
 
@@ -231,7 +169,7 @@ private final class SidebarImageItemView: NSView {
         addSubview(thumbnail)
 
         caption.translatesAutoresizingMaskIntoConstraints = false
-        caption.stringValue = "Image \(index + 1)"
+        caption.stringValue = "\(L10n.text("Image")) \(index + 1)"
         caption.font = .systemFont(ofSize: 11)
         caption.textColor = .secondaryLabelColor
         caption.alignment = .center

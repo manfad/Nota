@@ -7,15 +7,16 @@ import AppKit
 /// for the two binaries. This is the only place in the app that has to be
 /// told.
 enum PreviewContentKind: Hashable {
-    case markdown, latex, html, pdf, image
+    case markdown, latex, html, pdf, image, epub
 
     /// Every kind there is, in the order the column keeps them.
-    static let all: [PreviewContentKind] = [.markdown, .latex, .html, .pdf, .image]
+    static let all: [PreviewContentKind] = [.markdown, .latex, .html, .pdf, .image, .epub]
 
     init(_ note: Note) {
         switch note.kind {
         case .pdf: self = .pdf
         case .image: self = .image
+        case .epub: self = .epub
         case .text:
             switch note.previewKind {
             case .latex: self = .latex
@@ -173,6 +174,13 @@ protocol PreviewContent: NSView {
     /// same number `rememberedPosition` answers with.
     var onPositionChange: ((Int) -> Void)? { get set }
 
+    /// How far down that place the reader had got, 0 the top and 1 the
+    /// bottom. Only content whose position is itself a thing with a length
+    /// answers: a chapter of a book is a page of its own, and the chapter
+    /// alone would put the reader back at the top of it. A PDF page and a
+    /// caret are already exact, so both say nothing here.
+    var rememberedScroll: Double? { get }
+
     /// What the footer says instead of the editor's counts, when the content
     /// has something of its own to say.
     var footerStatus: PreviewFooterStatus? { get }
@@ -254,6 +262,8 @@ extension PreviewContent {
         get { nil }
         set { }
     }
+
+    var rememberedScroll: Double? { nil }
 
     var footerStatus: PreviewFooterStatus? { nil }
 }

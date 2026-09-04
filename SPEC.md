@@ -8,7 +8,7 @@
 - Files are plain text of any kind — .md .txt .xml .json .css .js .html .yaml .toml .csv .log .ini .sh .py .swift and
   anything else that is text (Notepad++ model). Nota registers as an editor for text/source types (Finder "Open With",
   drag onto the Dock icon, drop onto the window). No syntax highlighting. Not .docx / .rtf / binaries —
-  except PDF, the one binary Nota opens, and it opens it as a viewer (see PDF).
+  except the three Nota views rather than edits: a PDF, a picture and an EPUB (see PDF, Image tabs and EPUB).
 - Editing a named file only updates the cache; disk changes on ⌘S only. A named file keeps its extension, encoding
   (UTF-8 / UTF-16 / Latin-1 / Windows-1252 detected on open) and line endings (LF / CRLF) on save.
 - The footer shows a text note's own shape at the right of the counts, `UTF-8` and `LF` as two capsule badges in
@@ -25,8 +25,8 @@
   folder costs nothing.
 - A **clean** tab reloads silently: the file's text, the caret's offset and the scroll position kept as near as the new
   text allows, `TextFileFormat` re-detected (a file rewritten as CRLF saves back as CRLF), and the undo history
-  dropped, since it is a list of ranges into text that is no longer there. A PDF and a picture reload the same way,
-  silently, since neither is ever dirty. A **dirty** tab reloads nothing: its tab wears a hairline ring round the
+  dropped, since it is a list of ranges into text that is no longer there. A PDF, a picture and a book reload the
+  same way, silently, since none of them is ever dirty — a book unpacks its file again, at the chapter you were on. A **dirty** tab reloads nothing: its tab wears a hairline ring round the
   unsaved dot — the dot still says "unsaved", the ring says the file has moved as well — and the editor column's
   bottom-trailing corner, the one ⌘F and ⌘L do not use, carries a `Pill.swift` bar: a `clock.arrow.circlepath` glyph,
   `Changed on disk`, and the two quiet words `Reload` and `Keep mine`. Reload takes the file's text and clears dirty;
@@ -35,9 +35,10 @@
   finds it already up; only a further change on disk raises it again. One offer per change, and never a modal. A file
   that has gone is not a change at all — the missing-file behaviour below is untouched — and with more than one window
   open only the window actually holding the tab reacts.
-- What a file *is* is read from its bytes first, not its name: `%PDF-` magic makes it a PDF, and otherwise whether
-  it decodes as text makes it a note, whatever it is called — a `report` or `config` with no extension opens
-  correctly, and a PDF named `notes` opens as a PDF. A file's name is only consulted when its bytes cannot say
+- What a file *is* is read from its bytes first, not its name: `%PDF-` magic makes it a PDF, a picture's signature
+  makes it a picture, a zip whose first entry is a stored `mimetype` reading `application/epub+zip` makes it a book,
+  and otherwise whether it decodes as text makes it a note, whatever it is called — a `report` or `config` with no
+  extension opens correctly, and a PDF named `notes` opens as a PDF. A file's name is only consulted when its bytes cannot say
   (missing, unreadable, or a real binary). What a file is *rendered as* (Markdown vs. LaTeX vs. HTML) is the one
   exception — that stays by extension, since it is the author's own word for it (see Markdown preview).
 - ⌘S default for a new note: `.md`, opens in the last-used folder; any extension typed in the panel is kept.
@@ -267,6 +268,37 @@
   than its points, and the right is empty — there is nowhere in a picture to be.
 - An `.svg` is not one of these. See the HTML preview above.
 
+## EPUB (done 2026-09-04, Todo 3)
+- A book opens in a tab of its own and is read there, the third viewer after a PDF and a picture. The bytes decide,
+  not the name: an EPUB is a zip whose first entry is a stored `mimetype` reading `application/epub+zip`, which the
+  OCF specification insists on and which is what tells a book from every other archive. A plain `.zip` is still
+  refused, and a `.epub` that is really text opens as text.
+- The archive is unpacked to a temporary folder with `/usr/bin/ditto` — no zip library, since the system already has
+  one — and read from there: `META-INF/container.xml` names the package document, the package's manifest lists the
+  files and its **spine** is the reading order. The folder belongs to the book and goes when the tab does.
+- A chapter is drawn in the same `WKWebView` a `.html` tab is read through, loaded against its own path under
+  `nota-file://`, so the book's own stylesheets, fonts and pictures resolve out of the unpacked folder and the page
+  is the author's own. EPUB 2 and 3; no DRM.
+- The contents come from EPUB 3's `nav` document, and from the NCX off the spine's `toc` attribute when there is no
+  nav — flattened, with the nesting kept as a level. They are what `@` in the ⌘P switcher lists for a book tab, in
+  place of a text note's headings; choosing one turns to that chapter and to the `#anchor` it named.
+- Chapters turn with a bar in the column's bottom-trailing corner — the external-change offer's corner rather than
+  ⌘F's, so a search and a book can stand at once — reading `‹ The Middle 2 / 3 ›`, and with `→` / `←` or a page key
+  at the end of a chapter. The page reports those keys rather than swallowing them, so nothing changes for a `.html`
+  tab. Both ends of the book are ends: there is nothing before the first chapter or after the last.
+- ⌘F is the page's own find session, the same pill in the same corner. ⌘+ / ⌘- zoom the chapter the way they zoom any
+  other page.
+- Read, never written, the same as a PDF: locked in reading, never dirty, ⌘S and Save As disabled, nothing in the
+  cache, ⌘W with no prompt, no mode control and both View items greyed out. A file that has gone — or one that will
+  not come apart, a torn archive or a package with no spine — keeps its tab and shows `Couldn't open "name.epub".`
+  in the editor's own font, never a crash and never a text tab of gibberish.
+- The session keeps two numbers per tab: the chapter, in the same key a PDF's page uses, and how far down it the
+  reader had got, as a share of the chapter's own scrollable height — the chapter alone would come back to the top of
+  one half read, and pixels would mean somewhere else in a column of another width.
+- Footer: the middle counts chapters (`9 chapters`, `1 chapter`), the right says which one (`Chapter 3 of 9`), and it
+  is empty when there is no book to be in.
+- Print goes with Todo 1.
+
 ## LaTeX preview (decided 2026-09-03)
 - A `.tex` (`.latex`, `.ltx`) file is a tab with a render beside it, the way a `.md` is: the same three modes, the same
   floating mode control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the session.
@@ -362,7 +394,7 @@
   copies the picture and ⌫ or typing replaces it; in vim the block caret sits on it instead. Dragging and ⇧-clicking select as usual.
 - Sidebar (native split pane, 150pt, side per Settings): 104pt thumbnails with `Image N` captions. Auto-shows when the note has ≥1 image,
   hides when none; ⌘B toggles it manually for the session. Settings: sidebar side Left / Right (default Right). Click → select chip; double-click → open in Preview.
-  Context menu: Copy Image / Save Image As… / Reveal in Finder. Bottom-pinned utility row with a Settings gear (leading edge).
+  Context menu: Copy Image / Save Image As… / Reveal in Finder.
 - ⌘A ⌘C carries images (RTFD) to other apps, and when the selection holds exactly one image the picture also goes
   as PNG/TIFF, so it pastes into terminals, browsers and Slack; two or more images offer no picture flavour.
   Nota→Nota paste prefers Nota's own flavour, re-linking without duplicating assets.
@@ -378,7 +410,7 @@
 ## Tabs
 - One width for every tab, `clamp((viewport − plus − gaps) / n, 40, 180)`, shrinking as tabs are added; the strip never scrolls. The selected tab is raised to 60pt so its ✕ fits and the others shrink evenly to pay for it. Titles clip with a fade rather than an ellipsis; under 60pt the trailing slot goes and the unsaved dot rides on the icon. A separator hairline shows only between two plain tabs. The + rides after the last tab and pins at the trailing edge once the strip is full; it opens a new tab (same as ⌘T). ⌘P fuzzy tab switcher by title.
 - The switcher's first row sits above its search field and never filters away: "Add new tab", with a `plus`, which ↑ from the top of the list reaches and Return (or a click) turns into a new tab, ⌘T by another door. It is there in the `@` mode too. It is a one-row table of its own, sharing the list's cell view and taking the list's own resolved table style, so it is drawn as a list row — same inset, same rounded selection highlight, icon and title at the list rows' own x. In the bookmarks panel the row is the front tab's bookmark instead: "Bookmark this tab" with a `bookmark`, or "Remove bookmark from this tab" with `bookmark.fill` once it is one, and choosing it is ⇧⌘D by another door; with no tab to bookmark it is greyed and takes no selection.
-- Every tab carries a leading icon for its kind, in the strip and in the switcher's rows, from `FileKindIcon`: Markdown `text.document`, plain text and no extension `doc.plaintext`, PDF `doc.richtext`, pictures `photo`, HTML `globe`, TeX `function`, SQL `cylinder`, JSON/YAML/TOML/XML `curlybraces`, CSV/TSV `tablecells`, logs `list.bullet.rectangle`, code `chevron.left.forwardslash.chevron.right`, an unsaved note `doc`, anything else `text.page`. A symbol the running system lacks falls back to an older spelling. Heading rows keep their bare indent, with no icon.
+- Every tab carries a leading icon for its kind, in the strip and in the switcher's rows, from `FileKindIcon`: most kinds (Markdown, plain text/no extension, PDF, EPUB, HTML, TeX, SQL, JSON, YAML, TOML, XML, CSV, common code and image extensions, and more — see `FileKindIcon.artStem(forExtension:)`) draw this app's own hand-drawn icon set, embedded as SVG text in the generated `FileKindArt.swift`; a kind the set has no art for falls back to an SF Symbol — pictures without art `photo`, logs `list.bullet.rectangle`, remaining code extensions `chevron.left.forwardslash.chevron.right`, an unsaved note `doc`, anything else `text.page` — with an older spelling behind any SF Symbol the running system lacks. Heading rows keep their bare indent, with no icon.
 - `@` as the switcher's first character (Done 9) swaps the list for the front `.md` tab's headings, indented by level, and the rest of the query fuzzy-filters those instead; `MarkdownHeadings` reads them straight from the note's own text — ATX and setext, fences skipped the way `MarkdownSourceMap` skips them — off the main thread once a note is past `BigFile.threshold`. A tab that is not `.md` answers with a quiet "No headings" row.
 - Choosing a heading puts the caret at its line start and scrolls it into view; in split or reading the render is walked to that block too, by hand through the `highlightBlock(containingSource:)` a caret move already drives.
 - The selected tab is always fully in view: at 40pt the strip stops shrinking and becomes a sliding window over the tabs, anchored on the selected one. Closing with the ✕ freezes the widths until the pointer leaves the strip, so a run of closes keeps each next ✕ under it; ⌘W does not freeze.
@@ -457,15 +489,7 @@
    A PDF tab prints the PDF itself rather than a render — the open half of Done 12.
 2. **Ship it.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on another Mac
    without the Gatekeeper dance; `Nota.app.zip` as the release artifact next to the tag.
-3. **EPUB viewer.** An `.epub` opens as a viewer tab, the third kind after PDF and pictures: read-only, never dirty,
-   never cached, a `book` icon in the strip. The sniff decides, not the extension — a zip whose first entry is
-   `mimetype` reading `application/epub+zip`. Unpack to a temp folder (`/usr/bin/ditto`; ZIPFoundation only if a
-   package earns its keep), read `META-INF/container.xml` → the OPF → the spine for reading order, and show each
-   chapter's XHTML in the existing HTML preview with the book's own CSS and pictures resolved from the unpacked
-   folder. Chapters from the TOC (EPUB 3 nav, else NCX) under `@` in the ⌘P switcher; ⌘F through the HTML find
-   session; the chapter and scroll position remembered per tab in the session. EPUB 2 and 3, no DRM. Print goes
-   with Todo 1.
-4. **Tab strip overflow chevron.** The one piece of the Chromium strip still open (Done 15-A): a chevron at the
+3. **Tab strip overflow chevron.** The one piece of the Chromium strip still open (Done 15-A): a chevron at the
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
@@ -487,6 +511,17 @@
 3. **Go to line (done 2026-09-04).** ⌘L opens a pill in the find bar's own corner — the same `PillView` chrome, one
    row — taking `N` or `N:M` and moving the caret as you type, off the note's `LineIndex` rather than a scan. See the
    Search section above for what it does; `:N` still does it in vim, untouched.
+3. **EPUB viewer (done 2026-09-04; the second Todo 3, after Go to line above — code comments citing "Todo 3" mean
+   this one).** An `.epub` opens as a viewer tab, the third kind after PDF and pictures: read-only, never dirty,
+   never cached, a `book` icon in the strip. The sniff decides, not the extension — a zip whose first entry is a
+   stored `mimetype` reading `application/epub+zip`, which is a fixed-offset read into the local file header at the
+   front of the file and so costs nothing the 8 KB sniff was not already reading. `EPUBBook` unpacks the archive with
+   `/usr/bin/ditto` (no ZIPFoundation: the system already ships an unzip) and parses container.xml, the OPF and the
+   contents with Foundation's `XMLDocument`, strictly first and forgivingly after, since a nav document with an HTML
+   entity in it is a book a browser would still read. `EPUBPreviewView` holds one `HTMLPreviewView` and drives it a
+   chapter at a time, so the book's own CSS and pictures resolve from the unpacked folder through the same
+   `nota-file://` scheme a `.html` tab uses, and ⌘F, the zoom and the keyboard are the page's own. See the EPUB
+   section above for the whole of it.
 4. **File › Open Recent (done 2026-09-04).** A submenu after Open… in `AppDelegate`, built by `RecentDocumentsMenu` —
    an `NSMenuDelegate` that rebuilds itself from `NSDocumentController.shared.recentDocumentURLs` on
    `menuNeedsUpdate`, most recent first, a separator, then Clear Menu (`clearRecentDocuments(nil)`).
@@ -513,7 +548,8 @@
    when nothing is attached. A big note's cache write is debounced 2 s and done off the main thread.
    The storage's `string` bridges to Swift by copying: hot paths read `mutableString` instead.
 9. **Headings outline (done 2026-09-04).** `@` in the ⌘P switcher lists the front `.md` tab's headings; choosing one puts the caret there
-   and, in split/reading, scrolls the render to the block.
+   and, in split/reading, scrolls the render to the block. Over a book the same `@` lists the book's own contents
+   instead, and choosing one turns to that chapter (see Done 3, EPUB).
 11. **Fix the word-wrap re-flow lag in the split slide (done 2026-09-04).** With word wrap on, the editor's text
     container is welded to the text view's width (`widthTracksTextView`), so narrowing the editor every frame of the
     0.2s divider slide re-wrapped the whole note every frame along with it. The editor now freezes that tracking at
@@ -537,12 +573,12 @@
     leaving every other character — and the rich flavours, which already carry the formula as a real image — as they
     were.
 15. **Tab strip, Chromium style (after the LaTeX preview; design agreed 2026-09-03 with a second reviewer).** Every
-    tab shows a leading icon, per file kind (done 2026-09-04): `FileKindIcon` maps the name's extension to a symbol —
-    `.md` `text.document`, `.txt`/none `doc.plaintext`, `.pdf` `doc.richtext`, pictures `photo`, `.html` `globe`,
-    `.tex` `function`, `.sql` `cylinder`, JSON/YAML/TOML/XML `curlybraces`, `.csv` `tablecells`, `.log`
-    `list.bullet.rectangle`, code `chevron.left.forwardslash.chevron.right`, untitled `doc`, the rest `text.page` —
-    with an older spelling behind any symbol this macOS does not have, and the same icon in the ⌘P rows. Then, in
-    this order:
+    tab shows a leading icon, per file kind (done 2026-09-04; custom art added 2026-09-04): `FileKindIcon` maps the
+    name's extension to an icon — most kinds draw this app's own hand-drawn set, embedded by `Icon/make-file-icons.py`
+    into `FileKindArt.swift`; a kind the set has no art for falls back to an SF Symbol (pictures without art `photo`,
+    `.log` `list.bullet.rectangle`, remaining code extensions `chevron.left.forwardslash.chevron.right`, untitled
+    `doc`, the rest `text.page`), with an older spelling behind any SF Symbol this macOS does not have — and the
+    same icon in the ⌘P rows. Then, in this order:
     - **C. One press to select and drag (done 2026-09-03).** The first drag on a tab moved the window: native
       title-bar dragging and the tab's reorder gesture were running at the same time. Fix: `window.isMovable = false`
       turns the native drag off for the whole window; the strip refuses `mouseDownCanMoveWindow` and a press on empty
@@ -554,7 +590,7 @@
       wheel handling and auto-scroll are gone. Titles clip with a 12pt fade, the trailing slot and its ✕ disappear
       under 60pt (the unsaved dot moves onto the icon), separators show only between two plain tabs, a ✕ close holds
       the widths still until the pointer leaves the strip, and a drag near either edge reveals one hidden slot at a
-      time. The overflow chevron for the tabs the window is not showing is Todo 4.
+      time. The overflow chevron for the tabs the window is not showing is Todo 3.
     - **B. The + follows the tabs (done 2026-09-03).** `plusX = min(lastVisibleTab.maxX + 4, bounds.width − 24)`: it
       rides after the last tab and pins at the trailing edge once the strip is full. The ⇧⌘F field already narrows the
       bar's bounds, and nothing subtracts it twice.

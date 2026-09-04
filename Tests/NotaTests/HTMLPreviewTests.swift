@@ -547,10 +547,10 @@ final class HTMLPreviewTests: XCTestCase {
         _ = controller.window
         let checkbox = try XCTUnwrap(
             descendant(of: try XCTUnwrap(controller.window?.contentView), ofType: NSButton.self) {
-                $0.title.hasPrefix("Open Markdown")
+                $0.title.hasPrefix("Start supported files")
             }
         )
-        XCTAssertEqual(checkbox.title, "Open Markdown, LaTeX and HTML files in reading mode")
+        XCTAssertEqual(checkbox.title, "Start supported files in preview mode")
     }
 
     @MainActor

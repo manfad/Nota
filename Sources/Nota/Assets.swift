@@ -19,6 +19,7 @@ final class NotaImageAttachment: NSTextAttachment {
     private var chipSize: NSSize = .zero
     private var baselineOffset: CGFloat = 0
     private var renderedFont: NSFont
+    private var renderedLabel = ""
 
     init(assetID: String, isMissing: Bool, font: NSFont, index: Int) {
         self.assetID = assetID
@@ -32,7 +33,8 @@ final class NotaImageAttachment: NSTextAttachment {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     var label: String {
-        isMissing ? "Image \(displayIndex) — missing" : "Image \(displayIndex)"
+        let title = "\(L10n.text("Image")) \(displayIndex)"
+        return isMissing ? "\(title) — \(L10n.text("missing"))" : title
     }
 
     /// Re-measures and redraws for a new font or a new position.
@@ -43,6 +45,7 @@ final class NotaImageAttachment: NSTextAttachment {
         let unchanged = index == displayIndex
             && font.pointSize == renderedFont.pointSize
             && font.fontName == renderedFont.fontName
+            && label == renderedLabel
             && chipSize != .zero
         guard !unchanged else { return false }
 
@@ -50,6 +53,7 @@ final class NotaImageAttachment: NSTextAttachment {
         renderedFont = font
 
         let text = label
+        renderedLabel = text
         let attributes: [NSAttributedString.Key: Any] = [.font: font]
         let textSize = (text as NSString).size(withAttributes: attributes)
         let lineHeight = ceil(font.ascender - font.descender + font.leading)

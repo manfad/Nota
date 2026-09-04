@@ -267,6 +267,11 @@ final class TabBarView: NSView {
     /// kind the strip thinks that tab is.
     internal var iconSymbolNamesForTesting: [String] { itemViews.map(\.iconSymbolName) }
 
+    /// Test hook: the actual image each tab's leading icon is drawing — so a
+    /// test can tell this app's own art (a template image) apart from an SF
+    /// Symbol without launching the app.
+    internal var iconImagesForTesting: [NSImage?] { itemViews.map(\.iconImageForTesting) }
+
     /// Test hook: the view for the tab at `index`, for hit-testing.
     internal func tabViewForTesting(at index: Int) -> NSView? {
         itemViews.indices.contains(index) ? itemViews[index] : nil
@@ -1082,10 +1087,8 @@ private final class TabItemView: NSView {
     /// be a mark rather than a second icon, drawn in the same quiet grey as
     /// the unsaved dot.
     private static let bookmarkBadgeSize: CGFloat = 7
-    /// The size every kind's symbol is drawn at.
-    private static let iconSymbolConfiguration = NSImage.SymbolConfiguration(
-        pointSize: 11, weight: .regular
-    )
+    /// The point size every kind's icon is drawn at.
+    private static let iconPointSize: CGFloat = 11
 
     private var title = ""
     private var isDirty = false
@@ -1152,8 +1155,7 @@ private final class TabItemView: NSView {
     private func setIcon(named symbolName: String) {
         guard symbolName != iconSymbolName else { return }
         iconSymbolName = symbolName
-        iconView.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
-            .withSymbolConfiguration(Self.iconSymbolConfiguration)
+        iconView.image = FileKindIcon.image(named: symbolName, pointSize: Self.iconPointSize)
     }
 
     func configure(_ item: TabBarItem, isSelected: Bool) {

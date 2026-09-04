@@ -87,10 +87,9 @@ final class BookmarksMenu: NSObject, NSMenuDelegate {
         item.target = self
         item.representedObject = path
         item.toolTip = path
-        item.image = NSImage(
-            systemSymbolName: FileKindIcon.symbolName(forTitle: name),
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
+        item.image = FileKindIcon.image(
+            named: FileKindIcon.symbolName(forTitle: name), pointSize: 12
+        )
         // A bookmark whose file has gone stays in the list, greyed out, until
         // it is removed — the volume it lives on may simply not be mounted.
         item.isEnabled = !bookmarks.isMissing(path)

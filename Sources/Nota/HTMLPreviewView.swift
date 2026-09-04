@@ -70,6 +70,27 @@ final class HTMLPreviewView: NSView, PreviewContent {
     /// switched to at the depth of the one you left.
     private var scrollOffsets: [UUID: CGPoint] = [:]
 
+    /// The same, as a share of the page's own scrollable height. A book is
+    /// read a chapter at a time and every chapter is a different length, so
+    /// where the reader was is only meaningful relative to the page they were
+    /// in — and a session brings the tab back into a column of another width,
+    /// where the pixels would mean somewhere else.
+    private var scrollFractions: [UUID: Double] = [:]
+
+    /// Where the page being loaded should land when it arrives, when it is
+    /// somewhere other than where the tab was left: an anchor a chapter was
+    /// jumped to by, or the share of a chapter a session remembers. One shot
+    /// — the next load has its own answer.
+    private var pendingLanding: Landing?
+
+    /// Where a page is put once it has loaded.
+    fileprivate enum Landing {
+        /// An `#anchor` inside it, scrolled to by name.
+        case fragment(String)
+        /// A share of the way down it, 0 the top and 1 the bottom.
+        case fraction(Double)
+    }
+
     /// Whose page is on screen — which tab a scroll report belongs to, and
     /// whose offset a finished load puts back.
     private var showingNoteID: UUID?
@@ -91,6 +112,14 @@ final class HTMLPreviewView: NSView, PreviewContent {
     /// Run when that bar opens or closes, and whether it is up — the column's
     /// mode control drops below it, the same as over a render.
     var onFindBarVisibilityChange: ((Bool) -> Void)?
+
+    /// Run when the reader asks the page to move on or back — `→` and `←`,
+    /// and a page key at the end of the page — with `1` forward and `-1`
+    /// back. A page has nowhere to go on its own, so this is nil for a
+    /// `.html` tab and set only by the book that reads its chapters through
+    /// here. The script that reports it never swallows the key, so a page
+    /// with nobody listening scrolls exactly as it always did.
+    var onChapterKey: ((Int) -> Void)?
 
     var isFindBarVisible: Bool { findSession.isVisible }
 
@@ -157,8 +186,18 @@ final class HTMLPreviewView: NSView, PreviewContent {
         ))
         // The reporter talks to us rather than to the page: a separate world,
         // so nothing here is a global the page can see, shadow or trip over.
+        // The other half of the keys a book is turned by. It goes into every
+        // page for the same reason the find script does — a script cannot be
+        // injected into a page that has already loaded — and does nothing at
+        // all unless somebody is listening.
+        controller.addUserScript(WKUserScript(
+            source: Self.chapterKeys, injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true, in: .defaultClient
+        ))
         controller.add(ScrollReporter(view: self), contentWorld: .defaultClient,
                        name: Self.scrollHandlerName)
+        controller.add(ChapterKeyReporter(view: self), contentWorld: .defaultClient,
+                       name: Self.chapterHandlerName)
 
         let page = HTMLPageView(frame: bounds, configuration: configuration)
         page.findSession = findSession
@@ -237,6 +276,49 @@ final class HTMLPreviewView: NSView, PreviewContent {
         guard loadedKey != key else { return }
         loadedKey = key
         load(key)
+    }
+
+    /// Puts a file on screen as the page, rather than the text of the note in
+    /// front — one chapter of an EPUB, which is XHTML in a folder with the
+    /// book's own stylesheets and pictures beside it (SPEC Todo 3).
+    ///
+    /// A note's page is its text; a chapter's page is a file, and the tab
+    /// holding it is the book rather than the chapter. So the tab's id is
+    /// passed in — it is what the scroll is kept under — and where the reader
+    /// lands is the caller's to say: the top of a chapter turned to, an
+    /// anchor jumped to from the contents, or the share of the chapter a
+    /// session remembers.
+    ///
+    /// `false` when the file could not be read, which is what a book with a
+    /// chapter missing from its own folder looks like.
+    @discardableResult
+    func showPage(
+        ofTab id: UUID, at fileURL: URL, fragment: String?, scrollFraction: Double,
+        in context: PreviewContext
+    ) -> Bool {
+        guard context.isVisible else { return true }
+        guard let opened = TextFile.read(at: fileURL) else { return false }
+        let key = LoadKey(noteID: id, text: opened.text, filePath: fileURL.path, isSVG: false)
+        // Already the page on screen. An anchor inside it is still somewhere
+        // to go — jumping from the contents to a place in the chapter you are
+        // reading must not be nothing at all — so it is scrolled to on the
+        // spot rather than through a reload.
+        guard loadedKey != key else {
+            if let fragment, let webView {
+                land(.fragment(fragment), in: webView, generation: generation)
+            }
+            return true
+        }
+        loadedKey = key
+        if let fragment {
+            pendingLanding = .fragment(fragment)
+        } else if scrollFraction > 0 {
+            pendingLanding = .fraction(scrollFraction)
+        } else {
+            pendingLanding = .fraction(0)
+        }
+        load(key)
+        return true
     }
 
     /// Throws the remembered page away, so the next ask loads a fresh one.
@@ -323,8 +405,12 @@ final class HTMLPreviewView: NSView, PreviewContent {
         var pending = false;
         function report() {
             pending = false;
+            var room = Math.max(
+                0,
+                document.documentElement.scrollHeight - window.innerHeight
+            );
             window.webkit.messageHandlers.\(scrollHandlerName).postMessage(
-                { x: window.scrollX, y: window.scrollY }
+                { x: window.scrollX, y: window.scrollY, room: room }
             );
         }
         window.addEventListener('scroll', function () {
@@ -335,9 +421,57 @@ final class HTMLPreviewView: NSView, PreviewContent {
     })();
     """
 
-    fileprivate func readerScrolled(to point: CGPoint) {
+    fileprivate func readerScrolled(to point: CGPoint, room: Double) {
         guard let showingNoteID else { return }
         scrollOffsets[showingNoteID] = point
+        scrollFractions[showingNoteID] = room > 0
+            ? min(1, max(0, Double(point.y) / room))
+            : 0
+    }
+
+    /// How far down its page a tab was left, as a share of the room there was
+    /// to scroll — what a book keeps in the session, since the pixels would
+    /// mean somewhere else in a column of another width.
+    ///
+    /// `nil` until the page has actually said, which is not the same as the
+    /// top: a tab restored and not yet read is still owed the place the
+    /// session remembers, and answering 0 would write over it.
+    func rememberedScrollFraction(ofTab id: UUID) -> Double? {
+        scrollFractions[id]
+    }
+
+    /// The keys a book is turned by, reported rather than acted on: the page
+    /// says nothing about what a chapter is. Never swallowed — a page with
+    /// nobody listening scrolls the way it always did.
+    private static let chapterKeys = """
+    (function () {
+        function typing(target) {
+            if (!target) { return false; }
+            var name = (target.tagName || '').toLowerCase();
+            return name === 'input' || name === 'textarea' || target.isContentEditable;
+        }
+        function send(step) {
+            window.webkit.messageHandlers.\(chapterHandlerName).postMessage({ step: step });
+        }
+        function atBottom() {
+            return window.scrollY + window.innerHeight
+                >= document.documentElement.scrollHeight - 2;
+        }
+        document.addEventListener('keydown', function (event) {
+            if (event.metaKey || event.ctrlKey || event.altKey) { return; }
+            if (typing(event.target)) { return; }
+            if (event.key === 'ArrowRight') { send(1); }
+            else if (event.key === 'ArrowLeft') { send(-1); }
+            else if (event.key === 'PageDown' && atBottom()) { send(1); }
+            else if (event.key === 'PageUp' && window.scrollY <= 2) { send(-1); }
+        });
+    })();
+    """
+
+    private static let chapterHandlerName = "notaChapter"
+
+    fileprivate func readerTurnedPage(_ step: Int) {
+        onChapterKey?(step)
     }
 
     /// Where a tab was left in its page. The one number a reload puts back,
@@ -360,7 +494,23 @@ final class HTMLPreviewView: NSView, PreviewContent {
             guard let body = message.body as? [String: Any],
                   let x = body["x"] as? Double, let y = body["y"] as? Double
             else { return }
-            view?.readerScrolled(to: CGPoint(x: x, y: y))
+            view?.readerScrolled(to: CGPoint(x: x, y: y), room: body["room"] as? Double ?? 0)
+        }
+    }
+
+    /// The same arrangement for the keys a book is turned by.
+    private final class ChapterKeyReporter: NSObject, WKScriptMessageHandler {
+        private weak var view: HTMLPreviewView?
+
+        init(view: HTMLPreviewView) { self.view = view }
+
+        func userContentController(
+            _ controller: WKUserContentController, didReceive message: WKScriptMessage
+        ) {
+            guard let body = message.body as? [String: Any],
+                  let step = body["step"] as? Double
+            else { return }
+            view?.readerTurnedPage(Int(step))
         }
     }
 
@@ -380,6 +530,42 @@ final class HTMLPreviewView: NSView, PreviewContent {
         // again, so light and dark are swapped by handing it over afresh.
         webView?.underPageBackgroundColor = .textBackgroundColor
         needsDisplay = true
+    }
+}
+
+extension HTMLPreviewView {
+
+    /// Puts a page that has just arrived where the caller asked for: at an
+    /// anchor by name, or a share of the way down it. A fraction is worked
+    /// out in the page rather than here, since only the page knows how tall
+    /// it turned out to be at this width.
+    fileprivate func land(_ landing: Landing, in webView: WKWebView, generation: Int) {
+        let script: String
+        switch landing {
+        case .fragment(let name):
+            let quoted = name.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            script = """
+            (function () {
+                var target = document.getElementById("\(quoted)")
+                    || document.getElementsByName("\(quoted)")[0];
+                if (target) { target.scrollIntoView(true); } else { window.scrollTo(0, 0); }
+            })();
+            """
+        case .fraction(let fraction):
+            script = """
+            (function () {
+                var room = Math.max(
+                    0, document.documentElement.scrollHeight - window.innerHeight
+                );
+                window.scrollTo(0, room * \(min(1, max(0, fraction))));
+            })();
+            """
+        }
+        webView.evaluateJavaScript(script, in: nil, in: .defaultClient) { [weak self] _ in
+            guard let self, generation == self.generation else { return }
+            onLoadFinished?()
+        }
     }
 }
 
@@ -449,6 +635,11 @@ extension HTMLPreviewView: WKNavigationDelegate {
         // puts its query to it again — an edit in the editor beside the page
         // must not leave the reader with a count of a page that has gone.
         findSession.refresh()
+        if let landing = pendingLanding {
+            pendingLanding = nil
+            land(landing, in: webView, generation: generation)
+            return
+        }
         let offset = showingNoteID.flatMap { scrollOffsets[$0] } ?? .zero
         guard offset != .zero else {
             onLoadFinished?()
