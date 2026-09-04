@@ -880,6 +880,16 @@ final class MainWindowController: NSWindowController {
         textView.onOpenFiles = { [weak self] urls in
             for url in urls { self?.open(url: url) }
         }
+        // The line keys read the front note's own line table, comment by the
+        // front note's extension, and stand aside wherever vim has the keys.
+        textView.lineIndexProvider = { [weak self] in self?.currentNote?.lineIndex }
+        textView.fileExtensionProvider = { [weak self] in
+            self?.currentNote?.fileURL?.pathExtension
+        }
+        textView.lineOperationsAllowed = { [weak self] in
+            guard let self else { return false }
+            return !vimEngine.isEnabled || vimEngine.mode == .insert
+        }
     }
 
     // MARK: - Text attributes

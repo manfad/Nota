@@ -65,6 +65,23 @@
 - Settings (⌘,): font family, size, line spacing, editor padding, word wrap, vim mode, hotkey.
 - Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` (· `3 / 7 done` on a `.md` with
   task items) · `N pt` beside gear.
+- **Line operations (done 2026-09-04)** — the hands Notepad++ leaves in the fingers, in the Edit menu and outside vim:
+  ⌥↑ / ⌥↓ move the caret's line, or every line the selection touches, up or down one (nothing at either end, and the
+  newline count never changes, so no stray line is left behind); ⇧⌥↓ duplicates them below with the caret or the
+  selection on the copy; ⌘D duplicates the line with nothing in hand and, with something in hand, adds the next place
+  the same characters appear as another selection range — case-sensitive, literal, round the end of the note and back,
+  and typing then goes into every range at once (AppKit keeps only one *empty* range, so the editor holds the rest of
+  the carets itself until the selection moves for any other reason); ⌘/ toggles a line comment, stripping the token
+  when every line with anything on it already carries one and otherwise putting `token + space` in at the smallest
+  indent the block shares — `#` for py sh bash zsh rb yaml yml toml ini cfg conf, `//` for js ts jsx tsx swift c h cpp
+  hpp java kt go rs cs scala php, `--` for sql lua hs, `%` for tex latex, `;` for lisp clj el, and nothing (a disabled
+  item) for md txt html css json and anything Nota does not know; Tab / ⇧Tab indent and outdent a multi-line selection
+  by a tab, single-line Tab still being AppKit's own tab, and ⌘] / ⌘[ do the same on one line as on many.
+  Every one is a single `shouldChangeText` / `didChangeText` edit — one undo step, one dirty flag, one thing for vim
+  and the save to see — and every one asks the note's `LineIndex` which lines it is about, so ⌥↓ in a 100 MB log costs
+  the two lines it swaps. Hard lines throughout: word wrap moves nothing. The items are nil-targeted, so they arrive
+  at whatever view holds the keyboard and grey out over a rendered page, a PDF, a picture, the find field and in every
+  vim mode but insert, where the same keys are vim's own.
 
 ## Markdown preview — three modes (⇧⌘P cycles, View menu; per tab, remembered in the session)
 - **Editor** (default), **Split**, **Reading**. ⇧⌘P cycles editor → split → reading → editor; ⌥⇧⌘P jumps to reading and
@@ -408,8 +425,10 @@
    layout, page margins from the render's inset. Plain-text tabs print the text with line numbers if the gutter is on.
    Export a `.tex` tab as PDF via `pdflatex` / `tectonic` / `xelatex` if one is installed, showing the result in a PDF
    tab; with none installed it prints the native render, the same as the Markdown export.
-7. **Line operations** the Notepad++ hands expect outside vim mode: ⌥↑ / ⌥↓ move line, ⇧⌥↓ duplicate, ⌘D duplicate/select-next,
-   ⌘/ toggle a `#`/`//` comment by extension, Tab / ⇧Tab indent a selection, ⌘] ⌘[ likewise.
+7. **Line operations (done 2026-09-04).** The Notepad++ hands outside vim mode: ⌥↑ / ⌥↓ move line, ⇧⌥↓ duplicate,
+   ⌘D duplicate/select-next, ⌘/ toggle a `#`/`//` comment by extension, Tab / ⇧Tab indent a selection, ⌘] ⌘[ likewise.
+   `LineOperations` works each one out from the note's `LineIndex` and hands the editor one replacement to apply; see
+   the Editor section above for what each key does.
 8. **Big files (done 2026-09-04, with 16).** Open a 100 MB log and a 200k-line CSV without the gutter, the chip scan or
    the word count freezing the run loop. A note past `BigFile.threshold` (1M UTF-16 units) is *big*. Every note owns a
    `LineIndex` — the start of every hard line, built once with chunked `getCharacters` and folded forward from

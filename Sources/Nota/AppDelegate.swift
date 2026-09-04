@@ -309,6 +309,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(holder)
     }
 
+    /// The Notepad++ line hands. Every one is nil-targeted, like Cut and
+    /// Paste and the find items: the key arrives at whatever view has the
+    /// keyboard, which is the editor and nothing else — `NotaTextView` is the
+    /// only thing in the app that answers to these selectors, so all seven
+    /// grey out over a rendered page, a PDF, a picture and the find field,
+    /// and in every vim mode but insert.
+    private var lineOperationItems: [NSMenuItem] {
+        let up = String(UnicodeScalar(NSUpArrowFunctionKey)!)
+        let down = String(UnicodeScalar(NSDownArrowFunctionKey)!)
+        return [
+            item("Move Line Up", #selector(NotaTextView.moveLinesUp(_:)),
+                 key: up, modifiers: [.option]),
+            item("Move Line Down", #selector(NotaTextView.moveLinesDown(_:)),
+                 key: down, modifiers: [.option]),
+            item("Duplicate Lines", #selector(NotaTextView.duplicateLines(_:)),
+                 key: down, modifiers: [.option, .shift]),
+            // The title of this one is written as it is validated: duplicate
+            // with nothing in hand, select the next occurrence with something.
+            item("Duplicate Line", #selector(NotaTextView.duplicateOrSelectNext(_:)), key: "d"),
+            .separator(),
+            item("Toggle Comment", #selector(NotaTextView.toggleLineComment(_:)), key: "/"),
+            item("Indent", #selector(NotaTextView.indentLines(_:)), key: "]"),
+            item("Outdent", #selector(NotaTextView.outdentLines(_:)), key: "["),
+        ]
+    }
+
     private func buildMenu() {
         let mainMenu = NSMenu()
 
@@ -368,6 +394,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Copy", #selector(NSText.copy(_:)), key: "c"),
             item("Paste", #selector(NSText.paste(_:)), key: "v"),
             item("Select All", #selector(NSText.selectAll(_:)), key: "a"),
+            .separator(),
+        ] + lineOperationItems + [
             .separator(),
             findItem,
         ])
