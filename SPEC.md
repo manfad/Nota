@@ -24,9 +24,37 @@
 - Closing the last window = hide (app stays alive). Closing any other window really closes it, and its tabs go to the
   end of the window that was in front before it, so nothing is lost and nothing is asked. Quit never prompts;
   everything restores.
-- Search: ⌘F native find bar (in note); ⇧⌘F across all open tabs. In vim mode `/` `?` are vim's own search, typed in the
-  command pane (see Vim mode); `n` `N` `*` `#` repeat it; `:noh` clears highlights. ⌘F stays native in every mode.
-  Find bar field shows no focus ring.
+- Search: ⌘F opens Nota's own find bar (in note), ⌥⌘F opens it with the replace pill too; ⇧⌘F across all open tabs.
+  In vim mode `/` `?` are vim's own search, typed in the command pane (see Vim mode); `n` `N` `*` `#` repeat it;
+  `:noh` clears highlights. ⌘F is the same bar in every mode, and closing it hands the highlights back to vim.
+- The find bar is a pill floating in the top-trailing corner of the column, over the text, with that column's mode
+  control dropped below it: a magnifying glass, the query field, the count (`3 of 12`, `12 matches`, `No matches`),
+  and chevron-up / chevron-down / ✕, in `secondaryLabelColor` on a raised surface with a hairline round it. Nothing is
+  pushed down for it; it fades (opacity, ≤150ms, no movement) and its field shows no focus ring. Typing searches as
+  you go, from where the caret was when the bar opened; Return and ⇧Return step, Esc closes, ⌘G / ⇧⌘G wrap, ⌘E seeds
+  the query from the selection and the find pasteboard. Case- and diacritic-insensitive.
+- Matches wear the quiet band vim's `'hlsearch'` uses — temporary attributes, never the text — except the one you are
+  on, which wears `findHighlightColor` with its text in black. Nothing is selected while the bar is open: the caret
+  sits at that match's start, and a click elsewhere is the new place for ⌘G to walk from. The bands stop at 2000
+  matches and the count then says `2000+`; an edit re-scans 150 ms after the keystrokes stop, and a note past
+  `BigFile.threshold` not at all. Closing puts the bands down, leaves the match selected and hands back the keyboard
+  and the corner. A tab switch closes the bar.
+- Replace is a **second pill**, not a taller one: the magnifying glass fades in another 300×34 pill of the same
+  surface 6pt below the find one, holding an `arrow.2.squarepath` glyph, a replace field ("Replace") and two quiet
+  words, `Replace` and `All`. It goes when the glass is clicked again and when the find pill closes; neither pill ever
+  changes size, and the mode control clears the whole stack. ⌥⌘F ("Find and Replace…") opens both, with the keyboard
+  in the replace field when there is already a query. Tab walks between the fields; there Return replaces and steps
+  on, ⌥Return replaces all, Esc closes. The pill is remembered per column, not per tab.
+- Replace acts on the match you are standing on; clicked away, it steps to the next instead. The replacement is
+  verbatim, never a pattern, and goes in as an ordinary edit — undo, the dirty flag, the save and vim all see one.
+  Replace All changes every match, not only the 2000 wearing a band, in one undo, and leaves the caret where it was.
+  Over the rendered page and in any tab that is not editable the glass is a plain glyph and ⌥⌘F is ⌘F.
+- **Go to line** is the same pill again (done 2026-09-04): ⌘L ("Go to Line…") opens one with an
+  `arrow.right.to.line` glyph, a field ("Go to line"), the note's line total (`1,234 lines`) and a ✕. It takes `N` or
+  `N:M`, 1-based, and moves as you type — to the first thing on line N that is not a space, or to column M clamped to
+  the line's end, centred where there is room. Past the end is the last line; junk leaves the caret alone and reads
+  `Not a line`. Return and the ✕ keep the place, Esc puts the caret and the scroll position back. Editor only, so the
+  menu item is disabled in reading mode and on a PDF or a picture. ⌘L and ⌘F share the corner; vim's `:N` is its own.
 
 ## Editor
 - System font (SF Pro) 13pt default, full-width text, no line-width cap.
@@ -61,14 +89,16 @@
   its own: nothing is pushed down for it, and the text starts at the strip's bottom edge. Idle segments in
   `secondaryLabelColor`, the selected one in the standard filled look. Hover only: it fades in (opacity, ≤150ms, no
   movement) when the pointer is anywhere in the top 44pt of that column and fades out when it leaves; while it is away
-  the band takes no clicks, so the text under it stays reachable. ⌘F's find bar opens in the editor's corner and takes
-  it for as long as the bar is up; the preview's is untouched.
+  the band takes no clicks, so the text under it stays reachable. ⌘F's find bar wants the same corner: the control drops
+  the pill's height plus 6pt and goes on working underneath it rather than leaving, and the hover band grows by the same
+  amount so the whole top of the column still reveals it. The move is instant — the bar fades, the control is simply
+  lower by the time it arrives — and only the column whose bar is up moves its own; the other column's is untouched.
 - Reading has no automatic exits. The only ways out are the mode control, ⇧⌘P / ⌥⇧⌘P and the View menu — nothing you do
   to the page itself changes the mode. Clicking a block does nothing: no jump, no caret move, no block lit under it
   (links still open). Typing a printable character does nothing either — there is no editor on screen for it to land in.
-  Arrow and page keys scroll the render, and ⌘F searches the render itself, opening the native find bar above it; that
-  bar takes the corner from the render's own mode control while it is up. The keyboard belongs to the render in reading
-  mode, and to the editor in the other two.
+  Arrow and page keys scroll the render, and ⌘F searches the render itself, opening Nota's own find bar in the corner
+  over it; the render's own mode control drops below that bar while it is up and stays one hover away. The keyboard
+  belongs to the render in reading mode, and to the editor in the other two.
 - Zen takes the chrome and leaves the columns: the tab strip, status bar, gutter, image sidebar and both mode controls
   go, and the mode the tab is in does not change. Split keeps both panes side by side, at the divider they were left at;
   the editor mode is the text alone; reading is the render alone. In split each column's top edge is then the window's
@@ -318,7 +348,9 @@
    (Notepad++ "file has been modified" without the modal storm). Missing file → the existing dirty behaviour.
 2. **Encoding and line endings in the status bar.** `UTF-8 · LF` at the right of the counts; click either for a menu that
    converts (UTF-8 / UTF-16 / Latin-1 / Windows-1252; LF / CRLF). Conversion marks the tab dirty; ⌘S writes the new shape.
-3. **Go to line.** ⌘L opens a one-line pane (the vim command pane's chrome) taking `N` or `N:M`; `:N` already does it in vim.
+3. **Go to line (done 2026-09-04).** ⌘L opens a pill in the find bar's own corner — the same `PillView` chrome, one
+   row — taking `N` or `N:M` and moving the caret as you type, off the note's `LineIndex` rather than a scan. See the
+   Search section above for what it does; `:N` still does it in vim, untouched.
 4. **File › Open Recent** (NSDocumentController's list, cleared from the same submenu) and tab reorder by drag in the strip.
 5. **Task lists** in the render: `- [ ]` / `- [x]` as real checkboxes, ticking one rewrites the source character; counted
    `3 / 7 done` in the footer for a `.md` that has any.
@@ -409,4 +441,4 @@
     `preferencesChanged` restyles every note in full (settings only).
 
 Order from here: v0.4 (tab drag, PDF tabs, maths in Markdown) → workspace refactor → LaTeX preview (v0.5, done) →
-HTML preview → tab strip → big files (done).
+HTML preview → tab strip → big files (done) → find/replace and go to line as floating pills (done).

@@ -68,7 +68,27 @@ final class MainWindowController: NSWindowController {
     private var fontSize: CGFloat { preferences.fontSize }
 
     private let textView: NotaTextView
-    private let scrollView = FindBarScrollView()
+    private let scrollView = NSScrollView()
+
+    /// The editor's own ⌘F bar, floating in the top-trailing corner of the
+    /// editor column — the corner the mode control floats in, which the bar
+    /// takes for as long as it is up.
+    private let findBar = FindBarView(placeholder: "Find in note")
+    private lazy var findSession = TextFindSession(bar: findBar, textView: textView)
+    /// ⌘L's pill, sharing that corner with the find bar: one or the other, and
+    /// opening either sends the other away.
+    private let goToLinePill = GoToLinePill()
+    private lazy var goToLineSession = GoToLineSession(
+        pill: goToLinePill, textView: textView
+    )
+    /// The one field editor the window hands every pill's fields, so ⌘G typed
+    /// in one of them is the same ⌘G as everywhere else — see
+    /// `PillFieldEditor`.
+    private lazy var pillFieldEditor: PillFieldEditor = {
+        let editor = PillFieldEditor()
+        editor.isFieldEditor = true
+        return editor
+    }()
     private var lineNumberRuler: LineNumberRulerView?
     private let tabBar = TabBarView()
     private lazy var imageSidebar = ImageSidebarView(topInset: 8)
@@ -89,6 +109,8 @@ final class MainWindowController: NSWindowController {
     private var previewItem: NSSplitViewItem?
     private var editorItem: NSSplitViewItem?
     private var previewWorkItem: DispatchWorkItem?
+    /// The find bar's own re-scan after an edit, while one is waiting.
+    private var findRefreshWorkItem: DispatchWorkItem?
     /// The preview's share of the document split, as the divider was last
     /// left. Read on the way out of split and pinned back on the way in.
     private var splitPreviewFraction: CGFloat = 0.5
@@ -113,6 +135,9 @@ final class MainWindowController: NSWindowController {
     private var deferredPreviewModeSlides: Bool?
     /// Counts the slides, so the one that lands is the one that took off.
     private var previewModeSlideNumber = 0
+    /// True only while a tab is being swapped into the editor and the
+    /// selection is being put down for it — see `installCurrentNote`.
+    private var isSwappingNote = false
     /// The mode the layout is actually in — the tab in front says which one
     /// it wants, zen mode says which of them it may have.
     private var installedPreviewMode: PreviewMode = .off
@@ -379,10 +404,6 @@ final class MainWindowController: NSWindowController {
         scrollView.backgroundColor = .textBackgroundColor
         scrollView.borderType = .noBorder
         scrollView.documentView = textView
-        scrollView.findBarPosition = .aboveContent
-        scrollView.onFindBarVisibilityChange = { [weak self] _ in
-            self?.updateModeControlOverlays()
-        }
         content.addSubview(scrollView)
 
         let ruler = LineNumberRulerView(scrollView: scrollView, textView: textView)
@@ -557,8 +578,65 @@ final class MainWindowController: NSWindowController {
         editorTopToContent?.isActive = true
 
         installModeOverlay(editorModeOverlay, over: content)
+        installFindBar(over: content)
         applyEditorInsets()
     }
+
+    /// ⌘F's pill, laid over the editor column after the mode control so it is
+    /// the topmost thing in that corner. Its drop is measured from the scroll
+    /// view rather than the column, so zen's clearance under the traffic
+    /// lights carries it down with the text.
+    private func installFindBar(over container: NSView) {
+        textView.findSession = findSession
+        findSession.onVisibilityChange = { [weak self] shown in
+            // A bar on its way out has no re-scan to wait for.
+            self?.findRefreshWorkItem?.cancel()
+            self?.findRefreshWorkItem = nil
+            // The two pills share one corner.
+            if shown { self?.goToLineSession.hide(restoring: false) }
+            self?.updateModeControlOverlays()
+        }
+        // The replace row makes the pill taller; the control drops further.
+        findBar.onHeightChange = { [weak self] in self?.updateModeControlOverlays() }
+        // ⌘F draws with the mechanism vim's own search draws with, so when
+        // the bar puts its bands down vim puts its back.
+        findSession.onHighlightsCleared = { [weak self] in
+            self?.vimEngine.refreshSearchHighlights()
+        }
+        findBar.floatStack(
+            in: container, under: scrollView.topAnchor,
+            gap: ModeControlOverlay.controlTopInset,
+            trailingInset: ModeControlOverlay.controlInset
+        )
+
+        // ⌘L stands in the same corner, on its own.
+        goToLineSession.lineIndexProvider = { [weak self] in self?.currentNote?.lineIndex }
+        goToLineSession.onVisibilityChange = { [weak self] shown in
+            if shown { self?.findSession.hide() }
+            self?.updateModeControlOverlays()
+        }
+        // ⌘F asked for from inside ⌘L's field: this one goes, that one comes.
+        goToLineSession.onFindRequested = { [weak self] action in
+            self?.findSession.perform(action)
+        }
+        goToLinePill.float(
+            in: container, under: scrollView.topAnchor,
+            gap: ModeControlOverlay.controlTopInset,
+            trailingInset: ModeControlOverlay.controlInset
+        )
+    }
+
+    /// ⌘L. Only where there is an editor on screen to jump about in, and only
+    /// in a tab that is text — a PDF and a picture have no lines.
+    var canGoToLine: Bool {
+        installedPreviewMode != .reading && currentNote?.kind == .text
+    }
+
+    func showGoToLine() {
+        guard canGoToLine else { return }
+        goToLineSession.show()
+    }
+
 
     /// The hover band across the top of a column, laid over whatever the
     /// column is showing. It is added last so it is the topmost thing there,
@@ -567,13 +645,13 @@ final class MainWindowController: NSWindowController {
     private func installModeOverlay(_ overlay: ModeControlOverlay, over container: NSView) {
         overlay.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(overlay)
+        // The band's height is the overlay's own: it grows while that
+        // column's find bar is up, so the whole top of the column is still
+        // the hover target with the control sitting lower in it.
         NSLayoutConstraint.activate([
             overlay.topAnchor.constraint(equalTo: container.topAnchor),
             overlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             overlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            overlay.heightAnchor.constraint(
-                equalToConstant: ModeControlOverlay.hoverBandHeight
-            ),
         ])
     }
 
@@ -759,8 +837,9 @@ final class MainWindowController: NSWindowController {
         textView.allowsUndo = true
         textView.isEditable = true
         textView.isSelectable = true
-        textView.usesFindBar = true
-        textView.isIncrementalSearchingEnabled = true
+        // Nota brings its own find bar, so AppKit's never installs itself
+        // above the text: ⌘F opens the pill in the corner instead.
+        textView.usesFindBar = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
@@ -1117,7 +1196,23 @@ final class MainWindowController: NSWindowController {
 
     private func installCurrentNote() {
         guard let note = currentNote, let layoutManager = textView.layoutManager else { return }
+        // The bar was searching the tab you are leaving, and its bands are
+        // laid on the storage about to be swapped out from under them. ⌘L's
+        // line number belonged to that note's table just as much.
+        findSession.close()
+        goToLineSession.hide(restoring: false)
         textView.breakUndoCoalescing()
+        // Whatever is selected belongs to the tab being left — a ⌘F match,
+        // say — and it is a range into storage that is about to be swapped
+        // out from under it. AppKit does not always clamp it, and the
+        // attributes laid on below would then be laid on a range that is not
+        // there. Putting it down is part of the swap rather than the reader
+        // moving the caret, so the bookkeeping a real selection change drives
+        // is held off over it — a PDF's page, in particular, is not a caret
+        // position and must not be written from one.
+        isSwappingNote = true
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        isSwappingNote = false
         layoutManager.replaceTextStorage(note.storage)
         installedStorage = note.storage
         // A scratch tab is vim's `'nomodifiable'`: the motions still work, the
@@ -2616,20 +2711,47 @@ extension MainWindowController {
         }
     }
 
-    /// Which columns carry a control. Only a tab with a render has one at
-    /// all, and zen has none. Beyond that it is simply whether the column is
-    /// on screen: the editor's goes in reading, the preview's is there in
-    /// split and reading. Either column's ⌘F bar takes its own control away
-    /// while it is up — the bar opens above the content, right where the
-    /// control floats, and its own buttons must stay clickable.
+    /// Which columns carry a control, and how far down their column it sits.
+    ///
+    /// Only a tab with a render has one at all, and zen has none. Beyond that
+    /// it is simply whether the column is on screen: the editor's goes in
+    /// reading, the preview's is there in split and reading.
+    ///
+    /// A ⌘F bar takes its column's corner but not its control. The control
+    /// drops the height of the pill and goes on working underneath it, which
+    /// is how the mode stays one hover away while a search is up.
     fileprivate func updateModeControlOverlays() {
         let available = canShowRenderedPreview && !isZenMode
-        editorModeOverlay.setAvailable(
-            available && installedPreviewMode != .reading && !scrollView.isFindBarVisible
-        )
-        previewModeOverlay.setAvailable(
-            available && installedPreviewMode != .off && !previewColumn.current.isFindBarVisible
-        )
+        editorModeOverlay.setAvailable(available && installedPreviewMode != .reading)
+        // Whichever pill stack is standing in the editor's corner — ⌘F's one
+        // or two, or ⌘L's one — is what the control clears.
+        let editorStack: CGFloat = findSession.isVisible ? findBar.stackHeight
+            : (goToLineSession.isVisible ? PillView.height : 0)
+        editorModeOverlay.findBarClearance = editorStack > 0
+            ? ModeControlOverlay.drop(forFindBarOfHeight: editorStack) : 0
+        previewModeOverlay.setAvailable(available && installedPreviewMode != .off)
+        let preview = previewColumn.current
+        previewModeOverlay.findBarClearance = preview.isFindBarVisible
+            ? ModeControlOverlay.drop(forFindBarOfHeight: preview.findBarHeight) : 0
+    }
+
+    /// The matches have moved under an open find bar. Debounced like the
+    /// render, and for the same reason: a burst of keystrokes re-scans once,
+    /// about 150 ms after the typing stops, rather than once per key.
+    ///
+    /// A big note is left alone. The scan stops at the highlight cap, which
+    /// is cheap when the query is finding things — but a query on its way to
+    /// nothing is a whole pass over the file, near a tenth of a second per
+    /// twenty megabytes, and that is not a thing to do between one keystroke
+    /// and the next. The bands there stay as the last search left them until
+    /// the reader asks again.
+    private func scheduleFindRefresh(for note: Note) {
+        findRefreshWorkItem?.cancel()
+        findRefreshWorkItem = nil
+        guard findSession.isVisible, !BigFile.isBig(length: note.storage.length) else { return }
+        let item = DispatchWorkItem { [weak self] in self?.findSession.refresh() }
+        findRefreshWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
     }
 
     /// Debounced, like the cache write: a burst of keystrokes re-renders once,
@@ -3206,8 +3328,14 @@ extension MainWindowController: NSTextViewDelegate {
         }
         rememberSelection(note)
         updateStatus(countsDebounced: true)
-        // The matches have moved with the edit.
-        vimEngine.refreshSearchHighlights()
+        // The matches have moved with the edit. ⌘F's bar owns the bands for
+        // as long as it is up, so it is the one that lays them on again;
+        // vim gets them back the moment the bar closes.
+        if findSession.isVisible {
+            scheduleFindRefresh(for: note)
+        } else {
+            vimEngine.refreshSearchHighlights()
+        }
         scheduleImageRefresh()
         // The blocks have moved under the pane; nothing is lit again until it
         // has been rendered afresh.
@@ -3217,6 +3345,8 @@ extension MainWindowController: NSTextViewDelegate {
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
+        // The editor is between two notes; see `installCurrentNote`.
+        guard !isSwappingNote else { return }
         currentNote.map(rememberSelection)
         updateCursorPosition()
         // Moving the caret any other way retires the remembered click.
@@ -3234,6 +3364,16 @@ extension MainWindowController: NSTextViewDelegate {
 }
 
 extension MainWindowController: NSWindowDelegate {
+    /// A pill's fields get a field editor of Nota's own, so a Find menu item
+    /// sent while the reader is typing in one reaches the pill rather than
+    /// AppKit's own text finder. Every other field in the window keeps the
+    /// window's — answering `nil` is how that is asked for.
+    func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
+        guard let field = client as? PillTextField else { return nil }
+        pillFieldEditor.owner = field.owner
+        return pillFieldEditor
+    }
+
     /// Closing the window only hides it — nothing is ever lost, so there is
     /// nothing to prompt about.
     /// With one window open, closing it only hides it — the window is a view

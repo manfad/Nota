@@ -189,6 +189,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeController?.toggleReadingMode()
     }
 
+    @objc private func goToLine(_ sender: Any?) {
+        activeController?.showGoToLine()
+    }
+
     /// The sidebar item is a verb, so its title flips with the state.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleImageSidebar(_:)) {
@@ -214,6 +218,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if menuItem.action == #selector(toggleReadingMode(_:)) {
             menuItem.state = mode == .reading ? .on : .off
             return activeController?.canShowRenderedPreview ?? false
+        }
+        // Reading mode has no editor on screen to jump about in, and a PDF or
+        // a picture has no lines to jump to.
+        if menuItem.action == #selector(goToLine(_:)) {
+            return activeController?.canGoToLine ?? false
         }
         // A PDF tab is a view of a file Nota never writes to, so there is
         // nothing for either save item to do there.
@@ -324,6 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let findAction = #selector(NSTextView.performTextFinderAction(_:))
         for entry in [
             ("Find…", "f", NSEvent.ModifierFlags.command, NSTextFinder.Action.showFindInterface),
+            ("Find and Replace…", "f", [.command, .option], .showReplaceInterface),
             ("Find Next", "g", .command, .nextMatch),
             ("Find Previous", "g", [.command, .shift], .previousMatch),
             ("Use Selection for Find", "e", .command, .setSearchString),
@@ -331,6 +341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             findMenu.addItem(item(entry.0, findAction, key: entry.1,
                                   modifiers: entry.2, tag: entry.3.rawValue))
         }
+        findMenu.addItem(item("Go to Line…", #selector(goToLine(_:)), key: "l", target: self))
         findMenu.addItem(.separator())
         findMenu.addItem(item("Search All Notes…", #selector(searchAllNotes(_:)),
                               key: "f", modifiers: [.command, .shift], target: self))

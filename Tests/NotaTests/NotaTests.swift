@@ -1472,12 +1472,615 @@ final class NotaTests: XCTestCase {
 
     // MARK: - The find bar
 
-    /// AppKit's own focus ring on the find bar's search field is a thick
-    /// light-blue slab across the whole width of the window — the ⌘P picker
-    /// already turns this off on its own field, and the native find bar gets
-    /// the same treatment.
+    /// ⌘F opens Nota's own pill in the top-trailing corner, with the keyboard
+    /// in its field. AppKit's focus ring on a search field is a thick
+    /// light-blue slab across the whole of it — the ⌘P picker already turns
+    /// that off on its own field, and so does this one.
+    ///
+    /// The field gets a field editor of Nota's own, which is what keeps ⌘G
+    /// working while the reader is typing in the bar: a nil-targeted
+    /// `performTextFinderAction:` goes to the first responder, and while the
+    /// pill is up that is the field editor rather than the note.
     @MainActor
-    func testTheFindBarShowsNoFocusRingOnItsFields() throws {
+    func testCommandFOpensTheFindBarWithNoFocusRingOnItsField() throws {
+        let (_, textView, bar) = try makeFindBarController(text: "alpha beta alpha")
+        XCTAssertFalse(bar.isShown, "nothing floats over the text at rest")
+        XCTAssertEqual(bar.field.focusRingType, .none)
+        XCTAssertEqual(bar.field.placeholderString, "Find in note")
+
+        perform(.showFindInterface, on: textView)
+        XCTAssertTrue(bar.isShown)
+
+        let editor = try XCTUnwrap(
+            bar.field.currentEditor() as? PillFieldEditor,
+            "⌘G typed in the field has to reach the bar, not AppKit's own finder"
+        )
+        let next = NSMenuItem()
+        next.tag = NSTextFinder.Action.nextMatch.rawValue
+        XCTAssertTrue(editor.validateUserInterfaceItem(next), "and stay enabled there")
+    }
+
+    /// Typing lights every match at once and takes the first one at or after
+    /// the caret — not the first in the note, and not one further down with
+    /// every letter added.
+    @MainActor
+    func testTypingInTheFindBarLightsEveryMatchAndTakesTheOneAfterTheCaret() throws {
+        let (_, textView, bar) = try makeFindBarController(
+            text: "alpha beta alpha gamma alpha"
+        )
+        // Just past the first `alpha`.
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        perform(.showFindInterface, on: textView)
+        type("alpha", into: bar)
+
+        XCTAssertEqual(textView.highlightedRanges, [
+            NSRange(location: 0, length: 5),
+            NSRange(location: 11, length: 5),
+            NSRange(location: 23, length: 5),
+        ])
+        XCTAssertEqual(
+            textView.findSession?.currentMatch, NSRange(location: 11, length: 5),
+            "the first match at or after the caret is the one stood on"
+        )
+        XCTAssertEqual(
+            textView.selectedRange(), NSRange(location: 11, length: 0),
+            "a caret, not a selection — a selection would draw grey over the band"
+        )
+        XCTAssertEqual(bar.status, "2 of 3")
+
+        // Temporary attributes: the layout manager has the bands, the storage
+        // — and so the cache, and so the file — never does.
+        let storage = try XCTUnwrap(textView.textStorage)
+        XCTAssertNil(storage.attribute(.backgroundColor, at: 0, effectiveRange: nil))
+        XCTAssertNotNil(textView.layoutManager?.temporaryAttribute(
+            .backgroundColor, atCharacterIndex: 0, effectiveRange: nil
+        ))
+
+        // An empty field puts them all out again and says nothing.
+        type("", into: bar)
+        XCTAssertTrue(textView.highlightedRanges.isEmpty)
+        XCTAssertNil(bar.status)
+    }
+
+    /// ⌘G and ⇧⌘G walk the matches and wrap round the ends, sent through the
+    /// bar's own field editor — which is where they land while the reader is
+    /// still typing the query.
+    @MainActor
+    func testFindNextAndPreviousWalkTheMatchesAndWrap() throws {
+        let (_, textView, bar) = try makeFindBarController(
+            text: "alpha beta alpha gamma alpha"
+        )
+        perform(.showFindInterface, on: textView)
+        type("alpha", into: bar)
+        XCTAssertEqual(textView.findSession?.currentMatch, NSRange(location: 0, length: 5))
+
+        let editor = try XCTUnwrap(bar.field.currentEditor() as? PillFieldEditor)
+        perform(.nextMatch, on: editor)
+        XCTAssertEqual(textView.findSession?.currentMatch, NSRange(location: 11, length: 5))
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 11, length: 0))
+        XCTAssertEqual(bar.status, "2 of 3")
+        perform(.nextMatch, on: editor)
+        XCTAssertEqual(textView.findSession?.currentMatch, NSRange(location: 23, length: 5))
+        perform(.nextMatch, on: editor)
+        XCTAssertEqual(
+            textView.findSession?.currentMatch, NSRange(location: 0, length: 5), "round the end"
+        )
+        XCTAssertEqual(bar.status, "1 of 3")
+        perform(.previousMatch, on: editor)
+        XCTAssertEqual(
+            textView.findSession?.currentMatch, NSRange(location: 23, length: 5),
+            "and round the top"
+        )
+    }
+
+    /// `cafe` finds `Café`: the search reads case and accents the way the
+    /// native bar did.
+    @MainActor
+    func testTheFindBarIgnoresCaseAndAccents() throws {
+        let (_, textView, bar) = try makeFindBarController(text: "Café cafe CAFÉ")
+        perform(.showFindInterface, on: textView)
+        type("cafe", into: bar)
+        XCTAssertEqual(textView.highlightedRanges.count, 3)
+        XCTAssertEqual(bar.status, "1 of 3")
+    }
+
+    /// Escape closes the bar, leaves the match you were on selected, puts the
+    /// keyboard back in the note — and hands the bands back to vim, whose own
+    /// search draws with the same mechanism and had them first.
+    @MainActor
+    func testEscapeClosesTheFindBarAndHandsVimBackItsHighlights() throws {
+        let previous = Preferences.shared.vimMode
+        defer { Preferences.shared.vimMode = previous }
+        Preferences.shared.vimMode = true
+
+        let (controller, textView, bar) = try makeFindBarController(text: "alpha beta alpha")
+        let window = try XCTUnwrap(controller.window)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        // `*`: vim lights both `alpha`s and remembers the pattern.
+        controller.vim.searchWordUnderCaret(forward: true)
+        let vimRanges = textView.highlightedRanges
+        XCTAssertEqual(vimRanges.count, 2, "vim's own search lit both")
+
+        perform(.showFindInterface, on: textView)
+        type("beta", into: bar)
+        XCTAssertEqual(
+            textView.highlightedRanges, [NSRange(location: 6, length: 4)],
+            "⌘F owns the bands for as long as it is up"
+        )
+
+        try escape(bar)
+        XCTAssertFalse(bar.isShown)
+        XCTAssertEqual(
+            textView.selectedRange(), NSRange(location: 6, length: 4),
+            "the match you were on stays selected"
+        )
+        XCTAssertEqual(textView.highlightedRanges, vimRanges, "and vim gets its own back")
+        XCTAssertTrue(window.firstResponder === textView, "the keyboard goes back to the note")
+    }
+
+    /// ⌘E takes the query from the selection without opening anything, and
+    /// puts it on the find pasteboard, so ⌘G walks from there with the bar
+    /// still closed.
+    @MainActor
+    func testUseSelectionForFindTakesTheQueryFromTheSelection() throws {
+        let board = NSPasteboard(name: .find)
+        let previous = board.string(forType: .string)
+        defer {
+            board.clearContents()
+            if let previous { board.setString(previous, forType: .string) }
+        }
+
+        let (_, textView, bar) = try makeFindBarController(text: "alpha beta alpha")
+        textView.setSelectedRange(NSRange(location: 6, length: 4))
+        perform(.setSearchString, on: textView)
+
+        XCTAssertFalse(bar.isShown, "⌘E seeds the query; it does not open the bar")
+        XCTAssertEqual(bar.query, "beta")
+        XCTAssertEqual(board.string(forType: .string), "beta")
+
+        perform(.nextMatch, on: textView)
+        XCTAssertEqual(
+            textView.selectedRange(), NSRange(location: 6, length: 4),
+            "the only match, come round the end again"
+        )
+    }
+
+    /// The bar was searching the tab you are leaving, and its bands are laid
+    /// on the storage that goes with it.
+    @MainActor
+    func testSwitchingTabsClosesTheFindBar() throws {
+        let (controller, textView, bar) = try makeFindBarController(text: "alpha beta alpha")
+        perform(.showFindInterface, on: textView)
+        type("alpha", into: bar)
+        XCTAssertFalse(textView.highlightedRanges.isEmpty)
+
+        controller.newTab()
+        XCTAssertFalse(bar.isShown)
+        XCTAssertTrue(textView.highlightedRanges.isEmpty)
+    }
+
+    /// A single letter typed into the bar over a megabyte of text must not
+    /// lay a hundred thousand bands on the main thread between one keystroke
+    /// and the next. The scan stops at the cap, and the count says so rather
+    /// than reporting a total it never counted.
+    @MainActor
+    func testTheFindBarCapsItsBandsOnABigNote() throws {
+        let (_, textView, bar) = try makeFindBarController(
+            text: String(repeating: "alpha beta gamma\n", count: 60_000)
+        )
+        perform(.showFindInterface, on: textView)
+
+        let started = Date()
+        type("a", into: bar)
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertEqual(textView.highlightedRanges.count, TextFindSession.highlightLimit)
+        XCTAssertEqual(bar.status, "1 of \(TextFindSession.highlightLimit)+")
+        XCTAssertLessThan(elapsed, 1, "the scan stops at the cap rather than walking the note")
+    }
+
+    /// The match you are standing on wears a band of its own. The selection
+    /// alone will not do it: the keyboard is in the find field, so the
+    /// selection draws in the inactive grey, which is very nearly the quiet
+    /// band the other matches wear.
+    @MainActor
+    func testTheCurrentMatchWearsTheFindHighlightAndTheOthersDoNot() throws {
+        let (_, textView, bar) = try makeFindBarController(
+            text: "alpha beta alpha gamma alpha"
+        )
+        perform(.showFindInterface, on: textView)
+        type("alpha", into: bar)
+
+        let quiet = NSColor.labelColor.withAlphaComponent(0.12)
+        XCTAssertEqual(background(of: textView, at: 0), .findHighlightColor)
+        XCTAssertEqual(
+            foreground(of: textView, at: 0), .black, "black text on AppKit's find yellow"
+        )
+        XCTAssertEqual(background(of: textView, at: 11), quiet)
+        XCTAssertEqual(background(of: textView, at: 23), quiet)
+        XCTAssertNil(foreground(of: textView, at: 11), "only the current match is spelled out")
+
+        // ⌘G moves the band with the reader.
+        let editor = try XCTUnwrap(bar.field.currentEditor() as? PillFieldEditor)
+        perform(.nextMatch, on: editor)
+        XCTAssertEqual(textView.findSession?.currentMatch, NSRange(location: 11, length: 5))
+        XCTAssertEqual(background(of: textView, at: 11), .findHighlightColor)
+        XCTAssertEqual(foreground(of: textView, at: 11), .black)
+        XCTAssertEqual(background(of: textView, at: 0), quiet, "and leaves the one it came from")
+        XCTAssertNil(foreground(of: textView, at: 0))
+
+        // Closing puts all of it down, the black text with it.
+        try escape(bar)
+        XCTAssertNil(background(of: textView, at: 0))
+        XCTAssertNil(background(of: textView, at: 11))
+        XCTAssertNil(foreground(of: textView, at: 11))
+        XCTAssertTrue(textView.highlightedRanges.isEmpty)
+    }
+
+    @MainActor
+    private func background(of textView: NSTextView, at index: Int) -> NSColor? {
+        textView.layoutManager?.temporaryAttribute(
+            .backgroundColor, atCharacterIndex: index, effectiveRange: nil
+        ) as? NSColor
+    }
+
+    @MainActor
+    private func foreground(of textView: NSTextView, at index: Int) -> NSColor? {
+        textView.layoutManager?.temporaryAttribute(
+            .foregroundColor, atCharacterIndex: index, effectiveRange: nil
+        ) as? NSColor
+    }
+
+    /// Nothing in the note is selected while the bar is open. The keyboard is
+    /// in the find field, so a selection would draw unemphasized — a flat
+    /// grey, laid over the top of the yellow band and hiding the one thing
+    /// that says where the reader is. The caret sits at the match's start and
+    /// the band does the talking; closing hands the match over for real.
+    @MainActor
+    func testTheFindBarLeavesTheCurrentMatchUnselectedWhileItIsOpen() throws {
+        let (_, textView, bar) = try makeFindBarController(text: "alpha beta alpha")
+        perform(.showFindInterface, on: textView)
+        type("alpha", into: bar)
+
+        XCTAssertEqual(
+            textView.selectedRange(), NSRange(location: 0, length: 0), "a caret, not a selection"
+        )
+        XCTAssertEqual(textView.findSession?.currentMatch, NSRange(location: 0, length: 5))
+        XCTAssertEqual(background(of: textView, at: 0), .findHighlightColor)
+
+        let editor = try XCTUnwrap(bar.field.currentEditor() as? PillFieldEditor)
+        perform(.nextMatch, on: editor)
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 11, length: 0))
+        XCTAssertEqual(textView.findSession?.currentMatch, NSRange(location: 11, length: 5))
+        XCTAssertEqual(background(of: textView, at: 11), .findHighlightColor)
+
+        // A click somewhere else in the note is a new place to walk from.
+        textView.setSelectedRange(NSRange(location: 6, length: 0))
+        perform(.nextMatch, on: editor)
+        XCTAssertEqual(
+            textView.findSession?.currentMatch, NSRange(location: 11, length: 5),
+            "the first match after where the reader put the caret"
+        )
+
+        try escape(bar)
+        XCTAssertEqual(
+            textView.selectedRange(), NSRange(location: 11, length: 5),
+            "and closing hands it over as a real selection"
+        )
+    }
+
+    /// An edit under an open bar moves the matches. The native bar re-ran its
+    /// search on every change; this one waits for the keystrokes to stop, the
+    /// same 150 ms the render waits, and a note past `BigFile.threshold` is
+    /// left alone entirely.
+    @MainActor
+    func testEditingUnderTheFindBarRescansOnceTheKeystrokesStop() throws {
+        let (_, textView, bar) = try makeFindBarController(text: "alpha beta")
+        perform(.showFindInterface, on: textView)
+        type("alpha", into: bar)
+        XCTAssertEqual(bar.status, "1 of 1")
+        XCTAssertEqual(textView.highlightedRanges.count, 1)
+
+        // Typed at the end, the way a reader would, so the editor hears it.
+        textView.setSelectedRange(NSRange(location: 10, length: 0))
+        textView.insertText(" alpha", replacementRange: textView.selectedRange())
+        XCTAssertEqual(
+            textView.highlightedRanges.count, 1,
+            "nothing re-scans while the keys are still coming"
+        )
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        XCTAssertEqual(textView.highlightedRanges, [
+            NSRange(location: 0, length: 5),
+            NSRange(location: 11, length: 5),
+        ], "and the new match is lit once they stop")
+        XCTAssertEqual(
+            bar.status, "2 matches",
+            "the caret is not on a match any more, so there is nothing to count from"
+        )
+    }
+
+    // MARK: - The find bar: replacing
+
+    /// ⌥⌘F opens the same pill with its second row out, and Return in the
+    /// replace field changes the match being stood on and walks to the next.
+    /// The edit goes in as an ordinary edit: one undo puts it back.
+    @MainActor
+    func testReplaceChangesOnlyTheMatchYouAreOnAndLandsOnTheNext() throws {
+        let (_, textView, bar) = try makeFindBarController(
+            text: "alpha beta alpha gamma alpha"
+        )
+        perform(.showReplaceInterface, on: textView)
+        XCTAssertTrue(bar.isShown)
+        XCTAssertTrue(bar.isExpanded, "⌥⌘F brings the second pill out with it")
+        XCTAssertTrue(bar.replacePill.isShown)
+        XCTAssertEqual(bar.stackHeight, PillView.height + PillView.gap + PillView.height)
+
+        type("alpha", into: bar)
+        bar.replaceField.stringValue = "delta"
+        bar.focusReplaceField()
+        XCTAssertEqual(textView.findSession?.currentMatch, NSRange(location: 0, length: 5))
+
+        try returnInReplaceField(bar)
+        XCTAssertEqual(
+            textView.string, "delta beta alpha gamma alpha", "only the one being stood on"
+        )
+        XCTAssertEqual(
+            textView.findSession?.currentMatch, NSRange(location: 11, length: 5),
+            "and it lands on the next"
+        )
+        XCTAssertEqual(bar.status, "1 of 2")
+
+        textView.undoManager?.undo()
+        XCTAssertEqual(textView.string, "alpha beta alpha gamma alpha")
+    }
+
+    /// A reader who has clicked away from the match is walked to the next one
+    /// rather than having whatever the caret landed in replaced under them.
+    @MainActor
+    func testReplaceWalksOnWhenTheReaderHasMovedOffTheMatch() throws {
+        let (_, textView, bar) = try makeFindBarController(text: "alpha beta alpha")
+        perform(.showReplaceInterface, on: textView)
+        type("alpha", into: bar)
+        bar.replaceField.stringValue = "x"
+        bar.focusReplaceField()
+
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        try returnInReplaceField(bar)
+        XCTAssertEqual(textView.string, "alpha beta alpha", "nothing was replaced")
+        XCTAssertEqual(
+            textView.findSession?.currentMatch, NSRange(location: 11, length: 5),
+            "it stepped to the next match instead"
+        )
+    }
+
+    /// ⌥Return replaces every match in the note, in one edit — one undo, not
+    /// one per match — and leaves the reader where they were.
+    @MainActor
+    func testReplaceAllChangesEveryMatchInOneUndo() throws {
+        let (_, textView, bar) = try makeFindBarController(
+            text: "alpha beta alpha gamma alpha"
+        )
+        perform(.showReplaceInterface, on: textView)
+        type("alpha", into: bar)
+        bar.replaceField.stringValue = "x"
+        bar.focusReplaceField()
+
+        try returnInReplaceField(bar, all: true)
+        XCTAssertEqual(textView.string, "x beta x gamma x")
+        XCTAssertEqual(bar.status, "No matches")
+        XCTAssertTrue(textView.highlightedRanges.isEmpty)
+
+        textView.undoManager?.undo()
+        XCTAssertEqual(
+            textView.string, "alpha beta alpha gamma alpha", "one undo, not three"
+        )
+    }
+
+    /// Escape closes the bar from the replace field too, and the row it was
+    /// showing is remembered for the next time ⌘F opens in this column.
+    @MainActor
+    func testEscapeInTheReplaceFieldClosesTheFindBar() throws {
+        let (_, textView, bar) = try makeFindBarController(text: "alpha beta")
+        perform(.showReplaceInterface, on: textView)
+        type("alpha", into: bar)
+        bar.focusReplaceField()
+
+        let editor = try XCTUnwrap(bar.replaceField.currentEditor() as? NSTextView)
+        _ = bar.replacePill.control(
+            bar.replaceField, textView: editor,
+            doCommandBy: #selector(NSResponder.cancelOperation(_:))
+        )
+        XCTAssertFalse(bar.isShown)
+        XCTAssertTrue(bar.isExpanded, "the row is remembered for next time")
+    }
+
+    /// Return, or ⌥Return, in the pill's replace field — as AppKit hands it
+    /// to the delegate.
+    @MainActor
+    private func returnInReplaceField(_ bar: FindBarView, all: Bool = false) throws {
+        let editor = try XCTUnwrap(bar.replaceField.currentEditor() as? NSTextView)
+        _ = bar.replacePill.control(
+            bar.replaceField, textView: editor,
+            doCommandBy: all
+                ? #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:))
+                : #selector(NSResponder.insertNewline(_:))
+        )
+    }
+
+    // MARK: - Go to line
+
+    /// ⌘L opens its own pill in the same corner, saying how many lines there
+    /// are to aim inside.
+    @MainActor
+    func testCommandLOpensTheGoToLinePillWithTheLineTotal() throws {
+        let (controller, textView, pill) = try makeGoToLineController()
+        XCTAssertFalse(pill.isShown)
+        XCTAssertTrue(controller.canGoToLine)
+
+        controller.showGoToLine()
+        XCTAssertTrue(pill.isShown)
+        XCTAssertEqual(pill.status, "200 lines")
+        XCTAssertEqual(pill.field.focusRingType, .none)
+        XCTAssertEqual(pill.field.placeholderString, "Go to line")
+        XCTAssertTrue(
+            pill.field.currentEditor() is PillFieldEditor, "the pill's own field editor"
+        )
+        _ = textView
+    }
+
+    /// Typing moves as you go: the caret lands on the first thing on the line
+    /// that is not a space, and the line is brought into view.
+    @MainActor
+    func testTypingInTheGoToLinePillMovesTheCaretAndScrolls() throws {
+        let (controller, textView, pill) = try makeGoToLineController()
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        controller.showGoToLine()
+        let restingScroll = scrollView.contentView.bounds.origin
+
+        let index = LineIndex(textView.string as NSString)
+        type("12", into: pill)
+        XCTAssertEqual(
+            textView.selectedRange(),
+            NSRange(location: index.range(ofLine: 12).location + 4, length: 0),
+            "past the indent, on the first thing that is not a space"
+        )
+
+        type("150", into: pill)
+        XCTAssertEqual(
+            textView.selectedRange().location, index.range(ofLine: 150).location + 4
+        )
+        XCTAssertGreaterThan(
+            scrollView.contentView.bounds.origin.y, restingScroll.y, "and the view followed"
+        )
+    }
+
+    /// `N:M` lands on the column, 1-based and clamped to the line's own end.
+    @MainActor
+    func testGoToLineTakesALineAndColumn() throws {
+        let (controller, textView, pill) = try makeGoToLineController()
+        controller.showGoToLine()
+        let index = LineIndex(textView.string as NSString)
+
+        type("12:3", into: pill)
+        XCTAssertEqual(
+            textView.selectedRange().location, index.range(ofLine: 12).location + 2
+        )
+
+        // Past the end of the line is the end of the line, never the next one.
+        type("12:999", into: pill)
+        let line = index.range(ofLine: 12)
+        XCTAssertEqual(
+            textView.selectedRange().location, line.location + line.length - 1,
+            "clamped to the line, in front of its newline"
+        )
+    }
+
+    /// A number past the end lands on the last line rather than refusing; a
+    /// word is not a line at all, and the caret is left where it was.
+    @MainActor
+    func testGoToLineClampsPastTheEndAndRefusesJunk() throws {
+        let (controller, textView, pill) = try makeGoToLineController()
+        controller.showGoToLine()
+        let index = LineIndex(textView.string as NSString)
+
+        type("9999", into: pill)
+        XCTAssertEqual(
+            textView.selectedRange().location, index.range(ofLine: 200).location + 4
+        )
+        XCTAssertEqual(pill.status, "200 lines")
+
+        let landed = textView.selectedRange()
+        type("banana", into: pill)
+        XCTAssertEqual(pill.status, "Not a line")
+        XCTAssertEqual(textView.selectedRange(), landed, "junk moves nothing")
+    }
+
+    /// Escape puts the caret and the view back where the pill found them;
+    /// Return leaves the place the number found.
+    @MainActor
+    func testGoToLineEscapeRestoresAndReturnKeepsThePlace() throws {
+        let (controller, textView, pill) = try makeGoToLineController()
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        controller.showGoToLine()
+        let restingScroll = scrollView.contentView.bounds.origin
+
+        type("150", into: pill)
+        XCTAssertGreaterThan(textView.selectedRange().location, 0)
+        try key(#selector(NSResponder.cancelOperation(_:)), in: pill)
+
+        XCTAssertFalse(pill.isShown)
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 0, length: 0))
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, restingScroll.y, accuracy: 0.5)
+        XCTAssertTrue(
+            controller.window?.firstResponder === textView, "the keyboard goes back to the text"
+        )
+
+        controller.showGoToLine()
+        type("150", into: pill)
+        let landed = textView.selectedRange()
+        try key(#selector(NSResponder.insertNewline(_:)), in: pill)
+        XCTAssertFalse(pill.isShown)
+        XCTAssertEqual(textView.selectedRange(), landed, "Return keeps the place")
+    }
+
+    /// One corner, one pill: opening either sends the other away.
+    @MainActor
+    func testTheFindBarAndTheGoToLinePillShareTheCorner() throws {
+        let (controller, textView, pill) = try makeGoToLineController()
+        let column = try XCTUnwrap(textView.enclosingScrollView?.superview)
+        let bar = try XCTUnwrap(descendant(of: column, ofType: FindBarView.self))
+
+        controller.showGoToLine()
+        XCTAssertTrue(pill.isShown)
+
+        perform(.showFindInterface, on: textView)
+        XCTAssertTrue(bar.isShown)
+        XCTAssertFalse(pill.isShown, "⌘F takes the corner")
+
+        controller.showGoToLine()
+        XCTAssertTrue(pill.isShown)
+        XCTAssertFalse(bar.isShown, "and ⌘L takes it back")
+    }
+
+    /// A window with a note of 200 lines in it and ⌘L's pill to hand. Line 12
+    /// and every other line is indented, so "the first thing that is not a
+    /// space" has something to mean.
+    @MainActor
+    private func makeGoToLineController() throws
+        -> (MainWindowController, NotaTextView, GoToLinePill) {
+        let text = (1...200).map { "    line \($0)" }.joined(separator: "\n")
+        let (controller, textView, _) = try makeFindBarController(text: text)
+        let column = try XCTUnwrap(textView.enclosingScrollView?.superview)
+        let pill = try XCTUnwrap(descendant(of: column, ofType: GoToLinePill.self))
+        return (controller, textView, pill)
+    }
+
+    /// A number typed into ⌘L's field, as AppKit reports it.
+    @MainActor
+    private func type(_ number: String, into pill: GoToLinePill) {
+        pill.query = number
+        pill.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: pill.field)
+        )
+    }
+
+    /// Return or Escape in ⌘L's field, as AppKit hands it to the delegate.
+    @MainActor
+    private func key(_ selector: Selector, in pill: GoToLinePill) throws {
+        let editor = try XCTUnwrap(pill.field.currentEditor() as? NSTextView)
+        _ = pill.control(pill.field, textView: editor, doCommandBy: selector)
+    }
+
+    /// A window with a note in it and the editor's own find bar to hand. The
+    /// render has one of its own, so the bar is looked for inside the editor
+    /// column rather than anywhere in the window.
+    @MainActor
+    private func makeFindBarController(
+        text: String
+    ) throws -> (MainWindowController, NotaTextView, FindBarView) {
         _ = NSApplication.shared
         let directory = try makeTemporaryDirectory()
         let controller = MainWindowController(store: SessionStore(directory: directory))
@@ -1487,36 +2090,40 @@ final class NotaTests: XCTestCase {
         window.layoutIfNeeded()
 
         let content = try XCTUnwrap(window.contentView)
-        let scrollView = try XCTUnwrap(descendant(of: content, ofType: NSScrollView.self))
         let textView = try XCTUnwrap(descendant(of: content, ofType: NotaTextView.self))
-
-        // Same route ⌘F takes: a menu item tagged with the finder action,
-        // sent to the text view.
-        let showFind = NSMenuItem()
-        showFind.tag = NSTextFinder.Action.showFindInterface.rawValue
-        textView.performTextFinderAction(showFind)
-        // A couple of the bar's own decorations are only realized once it
-        // lays itself out.
-        scrollView.needsLayout = true
-        scrollView.layoutSubtreeIfNeeded()
-
-        guard let findBarView = scrollView.findBarView else {
-            throw XCTSkip("the native find bar did not install headlessly")
-        }
-        let fields = allTextFields(in: findBarView)
-        XCTAssertFalse(fields.isEmpty, "expected at least the search field")
-        for field in fields {
-            XCTAssertEqual(field.focusRingType, .none)
-        }
+        textView.string = text
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        let column = try XCTUnwrap(textView.enclosingScrollView?.superview)
+        let bar = try XCTUnwrap(descendant(of: column, ofType: FindBarView.self))
+        return (controller, textView, bar)
     }
 
-    /// Every `NSTextField` (an `NSSearchField` included) anywhere under `view`.
+    /// The route the Find menu takes: a nil-targeted item tagged with the
+    /// finder action, sent to whatever text view has the keyboard.
     @MainActor
-    private func allTextFields(in view: NSView) -> [NSTextField] {
-        var found: [NSTextField] = []
-        if let field = view as? NSTextField { found.append(field) }
-        for subview in view.subviews { found += allTextFields(in: subview) }
-        return found
+    private func perform(_ action: NSTextFinder.Action, on textView: NSTextView) {
+        let item = NSMenuItem()
+        item.tag = action.rawValue
+        textView.performTextFinderAction(item)
+    }
+
+    /// A query typed into the field, as AppKit reports it.
+    @MainActor
+    private func type(_ query: String, into bar: FindBarView) {
+        bar.query = query
+        bar.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: bar.field)
+        )
+    }
+
+    /// Escape in the field, as AppKit hands it to the delegate.
+    @MainActor
+    private func escape(_ bar: FindBarView) throws {
+        let editor = try XCTUnwrap(bar.field.currentEditor() as? NSTextView)
+        _ = bar.control(
+            bar.field, textView: editor,
+            doCommandBy: #selector(NSResponder.cancelOperation(_:))
+        )
     }
 
     /// The first view of a kind anywhere under another.

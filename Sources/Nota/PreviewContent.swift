@@ -89,8 +89,13 @@ protocol PreviewContent: NSView {
     /// column, which is where the mode control floats.
     var isFindBarVisible: Bool { get }
 
-    /// Run when that bar opens or closes.
+    /// Run when that bar opens or closes, and when it changes height — the
+    /// replace row coming out makes it taller, and the control under it has
+    /// to move by the same amount.
     var onFindBarVisibilityChange: ((Bool) -> Void)? { get set }
+
+    /// How tall that bar is standing, for the control below it to clear.
+    var findBarHeight: CGFloat { get }
 
     /// Holds the content still at the width it is being read at, for as long
     /// as the column beside it is moving, and says whether there was anything
@@ -160,6 +165,8 @@ extension PreviewContent {
     }
 
     var isFindBarVisible: Bool { false }
+
+    var findBarHeight: CGFloat { 0 }
 
     var onFindBarVisibilityChange: ((Bool) -> Void)? {
         get { nil }

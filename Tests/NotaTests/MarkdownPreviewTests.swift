@@ -2004,14 +2004,20 @@ final class MarkdownPreviewTests: XCTestCase {
     }
 
     /// ⌘F in reading searches what is on screen — the render — rather than
-    /// fetching the editor back to search that. The bar opens over the page,
-    /// and takes the corner from the render's own mode control while it is up.
+    /// fetching the editor back to search that. Nota's own bar opens over the
+    /// page, in the corner the render's mode control floats in, and takes it
+    /// while it is up.
     @MainActor
     func testCommandFInReadingModeSearchesTheRender() throws {
         _ = NSApplication.shared
-        let controller = try makeController()
+        let controller = try makeControllerShowingPreview()
         let window = try XCTUnwrap(controller.window)
         window.makeKeyAndOrderFrontOffscreen()
+
+        let editor = try editorTextView(of: controller)
+        editor.insertText("alpha beta alpha", replacementRange: editor.selectedRange())
+        waitForDebounce()
+
         controller.setPreviewMode(.reading)
         // On a window somebody can see, the mode slides in — ⌘F is asked for
         // once it has landed.
@@ -2020,8 +2026,9 @@ final class MarkdownPreviewTests: XCTestCase {
 
         let preview = try previewView(of: controller)
         let rendered = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
-        let scrollView = try XCTUnwrap(rendered.enclosingScrollView)
-        XCTAssertEqual(scrollView.findBarPosition, .aboveContent, "above the page, not under it")
+        let bar = try XCTUnwrap(descendant(of: preview, ofType: FindBarView.self))
+        XCTAssertEqual(bar.field.placeholderString, "Find in page")
+        XCTAssertFalse(bar.isShown)
 
         let find = NSMenuItem(title: "Find…", action: nil, keyEquivalent: "f")
         find.tag = NSTextFinder.Action.showFindInterface.rawValue
@@ -2035,20 +2042,58 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(controller.previewMode, .reading, "the search happens where you are")
         XCTAssertEqual(try editorWidth(of: controller), 0, "no editor came back")
 
-        try XCTSkipUnless(scrollView.isFindBarVisible, "no find bar headlessly")
+        XCTAssertTrue(bar.isShown)
         XCTAssertTrue(preview.isFindBarVisible)
+
+        // The render's control drops under the pill rather than leaving, and
+        // the pill keeps every click inside its own frame: the overlay hands
+        // back everything but the control it carries.
+        let overlay = controller.modeControlOverlays.preview
+        XCTAssertFalse(overlay.isHidden, "the control stays; it moves")
+        XCTAssertEqual(overlay.findBarClearance, ModeControlOverlay.findBarDrop)
+        let barFrame = bar.convert(bar.bounds, to: nil)
+        let controlFrame = overlay.modeControl.convert(overlay.modeControl.bounds, to: nil)
+        XCTAssertLessThanOrEqual(controlFrame.maxY, barFrame.minY)
+
+        try hover(overlay, entering: true)
+        XCTAssertEqual(overlay.modeControl.alphaValue, 1, accuracy: 0.01, "still one hover away")
+        let column = try XCTUnwrap(overlay.superview)
+        let host = try XCTUnwrap(column.superview)
+        let inThePill = host.convert(NSPoint(x: bar.bounds.midX, y: bar.bounds.midY), from: bar)
         XCTAssertTrue(
-            controller.modeControlOverlays.preview.isHidden,
-            "the control gets out of the bar's way"
+            column.hitTest(inThePill)?.isDescendant(of: bar) ?? false,
+            "the pill answers for its own corner"
         )
+        try hover(overlay, entering: false)
+
+        // Typing searches the page itself, and the bands are the layout
+        // manager's rather than anything written into the render.
+        bar.query = "alpha"
+        bar.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: bar.field)
+        )
+        XCTAssertEqual(
+            rendered.selectedRange(), NSRange(location: 0, length: 0),
+            "a caret: the match is shown by its band, not by a selection"
+        )
+        XCTAssertEqual(rendered.layoutManager?.temporaryAttribute(
+            .backgroundColor, atCharacterIndex: 0, effectiveRange: nil
+        ) as? NSColor, .findHighlightColor)
+        XCTAssertEqual(bar.status, "1 of 2")
+        XCTAssertNotNil(rendered.layoutManager?.temporaryAttribute(
+            .backgroundColor, atCharacterIndex: 12, effectiveRange: nil
+        ))
 
         let hideFind = NSMenuItem()
         hideFind.tag = NSTextFinder.Action.hideFindInterface.rawValue
         rendered.performTextFinderAction(hideFind)
         window.layoutIfNeeded()
-        XCTAssertFalse(
-            controller.modeControlOverlays.preview.isHidden, "and comes back when the bar goes"
-        )
+        XCTAssertFalse(bar.isShown)
+        XCTAssertNil(rendered.layoutManager?.temporaryAttribute(
+            .backgroundColor, atCharacterIndex: 12, effectiveRange: nil
+        ))
+        XCTAssertFalse(overlay.isHidden)
+        XCTAssertEqual(overlay.findBarClearance, 0, "and comes back up when the bar goes")
     }
 
     /// Reading is for reading. A click on the page is just a click: it does
@@ -2520,38 +2565,242 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(overlay.isHidden, "a .txt has no mode control")
     }
 
-    /// ⌘F's bar opens above the text, in the corner the editor's control
-    /// floats over. The bar wins for as long as it is up — its own buttons
-    /// have to stay clickable — and the preview's control is untouched.
+    /// ⌘F's pill floats in the corner the editor's control floats in, over
+    /// the text rather than in a row above it. The control does not leave for
+    /// it: it drops the height of the pill and goes on working underneath,
+    /// so the mode stays one hover away while a search is up. The preview's
+    /// control is untouched.
     @MainActor
-    func testTheFindBarTakesTheCornerFromTheModeControl() throws {
+    func testTheModeControlDropsBelowTheFindBar() throws {
         _ = NSApplication.shared
         let controller = try makeController()
         let window = try XCTUnwrap(controller.window)
         window.makeKeyAndOrderFrontOffscreen()
         controller.setPreviewMode(.split)
+        settle(0.4)
         window.layoutIfNeeded()
 
         let (editorOverlay, previewOverlay) = controller.modeControlOverlays
         XCTAssertFalse(editorOverlay.isHidden)
+        XCTAssertEqual(editorOverlay.findBarClearance, 0)
+        let restingControl = editorOverlay.modeControl.frame
+        let restingBand = editorOverlay.frame.height
 
         let editor = try editorTextView(of: controller)
         let scrollView = try XCTUnwrap(editor.enclosingScrollView)
-        XCTAssertEqual(scrollView.findBarPosition, .aboveContent)
+        let column = try XCTUnwrap(scrollView.superview)
+        let bar = try XCTUnwrap(descendant(of: column, ofType: FindBarView.self))
+        let textFrame = scrollView.frame
+
         let showFind = NSMenuItem()
         showFind.tag = NSTextFinder.Action.showFindInterface.rawValue
         editor.performTextFinderAction(showFind)
         window.layoutIfNeeded()
 
-        try XCTSkipUnless(scrollView.isFindBarVisible, "no find bar headlessly")
-        XCTAssertTrue(editorOverlay.isHidden, "the control gets out of the bar's way")
-        XCTAssertFalse(previewOverlay.isHidden, "the render's own corner is not the bar's")
+        XCTAssertTrue(bar.isShown)
+        XCTAssertFalse(editorOverlay.isHidden, "the control stays; it moves")
+        XCTAssertEqual(editorOverlay.findBarClearance, ModeControlOverlay.findBarDrop)
+        XCTAssertEqual(previewOverlay.findBarClearance, 0, "the render's corner is not the bar's")
+
+        // Nothing is pushed down for the pill: the text keeps the frame it
+        // had, the pill takes the corner, and the control is below it.
+        XCTAssertEqual(scrollView.frame, textFrame, "the bar floats; the text does not move")
+        XCTAssertEqual(
+            bar.frame.maxY, scrollView.frame.maxY - ModeControlOverlay.controlTopInset,
+            accuracy: 0.5
+        )
+        XCTAssertEqual(
+            bar.frame.maxX, column.bounds.width - ModeControlOverlay.controlInset, accuracy: 0.5
+        )
+        let barFrame = bar.convert(bar.bounds, to: nil)
+        let controlFrame = editorOverlay.modeControl.convert(
+            editorOverlay.modeControl.bounds, to: nil
+        )
+        XCTAssertLessThanOrEqual(
+            controlFrame.maxY, barFrame.minY, "the control sits under the pill, not behind it"
+        )
+        XCTAssertEqual(
+            editorOverlay.frame.height, restingBand + ModeControlOverlay.findBarDrop,
+            accuracy: 0.5, "and the hover band grew with it"
+        )
+
+        // The whole point of moving rather than leaving: it still comes up.
+        try hover(editorOverlay, entering: true)
+        XCTAssertEqual(editorOverlay.modeControl.alphaValue, 1, accuracy: 0.01)
+        try hover(editorOverlay, entering: false)
 
         let hideFind = NSMenuItem()
         hideFind.tag = NSTextFinder.Action.hideFindInterface.rawValue
         editor.performTextFinderAction(hideFind)
         window.layoutIfNeeded()
-        XCTAssertFalse(editorOverlay.isHidden, "and comes back when the bar goes")
+        XCTAssertEqual(editorOverlay.findBarClearance, 0)
+        XCTAssertEqual(
+            editorOverlay.modeControl.frame, restingControl, "and comes back up to the corner"
+        )
+    }
+
+    /// Clicking the glass fades a second pill in under the first, 6pt below
+    /// it and sharing its trailing edge, and the control under the stack drops
+    /// by that pill's height rather than being covered. Clicking again takes
+    /// it away and the control comes back up behind it.
+    @MainActor
+    func testTheMagnifierBringsOutTheReplacePillAndTheControlDropsFurther() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        controller.setPreviewMode(.split)
+        settle(0.4)
+        window.layoutIfNeeded()
+
+        let (editorOverlay, _) = controller.modeControlOverlays
+        let editor = try editorTextView(of: controller)
+        let scrollView = try XCTUnwrap(editor.enclosingScrollView)
+        let column = try XCTUnwrap(scrollView.superview)
+        let bar = try XCTUnwrap(descendant(of: column, ofType: FindBarView.self))
+
+        let showFind = NSMenuItem()
+        showFind.tag = NSTextFinder.Action.showFindInterface.rawValue
+        editor.performTextFinderAction(showFind)
+        window.layoutIfNeeded()
+        XCTAssertFalse(bar.isExpanded, "⌘F opens the query pill alone")
+        XCTAssertFalse(bar.replacePill.isShown)
+        XCTAssertEqual(editorOverlay.findBarClearance, ModeControlOverlay.findBarDrop)
+        let textFrame = scrollView.frame
+        let queryFrame = bar.frame
+
+        bar.magnifierButton.performClick(nil)
+        window.layoutIfNeeded()
+
+        XCTAssertTrue(bar.isExpanded)
+        XCTAssertTrue(bar.replacePill.isShown)
+        XCTAssertEqual(bar.frame, queryFrame, "the query pill neither grows nor moves")
+        XCTAssertEqual(bar.replacePill.frame.width, bar.frame.width)
+        XCTAssertEqual(bar.replacePill.frame.maxX, bar.frame.maxX, accuracy: 0.5)
+        XCTAssertEqual(
+            bar.frame.minY - bar.replacePill.frame.maxY, PillView.gap, accuracy: 0.5,
+            "6pt under the first"
+        )
+        XCTAssertEqual(
+            bar.stackHeight, PillView.height + PillView.gap + PillView.height
+        )
+        XCTAssertEqual(
+            editorOverlay.findBarClearance,
+            ModeControlOverlay.drop(forFindBarOfHeight: bar.stackHeight)
+        )
+        XCTAssertEqual(scrollView.frame, textFrame, "a second pill still pushes nothing down")
+        let stackFrame = bar.replacePill.convert(bar.replacePill.bounds, to: nil)
+        let controlFrame = editorOverlay.modeControl.convert(
+            editorOverlay.modeControl.bounds, to: nil
+        )
+        XCTAssertLessThanOrEqual(
+            controlFrame.maxY, stackFrame.minY, "still clear of the whole stack"
+        )
+
+        bar.magnifierButton.performClick(nil)
+        window.layoutIfNeeded()
+        XCTAssertFalse(bar.isExpanded)
+        XCTAssertFalse(bar.replacePill.isShown)
+        XCTAssertEqual(editorOverlay.findBarClearance, ModeControlOverlay.findBarDrop)
+    }
+
+    /// There is nothing to replace on a page you are reading: ⌥⌘F there is
+    /// ⌘F, and the glass is only a glass.
+    @MainActor
+    func testTheRenderedPageHasNoReplacePill() throws {
+        _ = NSApplication.shared
+        let controller = try makeControllerShowingPreview()
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        controller.setPreviewMode(.reading)
+        settle(0.4)
+        window.layoutIfNeeded()
+
+        let preview = try previewView(of: controller)
+        let rendered = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+        let bar = try XCTUnwrap(descendant(of: preview, ofType: FindBarView.self))
+
+        let showReplace = NSMenuItem()
+        showReplace.tag = NSTextFinder.Action.showReplaceInterface.rawValue
+        rendered.performTextFinderAction(showReplace)
+        window.layoutIfNeeded()
+
+        XCTAssertTrue(bar.isShown, "⌥⌘F over the page is ⌘F")
+        XCTAssertFalse(bar.canReplace)
+        XCTAssertFalse(bar.isExpanded)
+        XCTAssertFalse(bar.replacePill.isShown)
+        XCTAssertEqual(bar.stackHeight, PillView.height)
+
+        bar.magnifierButton.performClick(nil)
+        window.layoutIfNeeded()
+        XCTAssertFalse(bar.isExpanded, "the glass is only a glass here")
+        XCTAssertFalse(bar.replacePill.isShown)
+        XCTAssertEqual(
+            controller.modeControlOverlays.preview.findBarClearance,
+            ModeControlOverlay.findBarDrop
+        )
+    }
+
+    /// ⌘L's pill takes the same corner, and the mode control drops below it
+    /// exactly as it does for ⌘F's.
+    @MainActor
+    func testTheModeControlDropsForTheGoToLinePill() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        controller.setPreviewMode(.split)
+        settle(0.4)
+        window.layoutIfNeeded()
+
+        let (editorOverlay, _) = controller.modeControlOverlays
+        let editor = try editorTextView(of: controller)
+        let column = try XCTUnwrap(editor.enclosingScrollView?.superview)
+        let pill = try XCTUnwrap(descendant(of: column, ofType: GoToLinePill.self))
+        XCTAssertEqual(editorOverlay.findBarClearance, 0)
+
+        controller.showGoToLine()
+        window.layoutIfNeeded()
+        XCTAssertTrue(pill.isShown)
+        XCTAssertFalse(editorOverlay.isHidden, "the control stays; it moves")
+        XCTAssertEqual(editorOverlay.findBarClearance, ModeControlOverlay.findBarDrop)
+        let pillFrame = pill.convert(pill.bounds, to: nil)
+        let controlFrame = editorOverlay.modeControl.convert(
+            editorOverlay.modeControl.bounds, to: nil
+        )
+        XCTAssertLessThanOrEqual(controlFrame.maxY, pillFrame.minY)
+
+        // Return closes it and the corner is the control's again.
+        let fieldEditor = try XCTUnwrap(pill.field.currentEditor() as? NSTextView)
+        _ = pill.control(
+            pill.field, textView: fieldEditor,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        window.layoutIfNeeded()
+        XCTAssertEqual(editorOverlay.findBarClearance, 0)
+    }
+
+    /// Reading mode has no editor on screen to jump about in, so ⌘L is not
+    /// offered there and does nothing if it is asked for anyway.
+    @MainActor
+    func testReadingModeIgnoresGoToLine() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        XCTAssertTrue(controller.canGoToLine, "the editor is on screen here")
+
+        controller.setPreviewMode(.reading)
+        settle(0.4)
+        window.layoutIfNeeded()
+        XCTAssertFalse(controller.canGoToLine)
+
+        let editor = try editorTextView(of: controller)
+        let column = try XCTUnwrap(editor.enclosingScrollView?.superview)
+        let pill = try XCTUnwrap(descendant(of: column, ofType: GoToLinePill.self))
+        controller.showGoToLine()
+        window.layoutIfNeeded()
+        XCTAssertFalse(pill.isShown)
     }
 
     /// The selected segment is the tab's mode, and clicking one sets it.

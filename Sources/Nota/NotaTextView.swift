@@ -78,6 +78,30 @@ final class NotaTextView: NSTextView {
         super.keyDown(with: event)
     }
 
+    // MARK: - Find
+
+    /// The editor's ⌘F bar. Find…, Find Next, Find Previous and Use Selection
+    /// for Find are nil-targeted `performTextFinderAction:` menu items, so
+    /// they arrive at whatever text view has the keyboard — which is how the
+    /// same four keys search the editor here and the rendered page in reading
+    /// mode, without either knowing about the other.
+    weak var findSession: TextFindSession?
+
+    override func performTextFinderAction(_ sender: Any?) {
+        guard let item = sender as? NSValidatedUserInterfaceItem,
+              let action = NSTextFinder.Action(rawValue: item.tag)
+        else { return }
+        findSession?.perform(action)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard item.action == #selector(NSTextView.performTextFinderAction(_:)) else {
+            return super.validateUserInterfaceItem(item)
+        }
+        guard let action = NSTextFinder.Action(rawValue: item.tag) else { return false }
+        return TextFindSession.handles(action)
+    }
+
     // MARK: - The caret
 
     /// Normal and visual modes draw a block over the character under the
@@ -228,27 +252,32 @@ final class NotaTextView: NSTextView {
     /// beside the text rather than in it — so a highlight can never reach the
     /// text storage, and therefore never the cache, the pasteboard or the
     /// file. Monochrome, like everything else vim draws here.
+    /// ⌘F's bar draws with the same mechanism, so the two share one band and
+    /// one book of what is lit: whichever searched last owns the highlights,
+    /// and closing the find bar hands them back to vim.
     func setSearchHighlights(_ ranges: [NSRange]) {
-        guard let layoutManager, let storage = textStorage else { return }
-        let full = NSRange(location: 0, length: storage.length)
-        layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: full)
-        let colour = NSColor.labelColor.withAlphaComponent(0.12)
-        for range in ranges {
-            let clamped = NSIntersectionRange(range, full)
-            guard clamped.length > 0 else { continue }
-            layoutManager.addTemporaryAttributes([.backgroundColor: colour], forCharacterRange: clamped)
+        setSearchHighlights(ranges, current: nil)
+    }
+
+    /// `current` is ⌘F's own — the match the reader is standing on, which
+    /// wears the find yellow while the rest stay quiet. Vim has no such
+    /// thing and passes nothing.
+    ///
+    /// The book covers every lit range, the current match included even when
+    /// it fell outside a capped list, so a clear puts all of it down — the
+    /// black text laid over the yellow with it.
+    func setSearchHighlights(_ ranges: [NSRange], current: NSRange?) {
+        setFindHighlights(ranges, current: current, alpha: 0.12)
+        if let current, !ranges.contains(current) {
+            highlightedRanges = ranges + [current]
+        } else {
+            highlightedRanges = ranges
         }
-        highlightedRanges = ranges
     }
 
     func clearSearchHighlights() {
-        guard !highlightedRanges.isEmpty, let layoutManager, let storage = textStorage else {
-            highlightedRanges = []
-            return
-        }
-        layoutManager.removeTemporaryAttribute(
-            .backgroundColor, forCharacterRange: NSRange(location: 0, length: storage.length)
-        )
+        guard !highlightedRanges.isEmpty else { return }
+        setFindHighlights([], current: nil, alpha: 0.12)
         highlightedRanges = []
     }
 

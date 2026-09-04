@@ -13,7 +13,14 @@ import AppKit
 ///
 /// The whole band is the hover target, but only the control itself ever takes
 /// a click: `hitTest` hands everything else back to the text underneath, so a
-/// line under the band stays as clickable as any other.
+/// line under the band stays as clickable as any other — the ⌘F pill in the
+/// same corner included.
+///
+/// ⌘F's bar wants that corner too. Rather than leaving, the control drops the
+/// height of the pill and keeps working under it: the band grows by the same
+/// amount, so the whole top of the column is still the hover target, and the
+/// move is instant — the bar fades, the control is simply somewhere else by
+/// the time it arrives.
 ///
 /// One layer and no more: the segmented control's own rounded bezel is the
 /// whole of it. There is no plate behind it — a second rounded shape around
@@ -26,6 +33,14 @@ final class ModeControlOverlay: NSView {
     /// the strip above, and its drop below the strip's hairline.
     static let controlInset: CGFloat = 12
     static let controlTopInset: CGFloat = 8
+    /// The gap between the pill's bottom edge and the control under it.
+    static let findBarGap: CGFloat = 6
+    /// How far the control drops while this column's find bar is up with
+    /// nothing but its query row. The replace row makes the bar taller, and
+    /// the control moves by whatever it actually measures — see `drop(for:)`.
+    static let findBarDrop: CGFloat = drop(forFindBarOfHeight: FindBarView.height)
+
+    static func drop(forFindBarOfHeight height: CGFloat) -> CGFloat { height + findBarGap }
     /// Close enough to the small rounded bezel's own corner radius that the
     /// fill reads as part of it, not a shape of its own.
     private static let controlFillCornerRadius: CGFloat = 5.5
@@ -42,6 +57,23 @@ final class ModeControlOverlay: NSView {
     private let controlFill = CALayer()
 
     private var trackingArea: NSTrackingArea?
+    private var controlTop: NSLayoutConstraint?
+    private var bandHeight: NSLayoutConstraint?
+
+    /// How far down the column the control sits, beyond its usual drop below
+    /// the strip. Nothing while the column's find bar is away; the pill's
+    /// height while it is up, so the two never share the corner.
+    ///
+    /// Not animated: a control that slid down as the bar faded in would be
+    /// two movements where the taste allows one.
+    var findBarClearance: CGFloat = 0 {
+        didSet {
+            guard findBarClearance != oldValue else { return }
+            controlTop?.constant = Self.controlTopInset + findBarClearance
+            bandHeight?.constant = Self.hoverBandHeight + findBarClearance
+            needsLayout = true
+        }
+    }
 
     /// Whether the control is on screen right now. Hover says so; a tab that
     /// is not Markdown, and zen, take the whole overlay away instead.
@@ -84,8 +116,17 @@ final class ModeControlOverlay: NSView {
         addSubview(modeControl)
         applySegmentTints()
 
+        // The band's own height, rather than the window controller's, because
+        // it grows with the control's drop and the two must move together.
+        let top = modeControl.topAnchor.constraint(
+            equalTo: topAnchor, constant: Self.controlTopInset
+        )
+        let height = heightAnchor.constraint(equalToConstant: Self.hoverBandHeight)
+        controlTop = top
+        bandHeight = height
         NSLayoutConstraint.activate([
-            modeControl.topAnchor.constraint(equalTo: topAnchor, constant: Self.controlTopInset),
+            top,
+            height,
             modeControl.trailingAnchor.constraint(
                 equalTo: trailingAnchor, constant: -Self.controlInset
             ),

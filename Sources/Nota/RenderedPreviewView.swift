@@ -17,8 +17,14 @@ import AppKit
 /// and writes down nothing else.
 class RenderedPreviewView: NSView, PreviewContent {
 
-    private let scrollView = FindBarScrollView()
+    private let scrollView = NSScrollView()
     private let textView: PreviewTextView
+
+    /// The page's own ⌘F bar, floating in the top-trailing corner of the
+    /// column — reading mode searches what is on screen rather than fetching
+    /// the editor back to search that.
+    private let findBar = FindBarView(placeholder: "Find in page")
+    private lazy var findSession = TextFindSession(bar: findBar, textView: textView)
 
     /// The block the reader last pointed at, or the one the caret is in.
     private var blocks: [(range: NSRange, source: NSRange)] = []
@@ -42,12 +48,14 @@ class RenderedPreviewView: NSView, PreviewContent {
 
     /// Run when the render's own ⌘F bar opens or closes. It takes the top of
     /// the column, which is where the mode control floats.
-    var onFindBarVisibilityChange: ((Bool) -> Void)? {
-        didSet { scrollView.onFindBarVisibilityChange = onFindBarVisibilityChange }
-    }
+    var onFindBarVisibilityChange: ((Bool) -> Void)?
 
-    /// Whether that bar is up.
-    var isFindBarVisible: Bool { scrollView.isFindBarVisible }
+    /// Whether that bar is up, and how tall it is standing. The page cannot
+    /// be typed into, so its bar never grows a replace row — but the column
+    /// asks all the same.
+    var isFindBarVisible: Bool { findSession.isVisible }
+
+    var findBarHeight: CGFloat { findBar.stackHeight }
 
     /// Whether a click on a block jumps to it in the editor. In split the
     /// render is a map into the text beside it, so it does. In reading it is
@@ -132,10 +140,9 @@ class RenderedPreviewView: NSView, PreviewContent {
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = true
-        // Reading mode has no editor on screen, so ⌘F searches the page you
-        // are reading rather than fetching the text back to search that.
-        textView.usesFindBar = true
-        textView.isIncrementalSearchingEnabled = true
+        // Nota brings its own bar, so AppKit's never installs itself above
+        // the page: reading mode's ⌘F opens the pill in the corner instead.
+        textView.usesFindBar = false
         textView.drawsBackground = true
         textView.backgroundColor = .textBackgroundColor
         textView.textContainerInset = NSSize(
@@ -164,7 +171,6 @@ class RenderedPreviewView: NSView, PreviewContent {
         scrollView.backgroundColor = .textBackgroundColor
         scrollView.borderType = .noBorder
         scrollView.documentView = textView
-        scrollView.findBarPosition = .aboveContent
         addSubview(scrollView)
 
         NSLayoutConstraint.activate([
@@ -173,6 +179,22 @@ class RenderedPreviewView: NSView, PreviewContent {
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+
+        // Added after the page, so the pill floats over it, and pinned to the
+        // mode control's own corner — the two share it, and the control gets
+        // out of the way while the bar is up.
+        textView.findSession = findSession
+        findSession.onVisibilityChange = { [weak self] visible in
+            self?.onFindBarVisibilityChange?(visible)
+        }
+        findBar.onHeightChange = { [weak self] in
+            guard let self else { return }
+            onFindBarVisibilityChange?(isFindBarVisible)
+        }
+        findBar.floatStack(
+            in: self, under: topAnchor, gap: ModeControlOverlay.controlTopInset,
+            trailingInset: ModeControlOverlay.controlInset
+        )
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -291,6 +313,9 @@ class RenderedPreviewView: NSView, PreviewContent {
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         // The band is drawn from ranges that have just been replaced.
         setHighlight(nil)
+        // So are the find bar's: temporary attributes belong to the layout
+        // manager, and the storage under them has just been swapped out.
+        findSession.refresh()
     }
 
     // MARK: - Blocks
@@ -403,6 +428,10 @@ class RenderedPreviewView: NSView, PreviewContent {
 private final class PreviewTextView: NSTextView {
     var onClick: ((Int) -> Void)?
     var takesKeyboard = false
+    /// The page's find bar. ⌘F, ⌘G, ⇧⌘G and ⌘E are nil-targeted
+    /// `performTextFinderAction:` items, so they land here whenever this view
+    /// has the keyboard — which is reading mode, and only there.
+    weak var findSession: TextFindSession?
     /// Mirrors `RenderedPreviewView.sendsBlockClicks`: true in Split, where a
     /// click is a jump to source, false in Reading, where it is an ordinary
     /// click in an ordinary text view.
@@ -417,6 +446,21 @@ private final class PreviewTextView: NSTextView {
     }
 
     override var acceptsFirstResponder: Bool { takesKeyboard }
+
+    override func performTextFinderAction(_ sender: Any?) {
+        guard let item = sender as? NSValidatedUserInterfaceItem,
+              let action = NSTextFinder.Action(rawValue: item.tag)
+        else { return }
+        findSession?.perform(action)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard item.action == #selector(NSTextView.performTextFinderAction(_:)) else {
+            return super.validateUserInterfaceItem(item)
+        }
+        guard let action = NSTextFinder.Action(rawValue: item.tag) else { return false }
+        return TextFindSession.handles(action)
+    }
 
     override func mouseDown(with event: NSEvent) {
         // Reading has no block sync to report to: every click behaves like
