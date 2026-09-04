@@ -23,9 +23,12 @@ import WebKit
 /// `PageFiles` gives.
 ///
 /// Nothing here is a map back into the source. A DOM is not a list of source
-/// ranges: there are no blocks to click, no band to light and no find bar.
-/// The one thing it keeps is where the reader had scrolled to, so a keystroke
-/// in the editor does not throw the page back to the top.
+/// ranges, so there are no blocks to click and no band to light. There is a
+/// find bar, in the same corner every other column keeps one — but the search
+/// itself is a script in the page, since a page is the one thing Nota reads
+/// without ever holding. The other thing it keeps is where the reader had
+/// scrolled to, so a keystroke in the editor does not throw the page back to
+/// the top.
 final class HTMLPreviewView: NSView, PreviewContent {
 
     /// The page, once there has been one. Nothing here is built until a
@@ -78,9 +81,44 @@ final class HTMLPreviewView: NSView, PreviewContent {
 
     private var takesKeyboardStorage = false
 
+    /// The page's own ⌘F bar, floating in the top-trailing corner of the
+    /// column — the same pill the editor, the render and a document use.
+    private let findBar = FindBarView(placeholder: "Find in page")
+    private lazy var findSession = HTMLFindSession(bar: findBar) { [weak self] in
+        self?.webView
+    }
+
+    /// Run when that bar opens or closes, and whether it is up — the column's
+    /// mode control drops below it, the same as over a render.
+    var onFindBarVisibilityChange: ((Bool) -> Void)?
+
+    var isFindBarVisible: Bool { findSession.isVisible }
+
+    var findBarHeight: CGFloat { findBar.stackHeight }
+
+    /// Run when the page has answered the find bar — for the tests, since
+    /// every one of those answers crosses a process boundary and nothing else
+    /// says when one has landed.
+    var onFindAnswered: (() -> Void)? {
+        get { findSession.onPageAnswered }
+        set { findSession.onPageAnswered = newValue }
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+
+        findSession.onVisibilityChange = { [weak self] visible in
+            self?.onFindBarVisibilityChange?(visible)
+        }
+        findBar.onHeightChange = { [weak self] in
+            guard let self else { return }
+            onFindBarVisibilityChange?(isFindBarVisible)
+        }
+        findBar.floatStack(
+            in: self, under: topAnchor, gap: ModeControlOverlay.controlTopInset,
+            trailingInset: ModeControlOverlay.controlInset
+        )
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -103,12 +141,24 @@ final class HTMLPreviewView: NSView, PreviewContent {
             source: Self.scrollReporter, injectionTime: .atDocumentEnd,
             forMainFrameOnly: true, in: .defaultClient
         ))
+        // The find bar's other half. It goes into every page whether or not
+        // ⌘F is ever pressed there: a script cannot be injected into a page
+        // that has already loaded, and the reader does not announce a search
+        // before making one.
+        controller.addUserScript(WKUserScript(
+            source: HTMLFindSession.script(
+                quietBand: NSColor.systemGray.withAlphaComponent(0.4),
+                currentBand: .findHighlightColor
+            ),
+            injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient
+        ))
         // The reporter talks to us rather than to the page: a separate world,
         // so nothing here is a global the page can see, shadow or trip over.
         controller.add(ScrollReporter(view: self), contentWorld: .defaultClient,
                        name: Self.scrollHandlerName)
 
         let page = HTMLPageView(frame: bounds, configuration: configuration)
+        page.findSession = findSession
         // Pinned edge to edge, unlike the Markdown render's own margins, and
         // for the same reason a PDF is: a page lays out to the viewport it is
         // given, and its own body margin is already the margin its author
@@ -124,7 +174,9 @@ final class HTMLPreviewView: NSView, PreviewContent {
         // A zoom asked for before WebKit was ever started — a tab reopened at
         // one — belongs to the page the moment there is one.
         page.pageZoom = zoomStorage
-        addSubview(page)
+        // Below the pill, which has been standing in this corner since the
+        // pane was built: a bar the page is drawn over is not a bar.
+        addSubview(page, positioned: .below, relativeTo: nil)
 
         NSLayoutConstraint.activate([
             page.topAnchor.constraint(equalTo: topAnchor),
@@ -192,6 +244,10 @@ final class HTMLPreviewView: NSView, PreviewContent {
     private func load(_ key: LoadKey) {
         generation += 1
         loadCount += 1
+        // The ranges the bands are painted on belong to the document being
+        // replaced. A page of the same note comes back to the same query on
+        // `didFinish`; a different tab's page comes back to nothing.
+        if key.noteID != showingNoteID { findSession.close() }
         showingNoteID = key.noteID
         shownBaseURL = key.fileURL.flatMap(PageFiles.pageURL)
         // Against the file's own path rather than its folder's, so `style.css`
@@ -386,6 +442,10 @@ extension HTMLPreviewView: WKNavigationDelegate {
         // it is not what is on screen, and putting its scroll back would move
         // the page that is.
         let generation = generation
+        // A fresh document has none of the old one's ranges, so an open bar
+        // puts its query to it again — an edit in the editor beside the page
+        // must not leave the reader with a count of a page that has gone.
+        findSession.refresh()
         let offset = showingNoteID.flatMap { scrollOffsets[$0] } ?? .zero
         guard offset != .zero else {
             onLoadFinished?()
@@ -487,9 +547,35 @@ final class PageFiles: NSObject, WKURLSchemeHandler {
 final class HTMLPageView: WKWebView {
     var takesKeyboard = false
 
+    /// The page's find bar. Find…, Find Next, Find Previous and Use Selection
+    /// for Find are nil-targeted `performTextFinderAction:` items, so they
+    /// land here whenever this view has the keyboard — which is reading mode,
+    /// and only there. In split the editor has it and ⌘F is the editor's,
+    /// which is settled by `acceptsFirstResponder` above and by nothing here.
+    ///
+    /// Taking the selector is also what keeps WebKit's own find bar out of a
+    /// Nota window: `WKWebView` answers for it itself, and that bar is exactly
+    /// what must never appear here.
+    weak var findSession: HTMLFindSession?
+
     override var acceptsFirstResponder: Bool { takesKeyboard }
 
     override func becomeFirstResponder() -> Bool {
         takesKeyboard && super.becomeFirstResponder()
+    }
+
+    override func performTextFinderAction(_ sender: Any?) {
+        guard let item = sender as? NSValidatedUserInterfaceItem,
+              let action = NSTextFinder.Action(rawValue: item.tag)
+        else { return }
+        findSession?.perform(action)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard item.action == #selector(performTextFinderAction(_:)) else {
+            return super.validateUserInterfaceItem(item)
+        }
+        guard let action = NSTextFinder.Action(rawValue: item.tag) else { return false }
+        return HTMLFindSession.handles(action)
     }
 }

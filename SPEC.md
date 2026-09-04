@@ -257,8 +257,20 @@
   the browser; an in-page `#` stays. The keyboard belongs to the page in reading mode, and to the editor in the other
   two: a click in split must not steal the caret.
 - No block sync: a DOM is not a list of source ranges, and a click in the page is a click in the page (links still
-  open). ⌘F over the page is a Todo (see Todo 12): WebKit's own find is a page away in its own process, so it is
-  nothing like the pill over a note or over a PDF.
+  open).
+- ⌘F searches the page (done 2026-09-04), in reading mode, where the page has the keyboard: the same pill in the same
+  corner, "Find in page", the same counts and the same keys. In split the editor has the keyboard and ⌘F is the
+  editor's, unchanged. The search itself is a script injected into every page alongside the scroll reporter, in the
+  same separate world: every text node is gathered into one string — so a match across an inline element, `ca<b>fe</b>`,
+  is still a match — folded a character at a time (decomposed, combining marks stripped, lowercased, with a map back
+  to where each folded character came from, since `İ` lowercases to two), matched, and turned into DOM `Range`s. The
+  bands are CSS custom highlights (`CSS.highlights`, `::highlight(nota-find)` and `nota-find-current`), so nothing is
+  added to the author's DOM and no attribute is written on it — the same promise the editor's temporary attributes
+  make. Stepping is by index in the page, which is what makes `3 of 12` exact and wrapping trivial, and Esc puts the
+  bands down and leaves the match as a real selection. Never WebKit's own find: `WKWebView.find` selects one match at
+  a time, cannot band or count the rest, and takes the selection away from the reader. Every answer crosses a process
+  boundary, so the session is asynchronous and carries a token — a reply about the query two keystrokes ago is not
+  news about the one being typed now. A page loaded again puts the query to the new document.
 - Untitled notes and every other extension have no HTML preview. Save As to `.html` is what turns a note into one.
 - An `.svg` is the same arrangement (decided 2026-09-04): text you edit, a drawing beside it, the same pane and the
   same three modes, and the View item says "SVG Preview". It is handed to WebKit as `image/svg+xml`, so the root

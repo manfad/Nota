@@ -592,6 +592,200 @@ final class HTMLPreviewTests: XCTestCase {
         XCTAssertEqual(relaunched.previewPanes.kind, .html)
     }
 
+    // MARK: - ⌘F over the page
+
+    /// ⌘F in reading mode is the page's own pill, in the corner every column
+    /// keeps its bars in. The editor's stays down: it is not on screen, and
+    /// the page is what the reader is looking at.
+    @MainActor
+    func testCommandFOverThePageOpensThePagesOwnPill() throws {
+        _ = NSApplication.shared
+        let controller = try makeReadingController(
+            text: "<p>alpha beta alpha</p>", in: try makeTemporaryDirectory()
+        )
+        let pane = controller.previewPanes.html
+        let bar = try findBar(of: pane)
+        XCTAssertEqual(bar.field.placeholderString, "Find in page")
+        XCTAssertFalse(bar.isShown)
+        XCTAssertFalse(bar.canReplace, "a preview is not a second place to edit the file")
+
+        let view = try page(of: pane)
+        XCTAssertTrue(view.validateUserInterfaceItem(finderItem(.showFindInterface)),
+                      "the menu item has to stay enabled or ⌘F never arrives here")
+        try find(.showFindInterface, in: pane)
+
+        XCTAssertTrue(bar.isShown)
+        XCTAssertTrue(pane.isFindBarVisible)
+        let shown = allFindBars(in: controller).filter(\.isShown)
+        XCTAssertEqual(shown.count, 1)
+        XCTAssertTrue(shown.first === bar, "the editor's own bar stayed down")
+    }
+
+    /// Typing searches the page as you go: the count is exact, the match the
+    /// reader is on wears the loud band and the quiet ones wear theirs.
+    @MainActor
+    func testTypingCountsTheMatchesInThePageAndBandsThem() throws {
+        let (pane, _) = try makePane()
+        try show(makeNote(named: "page.html", text: "<p>alpha beta</p><p>alpha</p><p>ALPHA</p>"),
+                 in: pane)
+        let bar = try findBar(of: pane)
+        try find(.showFindInterface, in: pane)
+
+        try type("alpha", into: bar, of: pane)
+
+        XCTAssertEqual(bar.status, "1 of 3", "case makes no difference, as in every other bar")
+        XCTAssertEqual(try number("CSS.highlights.get('nota-find').size", in: pane), 2,
+                       "the two the reader is not on")
+        XCTAssertEqual(try number("CSS.highlights.get('nota-find-current').size", in: pane), 1)
+        XCTAssertEqual(
+            try string("CSS.highlights.get('nota-find-current').values().next().value.toString()",
+                       in: pane).lowercased(),
+            "alpha",
+            "and the loud band is over a match rather than anywhere"
+        )
+    }
+
+    /// ⌘G walks the matches and wraps round the end of the page; ⇧⌘G walks
+    /// them back. The count says exactly where the reader is, which is the
+    /// whole reason the stepping is done in the page rather than by WebKit's
+    /// own find.
+    @MainActor
+    func testCommandGStepsThroughThePageAndWraps() throws {
+        let (pane, _) = try makePane()
+        try show(makeNote(named: "page.html", text: "<p>alpha</p><p>alpha</p><p>alpha</p>"),
+                 in: pane)
+        let bar = try findBar(of: pane)
+        try find(.showFindInterface, in: pane)
+        try type("alpha", into: bar, of: pane)
+        XCTAssertEqual(bar.status, "1 of 3")
+
+        try find(.nextMatch, in: pane)
+        XCTAssertEqual(bar.status, "2 of 3")
+        try find(.nextMatch, in: pane)
+        XCTAssertEqual(bar.status, "3 of 3")
+        try find(.nextMatch, in: pane)
+        XCTAssertEqual(bar.status, "1 of 3", "round the end")
+        try find(.previousMatch, in: pane)
+        XCTAssertEqual(bar.status, "3 of 3", "and round the other way")
+    }
+
+    /// The current match is brought into view: a hit ten screens down is
+    /// scrolled to rather than counted at.
+    @MainActor
+    func testTheCurrentMatchIsScrolledTo() throws {
+        let (pane, _) = try makePane()
+        try show(
+            makeNote(named: "page.html",
+                     text: tallPage(titled: "Line", extra: "<p id=\"end\">alpha</p>")),
+            in: pane
+        )
+        let bar = try findBar(of: pane)
+        XCTAssertEqual(try number("window.scrollY", in: pane), 0)
+
+        try find(.showFindInterface, in: pane)
+        try type("alpha", into: bar, of: pane)
+
+        XCTAssertEqual(bar.status, "1 of 1")
+        XCTAssertGreaterThan(try number("window.scrollY", in: pane), 100,
+                             "the page went to the match")
+    }
+
+    /// Escape puts the bands down and hands the match over: it stays visible
+    /// as a real selection, and the keyboard goes back to the page.
+    @MainActor
+    func testEscapeClosesTheBarClearsTheBandsAndSelectsTheMatch() throws {
+        let (pane, window) = try makePane()
+        pane.takesKeyboard = true
+        try show(makeNote(named: "page.html", text: "<p>alpha beta</p><p>alpha</p>"), in: pane)
+        let bar = try findBar(of: pane)
+        try find(.showFindInterface, in: pane)
+        try type("alpha", into: bar, of: pane)
+        XCTAssertEqual(try number("CSS.highlights.size", in: pane), 2)
+
+        try find(.hideFindInterface, in: pane)
+
+        XCTAssertFalse(bar.isShown)
+        XCTAssertFalse(pane.isFindBarVisible)
+        XCTAssertEqual(try number("CSS.highlights.size", in: pane), 0, "the bands are down")
+        XCTAssertEqual(try string("window.getSelection().toString()", in: pane).lowercased(),
+                       "alpha", "and the match the reader was on is theirs")
+        let responder = window.firstResponder as? NSView
+        let view = try page(of: pane)
+        XCTAssertTrue(responder === view || responder?.isDescendant(of: view) == true,
+                      "the keyboard went back to the page")
+    }
+
+    /// Case- and diacritic-insensitive, the same as every other bar: `cafe`
+    /// finds `Café`, and a match that runs across an inline element is still
+    /// a match.
+    @MainActor
+    func testTheQueryIgnoresCaseAndAccentsAndCrossesTags() throws {
+        let (pane, _) = try makePane()
+        try show(makeNote(named: "page.html", text: "<p>Un caf\u{e9} noir</p><p>ca<b>fe</b></p>"),
+                 in: pane)
+        let bar = try findBar(of: pane)
+        try find(.showFindInterface, in: pane)
+
+        try type("cafe", into: bar, of: pane)
+        XCTAssertEqual(bar.status, "1 of 2",
+                       "the accented one and the one split across a tag")
+
+        try type("CAFÉ", into: bar, of: pane)
+        XCTAssertEqual(bar.status, "1 of 2", "and it reads the same the other way round")
+
+        try type("zeta", into: bar, of: pane)
+        XCTAssertEqual(bar.status, "No matches")
+        XCTAssertEqual(try number("CSS.highlights.size", in: pane), 0)
+    }
+
+    /// In split the editor is on screen and has the keyboard, so ⌘F is the
+    /// editor's bar and the page never sees the menu item at all.
+    @MainActor
+    func testInSplitModeCommandFIsStillTheEditorsBar() throws {
+        _ = NSApplication.shared
+        let controller = try makeReadingController(
+            text: "<p>alpha</p>", in: try makeTemporaryDirectory()
+        )
+        let pane = controller.previewPanes.html
+        let view = try page(of: pane)
+        XCTAssertTrue(view.acceptsFirstResponder, "reading mode: the page has the keyboard")
+
+        controller.setPreviewMode(.split)
+        try XCTUnwrap(controller.window).layoutIfNeeded()
+        XCTAssertFalse(view.acceptsFirstResponder,
+                       "in split the caret is the editor's and so is ⌘F")
+
+        let editor = try editorTextView(of: controller)
+        editor.performTextFinderAction(finderItem(.showFindInterface))
+        XCTAssertFalse(try findBar(of: pane).isShown, "the page's pill stayed down")
+        let shown = allFindBars(in: controller).filter(\.isShown)
+        XCTAssertEqual(shown.count, 1, "the editor's, and only that one")
+        XCTAssertFalse(shown.first === (try findBar(of: pane)))
+    }
+
+    /// Find, Find Next, Find Previous and Use Selection all mean something
+    /// over a page. Find and Replace… does not: a preview is not a second
+    /// place to edit the file.
+    @MainActor
+    func testFindAndReplaceIsTheOneFindItemThePageTurnsDown() throws {
+        let (pane, _) = try makePane()
+        try show(makeNote(named: "page.html", text: "<p>alpha</p>"), in: pane)
+        let view = try page(of: pane)
+
+        for action in [NSTextFinder.Action.showFindInterface, .hideFindInterface,
+                       .nextMatch, .previousMatch, .setSearchString] {
+            XCTAssertTrue(view.validateUserInterfaceItem(finderItem(action)),
+                          "\(action) belongs over a page")
+        }
+        for action in [NSTextFinder.Action.showReplaceInterface, .replace, .replaceAll] {
+            XCTAssertFalse(view.validateUserInterfaceItem(finderItem(action)),
+                           "\(action) has nothing to act on")
+        }
+        let bar = try findBar(of: pane)
+        XCTAssertFalse(bar.handles(.showReplaceInterface))
+        XCTAssertTrue(bar.handles(.nextMatch))
+    }
+
     // MARK: - Helpers
 
     /// A file in the folder of examples checked in beside the app — a real
@@ -603,6 +797,85 @@ final class HTMLPreviewTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("Examples/\(name)")
             .standardizedFileURL
+    }
+
+    /// A controller whose one `.html` tab is in reading with its page landed.
+    /// A load is asynchronous, so the mode change is waited on rather than
+    /// assumed.
+    @MainActor
+    private func makeReadingController(
+        text: String, in directory: URL
+    ) throws -> MainWindowController {
+        let controller = try makeController(showing: "page.html", text: text, in: directory)
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        windows.append(window)
+        let loaded = expectation(description: "the page loaded")
+        loaded.assertForOverFulfill = false
+        controller.previewPanes.html.onLoadFinished = { loaded.fulfill() }
+        controller.setPreviewMode(.reading)
+        window.layoutIfNeeded()
+        wait(for: [loaded], timeout: 5)
+        controller.previewPanes.html.onLoadFinished = nil
+        return controller
+    }
+
+    /// The pane's pill.
+    @MainActor
+    private func findBar(of pane: HTMLPreviewView) throws -> FindBarView {
+        try XCTUnwrap(descendant(of: pane, ofType: FindBarView.self))
+    }
+
+    /// Every find pill in the window — the editor's, the render's and the
+    /// page's — so a test can say which one of them came up.
+    @MainActor
+    private func allFindBars(in controller: MainWindowController) -> [FindBarView] {
+        guard let root = controller.window?.contentView else { return [] }
+        var found: [FindBarView] = []
+        var stack = [root]
+        while let view = stack.popLast() {
+            if let bar = view as? FindBarView { found.append(bar) }
+            stack.append(contentsOf: view.subviews)
+        }
+        return found
+    }
+
+    /// A Find menu item as the menu builds it: nil-targeted, with the action
+    /// in its tag.
+    private func finderItem(_ action: NSTextFinder.Action) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.action = #selector(NSTextView.performTextFinderAction(_:))
+        item.tag = action.rawValue
+        return item
+    }
+
+    /// One menu action put to the page, waited on. Every answer the find bar
+    /// gets crosses a process boundary, so nothing about it is true the
+    /// instant the call returns.
+    @MainActor
+    private func find(_ action: NSTextFinder.Action, in pane: HTMLPreviewView) throws {
+        let answered = expectation(description: "the page answered the find bar")
+        answered.assertForOverFulfill = false
+        pane.onFindAnswered = { answered.fulfill() }
+        try page(of: pane).performTextFinderAction(finderItem(action))
+        wait(for: [answered], timeout: 5)
+        pane.onFindAnswered = nil
+    }
+
+    /// The reader typing in the field, waited on the same way.
+    @MainActor
+    private func type(
+        _ query: String, into bar: FindBarView, of pane: HTMLPreviewView
+    ) throws {
+        let answered = expectation(description: "the page answered the query")
+        answered.assertForOverFulfill = false
+        pane.onFindAnswered = { answered.fulfill() }
+        bar.query = query
+        bar.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: bar.field)
+        )
+        wait(for: [answered], timeout: 5)
+        pane.onFindAnswered = nil
     }
 
     private func makeNote(named name: String, text: String) -> Note {
