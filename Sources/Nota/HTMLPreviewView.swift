@@ -121,6 +121,9 @@ final class HTMLPreviewView: NSView, PreviewContent {
         // beside them rather than flashing white into a dark window.
         page.setValue(false, forKey: "drawsBackground")
         page.underPageBackgroundColor = .textBackgroundColor
+        // A zoom asked for before WebKit was ever started — a tab reopened at
+        // one — belongs to the page the moment there is one.
+        page.pageZoom = zoomStorage
         addSubview(page)
 
         NSLayoutConstraint.activate([
@@ -132,6 +135,33 @@ final class HTMLPreviewView: NSView, PreviewContent {
 
         webView = page
         return page
+    }
+
+    // MARK: - Zoom
+
+    private var zoomStorage: CGFloat = 1
+
+    /// A page zooms rather than changing a font. In reading mode it is the
+    /// only thing on screen and the editor's font is a font nobody can see;
+    /// in the other two the editor is right there, and the keys mean what
+    /// they have always meant — which the window settles, not this.
+    var canZoom: Bool { webView != nil }
+
+    /// Half size to five times it. `pageZoom` is the page's own zoom, the one
+    /// a browser's ⌘+ turns: the layout is done again at the new size, so text
+    /// re-wraps to the column rather than being magnified as a picture of
+    /// itself.
+    private static let zoomRange: ClosedRange<CGFloat> = 0.5 ... 5
+
+    var zoom: CGFloat {
+        get { zoomStorage }
+        set {
+            let clamped = min(max(newValue, Self.zoomRange.lowerBound),
+                              Self.zoomRange.upperBound)
+            guard clamped != zoomStorage else { return }
+            zoomStorage = clamped
+            webView?.pageZoom = clamped
+        }
     }
 
     // MARK: - Content

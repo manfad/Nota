@@ -108,6 +108,10 @@ final class PDFPreviewView: NSView, PreviewContent {
             self, selector: #selector(pageDidChange),
             name: .PDFViewPageChanged, object: pdfView
         )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(scaleDidChange),
+            name: .PDFViewScaleChanged, object: pdfView
+        )
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
@@ -165,12 +169,40 @@ final class PDFPreviewView: NSView, PreviewContent {
 
     /// The column's size the page was last fitted to. A fit is worth doing
     /// again when the column changes size and at no other time — in
-    /// particular not on every layout pass, which would undo a zoom the
-    /// reader asked for between two of them.
+    /// particular not on every layout pass.
     private var fittedSize = NSSize.zero
 
-    /// Fits the page to the column's width, but never draws it larger than
-    /// actual size.
+    /// True while the scale is being set from here, so PDFKit's own
+    /// notification about it is not read back as the reader pinching.
+    private var isScaling = false
+
+    private var zoomStorage: CGFloat = 1
+
+    /// A document zooms rather than changing a font: it is the only thing on
+    /// screen in its tab, and its size has nothing to do with the editor's.
+    var canZoom: Bool { pdfView.document != nil }
+
+    /// Quarter size to eight times it, which is the range a page is still
+    /// something to look at in.
+    private static let zoomRange: ClosedRange<CGFloat> = 0.25 ... 8
+
+    /// How much bigger than the fitted page it is drawn. 1 is the fit itself,
+    /// which is what "Actual Size" goes back to.
+    var zoom: CGFloat {
+        get { zoomStorage }
+        set {
+            let clamped = min(max(newValue, Self.zoomRange.lowerBound),
+                              Self.zoomRange.upperBound)
+            guard clamped != zoomStorage else { return }
+            zoomStorage = clamped
+            fitPage(force: true)
+        }
+    }
+
+    var onZoomChange: ((CGFloat) -> Void)?
+
+    /// Fits the page to the column's width, never larger than actual size,
+    /// and then applies whatever zoom the reader has asked for on top.
     ///
     /// `autoScales` would fill the column with one page whatever that costs:
     /// a 300pt-wide page in a 900pt column is drawn at 3×, which is a page of
@@ -183,18 +215,43 @@ final class PDFPreviewView: NSView, PreviewContent {
         guard size.width > 1, size.height > 1 else { return }
         guard force || size != fittedSize else { return }
         fittedSize = size
-        let fit = pdfView.scaleFactorForSizeToFit
-        guard fit > 0 else { return }
-        let scale = min(fit, 1)
-        // PDFView clamps what it is handed, and its floor is well above the
-        // scale a page much wider than the column needs.
+        guard let scale = scaleForZoom else { return }
+        // PDFView clamps what it is handed, and neither of its own bounds
+        // knows about the fit this one is measured from.
         if scale < pdfView.minScaleFactor { pdfView.minScaleFactor = scale }
+        if scale > pdfView.maxScaleFactor { pdfView.maxScaleFactor = scale }
+        isScaling = true
         pdfView.scaleFactor = scale
+        isScaling = false
     }
 
-    /// The column changed size, so the page is fitted to it again. A zoom the
-    /// reader asked for lives until then, which is as long as the width it
-    /// was asked at does.
+    /// What the page should be drawn at: the fit, capped at actual size, times
+    /// the zoom.
+    private var scaleForZoom: CGFloat? {
+        let fit = fittedScale
+        return fit > 0 ? fit * zoomStorage : nil
+    }
+
+    /// The scale a zoom of 1 means — the page fitted to the column, and never
+    /// past actual size.
+    private var fittedScale: CGFloat { min(pdfView.scaleFactorForSizeToFit, 1) }
+
+    /// A pinch on the trackpad, which PDFKit handles itself. The zoom is read
+    /// back off the scale it landed on rather than being fought over, so the
+    /// next resize keeps it and the tab remembers it.
+    @objc private func scaleDidChange(_ notification: Notification) {
+        guard !isScaling, pdfView.document != nil else { return }
+        let fit = fittedScale
+        guard fit > 0 else { return }
+        let zoom = pdfView.scaleFactor / fit
+        guard abs(zoom - zoomStorage) > 0.0001 else { return }
+        zoomStorage = zoom
+        onZoomChange?(zoom)
+    }
+
+    /// The column changed size, so the page is fitted to it again — at the
+    /// zoom the reader left it at, since that is measured against the fit
+    /// rather than against the paper.
     override func layout() {
         super.layout()
         fitPage()

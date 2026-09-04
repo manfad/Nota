@@ -178,6 +178,16 @@
   the match selected and hands the keyboard back to the document. A document cannot be typed into, so the glass is
   only a glass and Find and Replace… is greyed out — the one Find item a PDF turns down. PDFKit's own find bar never
   appears: `NotaPDFView` takes `performTextFinderAction:` off it.
+- ⌘+ / ⌘- / ⌘0 zoom the page here (done 2026-09-04). The three keys are one pair of hands doing two jobs, and what
+  decides is which of the two the reader can see: with an editor on screen — any text tab in edit or split — they are
+  the font size they have always been, and the Markdown and LaTeX renders follow it. With the content alone on screen
+  and its size nothing to do with a font — a PDF, a picture, an HTML page in reading mode — they zoom that content:
+  ×1.25 a press, "Actual Size" back to however it draws itself (a page or a picture fitted to the column, a page at
+  100%), clamped to 0.25…8 for a document and a picture and 0.5…5 for a page. A render in reading mode stays with the
+  font, since the font already *is* the zoom there. The first two View items say which job they are doing — "Zoom In"
+  / "Zoom Out" against "Increase Font Size" / "Decrease Font Size" — and "Actual Size" is the name of both. The zoom
+  is the tab's for as long as the tab is open and is not in `session.json`: how close you were reading is not where
+  you were reading. A pinch on a document is the same number, read back off the scale PDFKit lands on.
 - Footer: the middle counts pages (`12 pages`, `1 page`), the right says which one (`Page 3 of 12`), and it is empty
   when there is no document to be in. Everything else in the chrome — the strip, the vim badge, zen — is unchanged.
 

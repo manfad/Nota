@@ -16,6 +16,11 @@ import AppKit
 final class ImagePreviewView: NSView, PreviewContent {
 
     private let scrollView = NSScrollView()
+    /// What the scroll view scrolls: the room the picture is looked at in,
+    /// which is the column's own until a zoom makes the picture bigger than
+    /// it. The picture sits centred inside it, so the two frames are one
+    /// calculation rather than the image view standing in for both.
+    private let canvas = NSView()
     private let imageView = NSImageView()
     /// Shown instead of the picture when the file has gone — deleted while
     /// the tab was open, or missing by the time the session comes back.
@@ -42,13 +47,17 @@ final class ImagePreviewView: NSView, PreviewContent {
         scrollView.backgroundColor = .textBackgroundColor
         addSubview(scrollView)
 
+        // Up as well as down, since a zoom is allowed to draw the picture
+        // past its own pixels — the frame it is given is always exactly the
+        // size it should be drawn at, so nothing here fills or distorts.
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
         // `animates` is what makes a GIF a moving picture rather than its
         // first frame.
-        imageView.imageScaling = .scaleProportionallyDown
-        imageView.imageAlignment = .alignCenter
         imageView.animates = true
         imageView.isEditable = false
-        scrollView.documentView = imageView
+        canvas.addSubview(imageView)
+        scrollView.documentView = canvas
 
         // The same quiet voice the rest of the app uses for something that is
         // not there: the editor's own font family, secondary colour, centred
@@ -102,16 +111,68 @@ final class ImagePreviewView: NSView, PreviewContent {
         missingLabel.stringValue = missingName.map { "Couldn’t open “\($0)”." } ?? ""
     }
 
-    /// The picture takes the column's whole room, and `scaleProportionallyDown`
-    /// draws it inside that: at its own size when it is smaller, shrunk until
-    /// it fits when it is bigger, centred either way. So the whole picture is
-    /// always on screen — a picture is looked at whole, unlike a document,
-    /// which is read a page at a time.
+    /// The picture is drawn at its own size when the column is big enough to
+    /// hold it and shrunk until it fits when it is not, centred either way, so
+    /// the whole picture is on screen — a picture is looked at whole, unlike a
+    /// document, which is read a page at a time. A zoom multiplies that, and
+    /// past the column's room the canvas grows and the picture is scrolled
+    /// around instead.
     private func layoutImage() {
         let room = scrollView.contentSize
         guard room.width > 1, room.height > 1 else { return }
-        imageView.frame = NSRect(origin: .zero, size: room)
+        guard let size = imageView.image?.size, size.width > 1, size.height > 1 else {
+            canvas.frame = NSRect(origin: .zero, size: room)
+            imageView.frame = canvas.bounds
+            return
+        }
+        let drawn = NSSize(width: (size.width * fittedScale(in: room) * zoomStorage).rounded(),
+                           height: (size.height * fittedScale(in: room) * zoomStorage).rounded())
+        canvas.frame = NSRect(
+            origin: .zero,
+            size: NSSize(width: max(room.width, drawn.width),
+                         height: max(room.height, drawn.height))
+        )
+        imageView.frame = NSRect(
+            x: ((canvas.frame.width - drawn.width) / 2).rounded(),
+            y: ((canvas.frame.height - drawn.height) / 2).rounded(),
+            width: drawn.width, height: drawn.height
+        )
     }
+
+    /// What a zoom of 1 means: the picture at its own size, or shrunk to fit
+    /// the column when it is bigger than that. Never blown up — a small icon
+    /// is a small icon, and stretching it across the column would be showing
+    /// you something the file does not say.
+    private func fittedScale(in room: NSSize) -> CGFloat {
+        guard let size = imageView.image?.size, size.width > 1, size.height > 1 else { return 1 }
+        return min(1, min(room.width / size.width, room.height / size.height))
+    }
+
+    // MARK: - Zoom
+
+    private var zoomStorage: CGFloat = 1
+
+    /// A picture zooms rather than changing a font: it is the only thing on
+    /// screen in its tab, and its size has nothing to do with the editor's.
+    var canZoom: Bool { imageView.image != nil }
+
+    private static let zoomRange: ClosedRange<CGFloat> = 0.25 ... 8
+
+    /// How much bigger than the fitted picture it is drawn. 1 is the fit
+    /// itself, which is what "Actual Size" goes back to.
+    var zoom: CGFloat {
+        get { zoomStorage }
+        set {
+            let clamped = min(max(newValue, Self.zoomRange.lowerBound),
+                              Self.zoomRange.upperBound)
+            guard clamped != zoomStorage else { return }
+            zoomStorage = clamped
+            layoutImage()
+        }
+    }
+
+    /// The size the picture is actually drawn at, for the tests.
+    var drawnSize: NSSize { imageView.frame.size }
 
     override func layout() {
         super.layout()
