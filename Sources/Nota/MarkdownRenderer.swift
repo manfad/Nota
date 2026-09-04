@@ -196,6 +196,19 @@ enum MarkdownRenderer {
         let inline: InlinePresentationIntent?
         let link: URL?
         let imageURL: URL?
+
+        /// The same piece with the first `count` characters gone, spending
+        /// what it took from the count — how a task item's `[ ]` is taken off
+        /// its opening run without the rest of the item noticing.
+        func dropping(_ count: inout Int) -> Piece {
+            guard count > 0, imageURL == nil, !text.isEmpty else { return self }
+            let taken = min(count, text.count)
+            count -= taken
+            return Piece(
+                text: String(text.dropFirst(taken)),
+                inline: inline, link: link, imageURL: imageURL
+            )
+        }
     }
 
     /// Every character sharing one innermost presentation intent: a heading,
@@ -373,6 +386,11 @@ enum MarkdownRenderer {
         // marker — each start at a tab stop, and the text after them lines up
         // at `headIndent` however the paragraph wraps.
         let marker = wantsMarker ? block.listMarker : nil
+        // Foundation's parser has no task-list extension, so a task item is
+        // recognised here: a list item whose paragraph opens with a box. The
+        // box takes the bullet's own slot — a task item shows a checkbox and
+        // no bullet — and the `[ ]` comes off the words.
+        let task = marker == nil ? nil : TaskList.marker(atStartOf: block.plainText)
         let quoteDepth = block.quoteDepth
         let indentLevels = quoteDepth + block.listDepth
         let cells = quoteDepth + (marker == nil ? 0 : 1)
@@ -398,7 +416,15 @@ enum MarkdownRenderer {
                 .foregroundColor: NSColor.secondaryLabelColor,
             ]))
         }
-        if let marker {
+        if let task {
+            result.append(NSAttributedString(
+                attachment: TaskCheckboxAttachment(isDone: task.isDone, font: blockFont)
+            ))
+            result.append(NSAttributedString(string: "\t", attributes: [
+                .font: blockFont,
+                .foregroundColor: NSColor.labelColor,
+            ]))
+        } else if let marker {
             result.append(NSAttributedString(string: marker + "\t", attributes: [
                 .font: blockFont,
                 .foregroundColor: NSColor.labelColor,
@@ -416,7 +442,11 @@ enum MarkdownRenderer {
                 .notaCodeBlock: true,
             ]))
         } else {
+            // The box is drawn, not spelled: its `[ ]` comes off the front of
+            // the item's own words on the way in.
+            var unwritten = task?.length ?? 0
             for piece in block.pieces {
+                let piece = piece.dropping(&unwritten)
                 append(piece, to: result, font: blockFont, base: font,
                        assets: assets, maths: maths, width: width)
             }

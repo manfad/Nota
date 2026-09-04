@@ -63,7 +63,8 @@
 - Settings toggle "Word wrap" (default on). Off: a long line runs on and the editor scrolls sideways; the gutter stays
   pinned at the left edge. The Markdown render always wraps.
 - Settings (⌘,): font family, size, line spacing, editor padding, word wrap, vim mode, hotkey.
-- Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` · `N pt` beside gear.
+- Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` (· `3 / 7 done` on a `.md` with
+  task items) · `N pt` beside gear.
 
 ## Markdown preview — three modes (⇧⌘P cycles, View menu; per tab, remembered in the session)
 - **Editor** (default), **Split**, **Reading**. ⇧⌘P cycles editor → split → reading → editor; ⌥⇧⌘P jumps to reading and
@@ -122,6 +123,18 @@
   editor so that source is visible and puts the caret at the block's first character (vim: normal mode, block caret on
   it) — in split only; reading takes no block clicks at all. Moving the caret in the editor lights the block it is in and scrolls the preview to keep it visible. One block
   lit at a time; the band clears when the text changes under it. No proportional scroll following any more.
+- **Task lists (done 2026-09-04).** `- [ ]` / `- [x]` (`[X]` too, and in an ordered list) draw as real checkboxes —
+  an SF Symbol `square` / `checkmark.square.fill` at the block's own font size, standing in the slot the bullet would
+  have taken, so a task item shows a box and no bullet and the `[ ]` never reaches the page. Foundation's parser has
+  no task-list extension, so `TaskList` recognises one twice over: in the rendered text, as a list item whose
+  paragraph opens with a box, and in the source, as a line that opens with a list marker and a box. Pressing a box —
+  in split *and* in reading, since a checkbox is a control rather than a jump — finds the item's line through the
+  source map, rewrites the one character between its brackets on the editor's `shouldChangeText` / `didChangeText`
+  path so ⌘Z puts it back, and leaves the caret and the editor's scroll exactly where they were; it lights no band,
+  selects nothing and starts no drag, and the render comes back changed the way it does after any keystroke. The
+  footer adds `3 / 7 done` after the counts, in the footer's own `·`, for a `.md` with at least one task item and for
+  nothing else — counted on the spot with the words for an ordinary note, and on the background word-count pass for a
+  big one, never on the main thread.
 
 ### LaTeX
 - `$…$` inline, `$$…$$`, and a ```` ```math ```` fence (`latex` and `tex` open one too) are laid out by Nota itself: a
@@ -386,8 +399,9 @@
    row — taking `N` or `N:M` and moving the caret as you type, off the note's `LineIndex` rather than a scan. See the
    Search section above for what it does; `:N` still does it in vim, untouched.
 4. **File › Open Recent** (NSDocumentController's list, cleared from the same submenu) and tab reorder by drag in the strip.
-5. **Task lists** in the render: `- [ ]` / `- [x]` as real checkboxes, ticking one rewrites the source character; counted
-   `3 / 7 done` in the footer for a `.md` that has any.
+5. **Task lists (done 2026-09-04).** `- [ ]` / `- [x]` as real checkboxes in the render, ticking one rewrites the one
+   source character undoably; counted `3 / 7 done` in the footer for a `.md` that has any. See the Markdown preview
+   section for what it does.
 6. **Print / PDF of the render.** ⌥⌘P prints the reading layout (⌘P is the tab switcher); Export as PDF… in File, same
    layout, page margins from the render's inset. Plain-text tabs print the text with line numbers if the gutter is on.
    Export a `.tex` tab as PDF via `pdflatex` / `tectonic` / `xelatex` if one is installed, showing the result in a PDF

@@ -121,6 +121,11 @@ protocol PreviewContent: NSView {
     /// Run when a block is clicked, with the source it came from.
     var onBlockClick: ((NSRange) -> Void)? { get set }
 
+    /// Run when a task item's checkbox is clicked, with the source of the
+    /// item it belongs to. Unlike a block click this fires in reading mode
+    /// too: a checkbox is a control, not a jump.
+    var onTaskToggle: ((NSRange) -> Void)? { get set }
+
     /// Lights the block the editor's caret is sitting in and brings it into
     /// view. Returns whether there was one to light.
     @discardableResult
@@ -213,6 +218,11 @@ extension PreviewContent {
     }
 
     var onBlockClick: ((NSRange) -> Void)? {
+        get { nil }
+        set { }
+    }
+
+    var onTaskToggle: ((NSRange) -> Void)? {
         get { nil }
         set { }
     }

@@ -49,7 +49,26 @@ enum TextStats {
     /// segments, then the same with segments dropped from the right one at a
     /// time, and last of all the bare numbers (`"38 · 152"`). Empty when
     /// nothing is enabled, which is what hides the label.
+    ///
+    /// `tasks` is a `.md`'s ticked-over-total, which is not a segment anyone
+    /// turns on: it is there when the note has task items and gone when it
+    /// has none. It rides after the counts in every variant, and is given up
+    /// only when even the bare numbers with it will not fit.
     static func countVariants(
+        words: Int, characters: Int, images: Int, lines: Int, segments: [Segment],
+        tasks: (done: Int, total: Int)? = nil
+    ) -> [String] {
+        let counts = countVariants(
+            words: words, characters: characters, images: images, lines: lines,
+            segments: segments
+        )
+        guard let tasks, tasks.total > 0 else { return counts }
+        let phrase = TaskList.phrase(done: tasks.done, total: tasks.total)
+        guard !counts.isEmpty else { return [phrase] }
+        return counts.map { $0 + separator + phrase } + counts
+    }
+
+    private static func countVariants(
         words: Int, characters: Int, images: Int, lines: Int, segments: [Segment]
     ) -> [String] {
         guard !segments.isEmpty else { return [] }
