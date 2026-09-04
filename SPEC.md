@@ -4,7 +4,7 @@
 
 ## Model
 - **Tabs are the notes.** An open tab is the unit; the cache dir is the truth until ⌘S.
-  Closed tabs are gone (after the Save / Don't Save / Cancel prompt; Don't Save = ⌘D).
+  Closed tabs are gone (after the Save / Don't Save / Cancel prompt; Don't Save = ⌘D in the alert).
 - Files are plain text of any kind — .md .txt .xml .json .css .js .html .yaml .toml .csv .log .ini .sh .py .swift and
   anything else that is text (Notepad++ model). Nota registers as an editor for text/source types (Finder "Open With",
   drag onto the Dock icon, drop onto the window). No syntax highlighting. Not .docx / .rtf / binaries —
@@ -89,7 +89,58 @@
   Settings toggle "Gutter separator" (default off) draws a hairline (separatorColor) along the gutter's inner edge.
 - Settings toggle "Word wrap" (default on). Off: a long line runs on and the editor scrolls sideways; the gutter stays
   pinned at the left edge. The Markdown render always wraps.
-- Settings (⌘,): font family, size, line spacing, editor padding, word wrap, vim mode, hotkey.
+- Settings (⌘,): a source list of seven pages down the left — General, Appearance, Editor, Preview,
+  Status bar, Shortcuts, About — over one shared Save button, which applies every page's draft together
+  and is greyed until something changes. The sidebar is a `.sidebar`-material column, 180pt, running the
+  full height with the traffic lights over it (the titlebar is transparent and the title is not drawn);
+  each row is an accent-coloured SF Symbol beside its name, and the page on screen is a rounded row
+  filled in the accent colour. The pane beside it carries the page's title at the top, centred and bold,
+  then the controls in inset rounded groups: a 10pt-radius card, a hairline between one 44pt row and the
+  next, the label left and the control on the right edge, an on/off setting wearing an `NSSwitch` rather
+  than a checkbox, and a quiet footnote under the group where one is owed. **General** — language, theme
+  ("System Default follows the Mac."). **Appearance** — font family, size, line spacing, editor padding,
+  then a **Window** group of five: hide the tab bar, auto-hide the tab bar, hide the traffic lights, the
+  bookmark button, the Settings button, under a footnote saying the keys (⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W) all
+  keep working without them and what auto-hide does. "Auto-hide tab bar" is greyed while "Hide tab bar"
+  is on.
+  **Editor** — word wrap, line numbers, gutter separator, vim mode. **Preview** — start supported files
+  in preview mode. **Status bar** — show status bar, then which regions it shows. **About** — the app
+  icon at 96pt, "Nota", `Version N.N.N` and one line saying what Nota is. The window is 760×520,
+  resizable down to a floor; a page taller than the pane scrolls inside it, and the page you left it on
+  is the page it opens on next time, for the life of the window.
+- **Auto-hide tab bar** (Settings › Appearance › Window, default off): the strip leaves the layout exactly
+  as "Hide tab bar" takes it — the split runs to the top of the window and the editor keeps the same 28pt
+  drag band — but the top 28pt of the window is a hot zone. The pointer reaching it slides the strip in
+  over the split (0.15s, alpha and a slide down from its own height), opaque, with a `separatorColor`
+  hairline along its bottom edge; nothing is pushed down for it. The pointer leaving the strip or the band
+  starts a 0.3s grace period, after which the strip slides away again; coming back cancels it, and so does
+  a reorder drag, a tear-off, an open tab context menu, or a pointer still over the strip — each buys
+  another grace period rather than interrupting the gesture. The hot zone takes no clicks: hit testing
+  goes straight through it to the document. Zen mode and "Hide tab bar" both win: under either the strip
+  is gone for good, the hot zone watches for nothing, and leaving zen does not pop a strip that is waiting
+  on the pointer.
+- **The version** is one string, `AppVersion.current`, and the About page is where it is read. Every
+  commit bumps its patch number by one and writes the same number into `Info.plist`, so the About page,
+  the Finder and the bundle never disagree — `.githooks/pre-commit` does it, installed with
+  `git config core.hooksPath .githooks`, and a commit that sets the version by hand is left alone.
+- **Shortcuts page**: the Summon recorder first (it is the one key that works while Nota is not in front),
+  in a group of its own, then one group per menu the commands live in — File, Window, Find, Edit, View,
+  Nota — each under a small caption, one row per command. The page scrolls; the rest of the window does not.
+  Adjustable: New Tab ⌘T, New Window ⇧⌘N, Open… ⌘O, Close Tab ⌘W, Save ⌘S, Save As… ⇧⌘S, Bookmark This
+  Tab ⌘D, Show Bookmarks… ⇧⌘D, Go to Tab… ⌘P, Next Tab ⌃Tab, Previous Tab ⌃⇧Tab, Find… ⌘F, Find Next ⌘G,
+  Find Previous ⇧⌘G, Search All Notes… ⇧⌘F, Go to Line… ⌘L, Toggle Comment ⌘/, Indent ⌘], Outdent ⌘[,
+  Increase Font Size ⌘+, Decrease Font Size ⌘-, Actual Size ⌘0, Show Images ⌘B, Markdown Preview ⇧⌘P,
+  Reading Mode ⌥⇧⌘P, Zen Mode ⌥⌘Z, Settings… ⌘,. The system-standard items are not adjustable and are
+  reserved against: ⌘Q ⌘H ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A ⌘M, and neither is ⌘N, Nota's older new-tab key.
+  A row records the next combination you press: ⌘ or ⌃ has to be in it (⌘ with a letter is fine), Esc
+  cancels, Delete puts the command's own key back. Edits are a draft like everything else here.
+  Two rows on one combination, or a row on a reserved one, shows a red line naming both and holds Save
+  back until it is resolved. **Reset to Defaults**, at the foot of the page, clears every override in
+  the draft.
+  Only the moved keys are stored, as JSON under one defaults key, so a default Nota changes later moves
+  with it. The menu bar reads the table when it is built and is rebuilt whole the moment the table
+  changes — the menu items, the bookmarks toggle and the find bar's tooltips all come from that one
+  place, so a moved key works everywhere at once.
 - Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` (· `3 / 7 done` on a `.md` with
   task items) · `N pt` beside gear.
 - **Line operations (done 2026-09-04)** — the hands Notepad++ leaves in the fingers, in the Edit menu and outside vim:
@@ -409,6 +460,7 @@
 
 ## Tabs
 - One width for every tab, `clamp((viewport − plus − gaps) / n, 40, 180)`, shrinking as tabs are added; the strip never scrolls. The selected tab is raised to 60pt so its ✕ fits and the others shrink evenly to pay for it. Titles clip with a fade rather than an ellipsis; under 60pt the trailing slot goes and the unsaved dot rides on the icon. A separator hairline shows only between two plain tabs. The + rides after the last tab and pins at the trailing edge once the strip is full; it opens a new tab (same as ⌘T). ⌘P fuzzy tab switcher by title.
+- The strip's top-right corner holds two buttons past the +: the bookmark button (the ⌘P picker in bookmarks mode) and, last before the reserve, a Settings gear (⌘, by another door). Both pin at the trailing edge; the tabs and the + step left by exactly the slots they take.
 - The switcher's first row sits above its search field and never filters away: "Add new tab", with a `plus`, which ↑ from the top of the list reaches and Return (or a click) turns into a new tab, ⌘T by another door. It is there in the `@` mode too. It is a one-row table of its own, sharing the list's cell view and taking the list's own resolved table style, so it is drawn as a list row — same inset, same rounded selection highlight, icon and title at the list rows' own x. In the bookmarks panel the row is the front tab's bookmark instead: "Bookmark this tab" with a `bookmark`, or "Remove bookmark from this tab" with `bookmark.fill` once it is one, and choosing it is ⇧⌘D by another door; with no tab to bookmark it is greyed and takes no selection.
 - Every tab carries a leading icon for its kind, in the strip and in the switcher's rows, from `FileKindIcon`: most kinds (Markdown, plain text/no extension, PDF, EPUB, HTML, TeX, SQL, JSON, YAML, TOML, XML, CSV, common code and image extensions, and more — see `FileKindIcon.artStem(forExtension:)`) draw this app's own hand-drawn icon set, embedded as SVG text in the generated `FileKindArt.swift`; a kind the set has no art for falls back to an SF Symbol — pictures without art `photo`, logs `list.bullet.rectangle`, remaining code extensions `chevron.left.forwardslash.chevron.right`, an unsaved note `doc`, anything else `text.page` — with an older spelling behind any SF Symbol the running system lacks. Heading rows keep their bare indent, with no icon.
 - `@` as the switcher's first character (Done 9) swaps the list for the front `.md` tab's headings, indented by level, and the rest of the query fuzzy-filters those instead; `MarkdownHeadings` reads them straight from the note's own text — ATX and setext, fences skipped the way `MarkdownSourceMap` skips them — off the main thread once a note is past `BigFile.threshold`. A tab that is not `.md` answers with a quiet "No headings" row.
@@ -441,7 +493,9 @@
   docks it there or leaves the new window standing, and Esc puts it back.
 
 ## Summon
-- Global hotkey, default ⌥Space, toggles show/hide. Configurable in Settings (key recorder). No menu-bar item.
+- Global hotkey, default ⌥Space, toggles show/hide. Configurable in Settings › Shortcuts, at the top of the
+  tab, with a key recorder and Clear. No menu-bar item. It is a key *code*, not a key equivalent — Carbon
+  registers a system-wide hotkey by position — which is why it is stored apart from the app shortcuts below it.
 
 ## Vim mode (Settings checkbox, off by default)
 - Opens in normal mode. Esc alternatives: ⌃[ and ⌃C only (no jk).

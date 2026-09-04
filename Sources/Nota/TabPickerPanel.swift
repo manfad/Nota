@@ -6,7 +6,7 @@ protocol TabPickerPanelDelegate: AnyObject {
     /// The "Add new tab" row was chosen — ⌘T, by another door.
     func tabPickerDidRequestNewTab(_ picker: TabPickerPanel)
     /// The top row in bookmarks mode: bookmark the tab in front, or take the
-    /// bookmark off it — ⇧⌘D, by another door.
+    /// bookmark off it — ⌘D, by another door.
     func tabPickerDidRequestBookmarkCurrentTab(_ picker: TabPickerPanel)
     /// A bookmark row was chosen: select the tab if the file is already open
     /// in this window, otherwise open it (SPEC Todo 13).
@@ -26,7 +26,7 @@ protocol TabPickerPanelDelegate: AnyObject {
 /// list — nothing filters it away — but ↑ from the top of the list lands on it
 /// and Return there chooses it. In `.tabs` and `.headings` it reads "Add new
 /// tab", so ⌘P alone can do what ⌘T does; in `.bookmarks` it is the front
-/// tab's bookmark toggle, ⇧⌘D by another door. It is a one-row table of its
+/// tab's bookmark toggle, ⌘D by another door. It is a one-row table of its
 /// own, sharing the list's cell view and table style, so it is drawn as a list
 /// row rather than as something that only looks like one.
 final class TabPickerPanel: NSObject {

@@ -147,4 +147,25 @@ enum KeyCodeNames {
     static func name(for keyCode: UInt32) -> String {
         named[keyCode] ?? "Key \(keyCode)"
     }
+
+    /// The same handful of names, spelled for a key equivalent rather than a
+    /// key code — what a `KeyCombo` holds. Anything printable reads as itself,
+    /// upper-cased the way the menu bar draws it.
+    private static let namedKeys: [String: String] = [
+        "\t": "Tab",
+        " ": "Space",
+        "\r": "Return",
+        "\u{3}": "Return",
+        "\u{8}": "Delete",
+        "\u{7F}": "Delete",
+        "\u{1B}": "Esc",
+        String(UnicodeScalar(NSUpArrowFunctionKey)!): "↑",
+        String(UnicodeScalar(NSDownArrowFunctionKey)!): "↓",
+        String(UnicodeScalar(NSLeftArrowFunctionKey)!): "←",
+        String(UnicodeScalar(NSRightArrowFunctionKey)!): "→",
+    ]
+
+    static func name(forKey key: String) -> String {
+        namedKeys[key] ?? key.uppercased()
+    }
 }

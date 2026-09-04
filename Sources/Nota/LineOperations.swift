@@ -133,7 +133,7 @@ enum LineOperations {
         )
     }
 
-    // MARK: - ⇧⌥↓ and ⌘D
+    // MARK: - ⇧⌥↓ and Select Next Occurrence
 
     /// A second copy of the lines, straight below them, with the caret or the
     /// selection on the copy — the line you meant to work on is the new one.

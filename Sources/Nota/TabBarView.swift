@@ -38,6 +38,8 @@ protocol TabBarViewDelegate: AnyObject {
     func tabBarDidRequestBookmarks(_ bar: TabBarView)
     /// "Bookmark" / "Remove Bookmark" in a tab's context menu.
     func tabBar(_ bar: TabBarView, didToggleBookmarkAt index: Int)
+    /// The gear past the bookmark button: Settings, ⌘, by another door.
+    func tabBarDidRequestSettings(_ bar: TabBarView)
 }
 
 /// Tear-off and bookmarks are the parts of the strip a delegate may ignore —
@@ -48,6 +50,7 @@ extension TabBarViewDelegate {
     func tabBarDragEnded(_ bar: TabBarView, committed: Bool, at screenPoint: NSPoint) {}
     func tabBarDidRequestBookmarks(_ bar: TabBarView) {}
     func tabBar(_ bar: TabBarView, didToggleBookmarkAt index: Int) {}
+    func tabBarDidRequestSettings(_ bar: TabBarView) {}
 }
 
 /// The strip of tabs that sits in the title bar next to the traffic lights.
@@ -95,6 +98,7 @@ final class TabBarView: NSView {
     private var itemViews: [TabItemView] = []
     private let newTabButton = NewTabButton()
     private let bookmarksButton = BookmarksButton()
+    private let settingsButton = SettingsButton()
 
     /// Where the sliding window starts when the tabs no longer fit even at
     /// their floor. Fed back into the next layout so the window stays put
@@ -116,6 +120,32 @@ final class TabBarView: NSView {
 
     private var closeFreeze: CloseFreeze?
     private var hoverArea: NSTrackingArea?
+
+    /// The strip normally draws on the transparent title bar and brings no
+    /// background of its own. Auto-hide lifts it off the layout and lays it
+    /// over the document instead, where it has to be opaque — a fill and a
+    /// hairline along the edge it now sits on.
+    var drawsOpaqueBackground = false {
+        didSet {
+            guard drawsOpaqueBackground != oldValue else { return }
+            needsDisplay = true
+        }
+    }
+
+    /// The pointer arriving at and leaving the strip, for an owner that has
+    /// to know: an auto-hiding strip stays for as long as the pointer is on
+    /// it and slides away behind it.
+    var onPointerEntered: (() -> Void)?
+    var onPointerExited: (() -> Void)?
+
+    /// A gesture the pointer owns is underway in the strip — a reorder drag,
+    /// or a tab torn off it. An auto-hiding strip must not slide out from
+    /// under one.
+    var isDraggingForOverlay: Bool { dragSession != nil || isTornOff }
+
+    /// A tab's context menu is up. The pointer is free to walk off the strip
+    /// while it is, and the strip has to still be there when the menu closes.
+    private(set) var isShowingContextMenuForOverlay = false
 
     /// State for a tab currently being dragged along the strip. `nil` when
     /// nothing is being dragged.
@@ -170,6 +200,9 @@ final class TabBarView: NSView {
         bookmarksButton.target = self
         bookmarksButton.action = #selector(requestBookmarks)
         addSubview(bookmarksButton)
+        settingsButton.target = self
+        settingsButton.action = #selector(requestSettings)
+        addSubview(settingsButton)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -289,6 +322,14 @@ final class TabBarView: NSView {
     /// Test hook: where the bookmark button sits.
     internal var bookmarksButtonFrameForTesting: NSRect { bookmarksButton.frame }
 
+    /// Test hook: where the Settings gear sits.
+    internal var settingsButtonFrameForTesting: NSRect { settingsButton.frame }
+
+    /// Test hook: which of the two trailing buttons Settings has hidden.
+    internal var trailingButtonsHiddenForTesting: (bookmark: Bool, settings: Bool) {
+        (bookmarksButton.isHidden, settingsButton.isHidden)
+    }
+
     /// Test hook: which tabs are drawing the bookmark badge on their icon.
     internal var bookmarkBadgesForTesting: [Bool] { itemViews.map(\.showsBookmarkBadge) }
 
@@ -301,6 +342,9 @@ final class TabBarView: NSView {
 
     /// Test hook: clicks the bookmark button at the trailing edge.
     internal func pressBookmarksButtonForTesting() { requestBookmarks() }
+
+    /// Test hook: clicks the Settings gear.
+    internal func pressSettingsButtonForTesting() { requestSettings() }
 
     /// Test hook: closes the tab at `index` the way its ✕ does — ⌘W arrives
     /// through `setItems` instead and never freezes the widths.
@@ -406,6 +450,10 @@ final class TabBarView: NSView {
         delegate?.tabBarDidRequestBookmarks(self)
     }
 
+    @objc private func requestSettings() {
+        delegate?.tabBarDidRequestSettings(self)
+    }
+
     /// The tab's context menu (right-click, ctrl-click): bookmark it, or
     /// close it. Built here rather than on the tab view so the strip's own
     /// indices — the only ones the delegate knows — are what the items carry.
@@ -429,6 +477,7 @@ final class TabBarView: NSView {
         close.target = self
         close.tag = index
         menu.addItem(close)
+        menu.delegate = self
         return menu
     }
 
@@ -522,10 +571,16 @@ final class TabBarView: NSView {
     /// widths are free to settle again.
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
+        onPointerExited?()
         hoveredIndex = nil
         guard closeFreeze != nil else { return }
         closeFreeze = nil
         needsLayout = true
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        onPointerEntered?()
     }
 
     override func layout() {
@@ -573,9 +628,9 @@ final class TabBarView: NSView {
         }
     }
 
-    /// The bookmark button is pinned at the trailing edge and never moves
-    /// with the tabs, so it is placed the same way whatever else the strip
-    /// is doing — a drag included.
+    /// The bookmark button and the gear are pinned at the trailing edge and
+    /// never move with the tabs, so they are placed the same way whatever
+    /// else the strip is doing — a drag included.
     private func placeBookmarksButton() {
         let size = TabStripLayout.bookmarkSlot
         bookmarksButton.frame = NSRect(
@@ -584,12 +639,31 @@ final class TabBarView: NSView {
             width: size,
             height: size
         )
+        let gear = TabStripLayout.settingsSlot
+        settingsButton.frame = NSRect(
+            x: TabStripLayout.settingsX(bounds.width),
+            y: (bounds.height - gear) / 2,
+            width: gear,
+            height: gear
+        )
+        // A button Settings has switched off is not drawn and not clickable;
+        // the layout has already given its slot back to the tabs.
+        bookmarksButton.isHidden = !TabStripLayout.controls.bookmark
+        settingsButton.isHidden = !TabStripLayout.controls.settings
     }
 
     /// Brave draws a hairline only between two plain tabs — never beside the
     /// selected one, never beside the one under the pointer. It lives in the
     /// gap, which belongs to the strip rather than to either tab.
     override func draw(_ dirtyRect: NSRect) {
+        // Overlaying the document rather than sitting in the title bar: the
+        // strip brings its own ground and a hairline to stand on.
+        if drawsOpaqueBackground {
+            NSColor.windowBackgroundColor.setFill()
+            NSBezierPath(rect: bounds).fill()
+            NSColor.separatorColor.setFill()
+            NSBezierPath(rect: NSRect(x: 0, y: 0, width: bounds.width, height: 1)).fill()
+        }
         super.draw(dirtyRect)
 
         if let slot = dropCaretSlot {
@@ -948,6 +1022,20 @@ final class TabBarView: NSView {
     }
 }
 
+/// A tab's context menu, only so the strip knows while one is up: an
+/// auto-hiding strip has to still be there when the menu closes, however far
+/// the pointer wandered to reach an item.
+extension TabBarView: NSMenuDelegate {
+    func menuWillOpen(_ menu: NSMenu) {
+        isShowingContextMenuForOverlay = true
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        isShowingContextMenuForOverlay = false
+        onPointerExited?()
+    }
+}
+
 /// Trailing control on the tab strip. Same density as a tab (24pt), not an
 /// iOS-sized hit target; a quiet template symbol that lights up under the
 /// pointer, and — like the tabs and the ✕ — a press it must keep for itself
@@ -1026,6 +1114,16 @@ final class NewTabButton: StripButton {
 final class BookmarksButton: StripButton {
     init() {
         super.init(symbolName: "bookmark", name: "Bookmarks", toolTip: "Bookmarks")
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+}
+
+/// The Settings gear in the strip's top-right corner, past the bookmark: the
+/// same window ⌘, opens.
+final class SettingsButton: StripButton {
+    init() {
+        super.init(symbolName: "gearshape", name: "Settings", toolTip: "Settings  ⌘,")
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }

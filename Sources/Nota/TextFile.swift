@@ -210,14 +210,19 @@ enum TextFile {
     /// rich-text or zipped file is not a note either. PDF is not in this
     /// list: it is content Nota opens, only as a viewer instead of an
     /// editor, so `FileSniff` decides it by its magic bytes rather than by
-    /// exclusion.
+    /// exclusion. Nor is video: the system files `.ts` and `.mts` under
+    /// MPEG-2 transport stream, and a TypeScript module dropped on the window
+    /// used to be refused for it. A real video never decodes as text, so when
+    /// the bytes say text the name's claim to be a film is simply wrong.
     static let deliberatelyExcludedTypes: [UTType] = [
-        .rtf, .image, .audiovisualContent, .archive,
+        .rtf, .image, .archive,
     ]
 
-    /// The same list, plus PDF, for the places that are still deciding by
-    /// extension alone rather than by content.
-    private static let excludedTypes: [UTType] = deliberatelyExcludedTypes + [.pdf]
+    /// The same list, plus PDF and video, for the places that are still
+    /// deciding by extension alone rather than by content — where a `.ts`
+    /// that cannot be read really might be a film.
+    private static let excludedTypes: [UTType] = deliberatelyExcludedTypes
+        + [.pdf, .audiovisualContent]
 
     /// Whether a file dropped on the editor is one to open in a tab. A type
     /// the system knows answers for itself; a `.toml` or a `.env` has no UTI

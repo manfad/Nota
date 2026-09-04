@@ -179,11 +179,17 @@ final class Preferences {
         static let footerLineEndings = "footerShowsLineEndings"
         static let footerCursorPosition = "footerShowsCursorPosition"
         static let statusBar = "showsStatusBar"
+        static let hidesTabBar = "hidesTabBar"
+        static let autoHidesTabBar = "autoHidesTabBar"
+        static let hidesTrafficLights = "hidesTrafficLights"
+        static let hidesBookmarkButton = "hidesBookmarkButton"
+        static let hidesSettingsButton = "hidesSettingsButton"
         static let language = "appLanguage"
         static let theme = "appTheme"
         static let hotKeyCode = "hotKeyCode"
         static let hotKeyModifiers = "hotKeyModifiers"
         static let hotKeyDisabled = "hotKeyDisabled"
+        static let shortcuts = "shortcuts"
         static let lastSaveDirectory = "lastSaveDirectory"
     }
 
@@ -401,6 +407,43 @@ final class Preferences {
         set { setBoolean(newValue, current: showsStatusBar, key: Key.statusBar) }
     }
 
+    // MARK: Window chrome (Settings › Appearance › Window)
+
+    /// The tab strip across the title bar goes, the way zen mode takes it —
+    /// the editor starts at the top, under a slim band the window can still
+    /// be dragged by. ⌘T, ⌘P and the rest keep working.
+    var hidesTabBar: Bool {
+        get { defaults.bool(forKey: Key.hidesTabBar) }
+        set { setBoolean(newValue, current: hidesTabBar, key: Key.hidesTabBar) }
+    }
+
+    /// The strip is off the window the same way, but the top edge is
+    /// watching: the pointer reaching it slides the strip in over the
+    /// document, and leaving it slides the strip away again. Zen mode and
+    /// "Hide tab bar" both win — either of those means gone for good.
+    var autoHidesTabBar: Bool {
+        get { defaults.bool(forKey: Key.autoHidesTabBar) }
+        set { setBoolean(newValue, current: autoHidesTabBar, key: Key.autoHidesTabBar) }
+    }
+
+    /// The three window buttons at the top-left. ⌘W and ⌘M still do their jobs.
+    var hidesTrafficLights: Bool {
+        get { defaults.bool(forKey: Key.hidesTrafficLights) }
+        set { setBoolean(newValue, current: hidesTrafficLights, key: Key.hidesTrafficLights) }
+    }
+
+    /// The bookmark button at the strip's trailing edge; ⇧⌘D still opens it.
+    var hidesBookmarkButton: Bool {
+        get { defaults.bool(forKey: Key.hidesBookmarkButton) }
+        set { setBoolean(newValue, current: hidesBookmarkButton, key: Key.hidesBookmarkButton) }
+    }
+
+    /// The Settings gear beside it; ⌘, still opens Settings.
+    var hidesSettingsButton: Bool {
+        get { defaults.bool(forKey: Key.hidesSettingsButton) }
+        set { setBoolean(newValue, current: hidesSettingsButton, key: Key.hidesSettingsButton) }
+    }
+
     private func setFooterSegment(_ newValue: Bool, current: Bool, key: String) {
         guard newValue != current else { return }
         defaults.set(newValue, forKey: key)
@@ -474,6 +517,39 @@ final class Preferences {
             }
             announce()
         }
+    }
+
+    /// The keys the user has moved — only the ones that differ from what the
+    /// command ships with, so a default Nota changes later moves with it
+    /// instead of being pinned by an old copy.
+    ///
+    /// One defaults key holding JSON, rather than one key per command: the
+    /// table is read and written whole, and a menu rebuild wants all of it.
+    var shortcuts: [ShortcutAction: KeyCombo] {
+        get {
+            guard let data = defaults.data(forKey: Key.shortcuts),
+                  let stored = try? JSONDecoder().decode([String: KeyCombo].self, from: data)
+            else { return [:] }
+            return stored.reduce(into: [:]) { table, entry in
+                guard let action = ShortcutAction(rawValue: entry.key) else { return }
+                table[action] = entry.value
+            }
+        }
+        set {
+            guard newValue != shortcuts else { return }
+            let stored = newValue.reduce(into: [String: KeyCombo]()) { table, entry in
+                table[entry.key.rawValue] = entry.value
+            }
+            if let data = try? JSONEncoder().encode(stored) {
+                defaults.set(data, forKey: Key.shortcuts)
+            }
+            announce()
+        }
+    }
+
+    /// The key a command answers to: the user's, or the one it ships with.
+    func combo(for action: ShortcutAction) -> KeyCombo {
+        shortcuts[action] ?? action.defaultCombo
     }
 
     /// Where the last ⌘S landed, so the next save opens in the same place.

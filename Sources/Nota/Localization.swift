@@ -42,6 +42,36 @@ enum L10n {
         "Vim mode": "Vim 模式",
         "Clear": "清除",
         "Another app is using that shortcut.": "此快捷键正被其他应用使用。",
+        "Shortcuts": "快捷键",
+        "About": "关于",
+        "Version %@": "版本 %@",
+        "A plain-text notebook.": "一个纯文本笔记本。",
+        "System Default follows the Mac.": "“跟随系统”由 Mac 决定。",
+        "Summon brings Nota to the front from any app, even while it is hidden.":
+            "无论正在用哪个应用，快速唤出都会把 Nota 调到最前，即使它已隐藏。",
+        "Two commands cannot share a combination, and the Mac's own keys are off limits.":
+            "两个命令不能共用同一组合键，系统保留的按键也不可使用。",
+        "The strip's buttons and the window's own buttons come back with their keys: "
+            + "⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W all keep working. Auto-hide slides the strip in "
+            + "when the pointer reaches the top edge, and away again when it leaves.":
+            "标签栏和窗口自身的按钮都可以用快捷键代替：⌘T、⌘P、⇧⌘D、⌘, 与 ⌘W 依然有效。"
+            + "开启自动隐藏后，指针移到窗口顶端时标签栏会滑入，离开后再滑走。",
+        "Reset to Defaults": "恢复默认",
+        "Press keys…": "请按快捷键…",
+        "None": "无",
+        "%1$@ and %2$@ both use %3$@.": "%1$@ 与 %2$@ 都使用了 %3$@。",
+        "%1$@ is reserved for %2$@.": "%1$@ 已保留给 %2$@。",
+        "Bookmark This Tab": "为此标签页添加书签",
+        "Show Bookmarks…": "显示书签…",
+        "Hide tab bar": "隐藏标签栏",
+        "Auto-hide tab bar": "自动隐藏标签栏",
+        "Hide traffic lights": "隐藏窗口按钮",
+        "Hide bookmark button": "隐藏书签按钮",
+        "Hide Settings button": "隐藏设置按钮",
+        "Duplicate Line": "复制当前行",
+        "Toggle Comment": "切换注释",
+        "Indent": "增加缩进",
+        "Outdent": "减少缩进",
         "System Default": "跟随系统",
         "System": "系统字体",
         "Serif": "衬线体",

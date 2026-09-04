@@ -1,0 +1,23 @@
+#!/bin/sh
+# Every commit bumps Nota's patch version by one, in Sources/Nota/Version.swift
+# and Info.plist together. A commit that already changes Version.swift — a
+# minor or major set by hand — is left at the version it chose.
+# Installed with:  git config core.hooksPath .githooks
+set -e
+cd "$(git rev-parse --show-toplevel)"
+file=Sources/Nota/Version.swift
+[ "${SKIP_VERSION_BUMP:-0}" = "1" ] && exit 0
+# A version set by hand in this commit — the file is new, or differs from
+# HEAD — is kept as it is.
+if ! git cat-file -e "HEAD:$file" 2>/dev/null || ! git diff --quiet HEAD -- "$file"; then
+    exit 0
+fi
+current=$(sed -n 's/.*static let current = "\([0-9][0-9.]*\)".*/\1/p' "$file")
+major=${current%%.*}; rest=${current#*.}; minor=${rest%%.*}; patch=${rest#*.}
+next="$major.$minor.$((patch + 1))"
+sed -i '' "s/static let current = \"$current\"/static let current = \"$next\"/" "$file"
+# sed rather than PlistBuddy, which rewrites the whole file and drops its comments.
+sed -i '' -e "/<key>CFBundleVersion<\/key>/{n;s|<string>[^<]*</string>|<string>$next</string>|;}" \
+          -e "/<key>CFBundleShortVersionString<\/key>/{n;s|<string>[^<]*</string>|<string>$next</string>|;}" Info.plist
+git add "$file" Info.plist
+echo "version $current → $next"

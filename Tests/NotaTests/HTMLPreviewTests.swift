@@ -545,12 +545,20 @@ final class HTMLPreviewTests: XCTestCase {
     func testTheReadingModeSettingIsNamedForAllThree() throws {
         let controller = SettingsWindowController.shared
         _ = controller.window
-        let checkbox = try XCTUnwrap(
-            descendant(of: try XCTUnwrap(controller.window?.contentView), ofType: NSButton.self) {
-                $0.title.hasPrefix("Start supported files")
-            }
+        defer { controller.selectPage(at: 0) }
+        XCTAssertTrue(controller.selectPage(titled: "Preview"))
+
+        // The row is a label beside a switch, so the label is the setting's
+        // name — and it has to cover Markdown, LaTeX and HTML alike.
+        let row = try XCTUnwrap(controller.rows(on: 3).first)
+        XCTAssertEqual(row.title, "Start supported files in preview mode")
+        XCTAssertTrue(row.control is NSSwitch)
+        XCTAssertNotNil(
+            descendant(of: try XCTUnwrap(controller.window?.contentView), ofType: NSSwitch.self) {
+                $0 === row.control
+            },
+            "the row is on screen once its page is selected"
         )
-        XCTAssertEqual(checkbox.title, "Start supported files in preview mode")
     }
 
     @MainActor

@@ -347,6 +347,26 @@ final class BookmarksTests: XCTestCase {
         XCTAssertLessThanOrEqual(bookmark.maxX, strip.bounds.maxX, "and inside the strip")
     }
 
+    /// The Settings gear sits past the bookmark, the last thing before the
+    /// reserve at the strip's end, and it opens the same window ⌘, does.
+    @MainActor
+    func testTheSettingsGearSitsPastTheBookmarkAndOpensSettings() throws {
+        let bench = try makeController(support: try makeTemporaryDirectory())
+        let strip = bench.controller.tabStrip
+        bench.window.layoutIfNeeded()
+        strip.layoutSubtreeIfNeeded()
+
+        let bookmark = strip.bookmarksButtonFrameForTesting
+        let gear = strip.settingsButtonFrameForTesting
+        XCTAssertEqual(gear.width, TabStripLayout.settingsSlot)
+        XCTAssertEqual(gear.minX, bookmark.maxX + TabStripLayout.bookmarkGap, accuracy: 0.5)
+        XCTAssertLessThanOrEqual(gear.maxX, strip.bounds.maxX - TabStripLayout.trailingReserve)
+
+        strip.pressSettingsButtonForTesting()
+        XCTAssertTrue(SettingsWindowController.shared.window?.isVisible ?? false)
+        SettingsWindowController.shared.window?.orderOut(nil)
+    }
+
     // MARK: - The bookmarks panel's top row
 
     /// In the bookmarks panel the fixed row above the field is the front

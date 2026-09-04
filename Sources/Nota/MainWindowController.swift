@@ -16,8 +16,13 @@ final class MainWindowController: NSWindowController {
         static let statusInset: CGFloat = 16
         static let editorTrailingGap: CGFloat = 4
         static let statusBarHeight: CGFloat = 26
-        /// Keeps zen-mode text clear of the traffic-light zone.
+        /// Keeps zen-mode text clear of the traffic-light zone. An
+        /// auto-hiding strip watches this same band for the pointer.
         static let zenTopInset: CGFloat = 28
+        /// How long an auto-hidden strip takes to slide in or out, and how
+        /// long it waits after the pointer leaves before it starts.
+        static let tabBarOverlaySlide: TimeInterval = 0.15
+        static let tabBarOverlayGrace: TimeInterval = 0.3
         static let zenTextPadding: CGFloat = 40
         /// The two document columns' floors in split, where both are on
         /// screen and the divider is the reader's to drag. In the other two
@@ -77,7 +82,7 @@ final class MainWindowController: NSWindowController {
 
     /// Where a save with no file of its own gets one. The real panel unless
     /// a test hands in something else — `nil` from it is the panel being
-    /// cancelled, which is the case ⇧⌘D on an untitled note turns on.
+    /// cancelled, which is the case ⌘D on an untitled note turns on.
     var savePanelProvider: ((Note) -> URL?)?
 
     private var preferences: Preferences { .shared }
@@ -185,6 +190,9 @@ final class MainWindowController: NSWindowController {
         target: self, action: #selector(previewModeControlChanged)
     )
     private var tabBarLeading: NSLayoutConstraint?
+    /// The strip's top edge. Normally pinned to the top of the workspace;
+    /// an auto-hidden strip rides it up by its own height and back down.
+    private var tabBarTop: NSLayoutConstraint?
     private var workspaceSplitTopToTabBar: NSLayoutConstraint?
     private var workspaceSplitTopToPane: NSLayoutConstraint?
     private var workspaceSplitBottomToStatus: NSLayoutConstraint?
@@ -196,6 +204,14 @@ final class MainWindowController: NSWindowController {
     /// never persisted, so Nota always opens with its chrome.
     private(set) var isZenMode = false
     private let zenDragRegion = DragRegionView()
+    /// The band at the very top of the window an auto-hidden strip waits
+    /// behind: nothing to see and nothing to click, only a tracking area.
+    private let tabBarHotZone = TabBarHotZoneView()
+    /// Whether the auto-hidden strip is currently lying over the split.
+    private var isTabBarOverlayVisible = false
+    /// The grace period between the pointer leaving the strip and the strip
+    /// sliding away, cancelled the moment the pointer comes back.
+    private var tabBarOverlayHideTimer: Timer?
     private var editorTopToContent: NSLayoutConstraint?
     private var editorTopToZenInset: NSLayoutConstraint?
     private var sidebarWorkItem: DispatchWorkItem?
@@ -445,8 +461,19 @@ final class MainWindowController: NSWindowController {
         background.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(background)
 
+        // Under the strip and over the split: the band the pointer has to
+        // reach for an auto-hidden strip to come back. Added before the
+        // strip so the strip that answers it lies over the top of it.
+        tabBarHotZone.translatesAutoresizingMaskIntoConstraints = false
+        tabBarHotZone.isHidden = true
+        tabBarHotZone.onEnter = { [weak self] in self?.revealTabBarOverlay() }
+        tabBarHotZone.onExit = { [weak self] in self?.scheduleTabBarOverlayHide() }
+        workspace.addSubview(tabBarHotZone)
+
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         tabBar.delegate = self
+        tabBar.onPointerEntered = { [weak self] in self?.revealTabBarOverlay() }
+        tabBar.onPointerExited = { [weak self] in self?.scheduleTabBarOverlayHide() }
         workspace.addSubview(tabBar)
 
         searchField.translatesAutoresizingMaskIntoConstraints = false
@@ -549,8 +576,12 @@ final class MainWindowController: NSWindowController {
             background.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             background.bottomAnchor.constraint(equalTo: content.bottomAnchor),
 
-            tabBar.topAnchor.constraint(equalTo: workspace.topAnchor),
             tabBar.heightAnchor.constraint(equalToConstant: TabBarView.height),
+
+            tabBarHotZone.topAnchor.constraint(equalTo: workspace.topAnchor),
+            tabBarHotZone.leadingAnchor.constraint(equalTo: workspace.leadingAnchor),
+            tabBarHotZone.trailingAnchor.constraint(equalTo: workspace.trailingAnchor),
+            tabBarHotZone.heightAnchor.constraint(equalToConstant: Layout.zenTopInset),
 
             searchField.trailingAnchor.constraint(equalTo: workspace.trailingAnchor, constant: -12),
             searchField.centerYAnchor.constraint(equalTo: tabBar.centerYAnchor),
@@ -632,6 +663,9 @@ final class MainWindowController: NSWindowController {
         )
         tabBarLeading?.isActive = true
 
+        tabBarTop = tabBar.topAnchor.constraint(equalTo: workspace.topAnchor)
+        tabBarTop?.isActive = true
+
         // A small breathing gap so the scroller never touches the pane edge
         // (or the sidebar divider).
         editorTrailing = scrollView.trailingAnchor.constraint(
@@ -656,6 +690,7 @@ final class MainWindowController: NSWindowController {
         scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor).isActive = true
         editorTopToContent?.isActive = true
         applyStatusBarLayout()
+        applyWindowChrome()
 
         installModeOverlay(editorModeOverlay, over: content)
         installFindBar(over: content)
@@ -1208,9 +1243,180 @@ final class MainWindowController: NSWindowController {
         refreshPreviewContent()
         vimEngine.isEnabled = preferences.vimMode
         applyStatusBarLayout()
+        applyWindowChrome()
         updateStatus()
         scheduleSave()
     }
+
+    /// Settings › Appearance › Window: the tab strip, the traffic lights and
+    /// the strip's two trailing buttons can each be switched off. The strip
+    /// and the lights share their mechanism with zen mode, which takes both
+    /// for as long as it is on; the buttons are the layout's business.
+    private func applyWindowChrome() {
+        let controls = TabStripLayout.TrailingControls(
+            bookmark: !preferences.hidesBookmarkButton,
+            settings: !preferences.hidesSettingsButton
+        )
+        if TabStripLayout.controls != controls {
+            TabStripLayout.controls = controls
+            tabBar.needsLayout = true
+        }
+        applyTopChrome()
+    }
+
+    /// Whether the tab strip is off the window right now — zen, or either
+    /// of the two settings that take it. Auto-hide takes it out of the
+    /// layout exactly as the plain hide does; what makes it different is
+    /// that it can come back over the top without going back in.
+    private var hidesTabBar: Bool {
+        isZenMode || preferences.hidesTabBar || preferences.autoHidesTabBar
+    }
+
+    /// Whether the strip is merely parked off the top waiting for the
+    /// pointer. Zen mode and "Hide tab bar" both win: under either of them
+    /// the strip is gone for good and the top edge watches for nothing.
+    private var autoHidesTabBar: Bool {
+        !isZenMode && !preferences.hidesTabBar && preferences.autoHidesTabBar
+    }
+
+    /// The strip and the traffic lights, on or off, from whichever of zen and
+    /// Settings wants them gone. The constraints are zen's own: the workspace
+    /// meets the top of the pane and the editor keeps a slim inset the
+    /// window can be dragged by.
+    private func applyTopChrome() {
+        let hidesTop = hidesTabBar
+        workspaceSplitTopToTabBar?.isActive = !hidesTop
+        workspaceSplitTopToPane?.isActive = hidesTop
+        editorTopToContent?.isActive = !hidesTop
+        editorTopToZenInset?.isActive = hidesTop
+        previewColumn.isZenMode = hidesTop
+        zenDragRegion.isHidden = !hidesTop
+
+        // Auto-hide leaves the layout alone and hands the strip to the
+        // pointer: the top edge watches, and the strip that answers lies
+        // over the split rather than pushing it down.
+        let overlays = autoHidesTabBar
+        tabBarHotZone.isHidden = !overlays
+        if !overlays { endTabBarOverlay() }
+        tabBar.drawsOpaqueBackground = overlays
+
+        // Outside a zen fade the strip simply is or is not there — unless it
+        // is the auto-hidden one, currently answering the pointer.
+        if !isZenMode { tabBar.isHidden = hidesTop && !isTabBarOverlayVisible }
+        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window?.standardWindowButton(button)?.isHidden =
+                isZenMode || preferences.hidesTrafficLights
+        }
+    }
+
+    // MARK: - Auto-hidden tab strip
+
+    /// The pointer has reached the top edge (or is on the strip already):
+    /// the strip slides down over the split and stays until it leaves.
+    /// Anything but an auto-hidden strip ignores this entirely.
+    private func revealTabBarOverlay() {
+        guard autoHidesTabBar else { return }
+        cancelTabBarOverlayHide()
+        guard !isTabBarOverlayVisible else { return }
+        isTabBarOverlayVisible = true
+        tabBar.drawsOpaqueBackground = true
+        tabBar.isHidden = false
+        tabBar.alphaValue = 0
+        tabBarTop?.constant = -TabBarView.height
+        tabBar.superview?.layoutSubtreeIfNeeded()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Layout.tabBarOverlaySlide
+            tabBarTop?.animator().constant = 0
+            tabBar.animator().alphaValue = 1
+        }
+        // And the deadline that lands it: the strip is one slide away
+        // whether or not there was a frame to spare for the animation.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Layout.tabBarOverlaySlide) {
+            [weak self] in
+            guard let self, self.isTabBarOverlayVisible else { return }
+            self.tabBarTop?.constant = 0
+            self.tabBar.alphaValue = 1
+        }
+    }
+
+    /// The pointer has left the strip or the band under it. Nothing happens
+    /// for a grace period — crossing the gap between the two, or reaching
+    /// past the strip for a menu, must not chase it away.
+    private func scheduleTabBarOverlayHide() {
+        guard isTabBarOverlayVisible else { return }
+        cancelTabBarOverlayHide()
+        let timer = Timer(timeInterval: Layout.tabBarOverlayGrace, repeats: false) {
+            [weak self] timer in
+            guard let self, self.tabBarOverlayHideTimer === timer else { return }
+            self.tabBarOverlayHideTimer = nil
+            self.hideTabBarOverlayIfPointerHasGone()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        tabBarOverlayHideTimer = timer
+    }
+
+    private func cancelTabBarOverlayHide() {
+        tabBarOverlayHideTimer?.invalidate()
+        tabBarOverlayHideTimer = nil
+    }
+
+    /// The grace period is up. A drag, an open context menu, or a pointer
+    /// still over the strip each buy another one — a gesture the pointer
+    /// owns is never interrupted by the strip going away under it.
+    private func hideTabBarOverlayIfPointerHasGone() {
+        guard isTabBarOverlayVisible else { return }
+        guard !tabBar.isDraggingForOverlay,
+              !tabBar.isShowingContextMenuForOverlay,
+              !pointerIsOverTabBarOverlay()
+        else { return scheduleTabBarOverlayHide() }
+        hideTabBarOverlay()
+    }
+
+    /// Where the pointer is now, rather than where the last enter/exit left
+    /// it: the strip appearing under a pointer that is already there sends
+    /// no enter of its own, so the frames are what settle it.
+    private func pointerIsOverTabBarOverlay() -> Bool {
+        guard let window, let workspace = tabBar.superview, window.isKeyWindow else { return false }
+        let point = workspace.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        return tabBar.frame.contains(point) || tabBarHotZone.frame.contains(point)
+    }
+
+    private func hideTabBarOverlay() {
+        cancelTabBarOverlayHide()
+        guard isTabBarOverlayVisible else { return }
+        isTabBarOverlayVisible = false
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Layout.tabBarOverlaySlide
+            tabBarTop?.animator().constant = -TabBarView.height
+            tabBar.animator().alphaValue = 0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Layout.tabBarOverlaySlide) {
+            [weak self] in
+            guard let self, !self.isTabBarOverlayVisible else { return }
+            self.tabBar.isHidden = true
+            self.tabBarTop?.constant = 0
+            self.tabBar.alphaValue = 1
+        }
+    }
+
+    /// Auto-hide has stopped applying — the setting went, or zen or "Hide
+    /// tab bar" took the strip outright. Every trace of the overlay goes
+    /// with it and `applyTopChrome` decides the strip's fate as it always
+    /// did.
+    private func endTabBarOverlay() {
+        cancelTabBarOverlayHide()
+        isTabBarOverlayVisible = false
+        tabBarTop?.constant = 0
+        tabBar.alphaValue = 1
+        tabBar.drawsOpaqueBackground = false
+    }
+
+    /// Test hooks: what the two tracking areas do, without a pointer.
+    internal func pointerEnteredHotZoneForTesting() { revealTabBarOverlay() }
+    internal func pointerLeftTabBarForTesting() { scheduleTabBarOverlayHide() }
+    internal var isTabBarOverlayVisibleForTesting: Bool { isTabBarOverlayVisible }
+    /// The split the overlaid strip lies over, for the frame check.
+    internal var workspaceSplitForTesting: NSView { workspaceSplitViewController.view }
 
     // MARK: - Session restore
 
@@ -2596,19 +2802,19 @@ final class MainWindowController: NSWindowController {
         currentNote?.fileURL.map(bookmarks.contains) ?? false
     }
 
-    /// Whether ⇧⌘D means anything here. Any tab does — a PDF and a picture
+    /// Whether ⌘D means anything here. Any tab does — a PDF and a picture
     /// are files worth coming back to, and an untitled note is asked for a
     /// name first — so this is only about there being a tab at all.
     var canBookmarkCurrentTab: Bool { currentNote != nil }
 
-    /// ⇧⌘D, and "Bookmark" / "Remove Bookmark" in the tab's context menu.
+    /// ⌘D, and "Bookmark" / "Remove Bookmark" in the tab's context menu.
     func toggleBookmarkForCurrentTab() {
         guard notes.indices.contains(selectedIndex) else { return }
         toggleBookmark(at: selectedIndex)
     }
 
     /// A bookmark is a path, so a note that has never been saved has nothing
-    /// to bookmark: ⇧⌘D asks it to be saved first, and a cancelled panel
+    /// to bookmark: ⌘D asks it to be saved first, and a cancelled panel
     /// leaves the note exactly as unbookmarked as it was.
     func toggleBookmark(at index: Int) {
         guard notes.indices.contains(index) else { return }
@@ -2674,19 +2880,12 @@ extension MainWindowController {
             modeBadge, pendingKeysLabel, footerTrailingStack,
         ]
 
-        workspaceSplitTopToTabBar?.isActive = !enabled
-        workspaceSplitTopToPane?.isActive = enabled
-        editorTopToContent?.isActive = !enabled
-        editorTopToZenInset?.isActive = enabled
-        // Split survives zen, so the render column takes the same drop and
-        // gets a drag band of its own rather than running to the frame.
-        previewColumn.isZenMode = enabled
-        // The footer goes; the pane does not — `:` has to work in zen mode.
-        zenDragRegion.isHidden = !enabled
-
-        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            window?.standardWindowButton(button)?.isHidden = enabled
-        }
+        // The strip's constraints and the traffic lights: zen takes both, and
+        // Settings may already have taken either. Split survives zen, so the
+        // render column takes the same drop and gets a drag band of its own
+        // rather than running to the frame; the footer goes but the pane does
+        // not — `:` has to work in zen mode.
+        applyTopChrome()
 
         if enabled, !searchField.isHidden { endSearchAllNotes() }
 
@@ -2710,6 +2909,9 @@ extension MainWindowController {
             // The badge and its pending keys only come back if vim mode
             // actually wants them.
             applyStatusBarLayout()
+            // And the strip only if Settings has not hidden it on its own,
+            // nor parked it off the top waiting for the pointer.
+            tabBar.isHidden = preferences.hidesTabBar || preferences.autoHidesTabBar
         }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.15
@@ -2765,6 +2967,33 @@ final class DocumentSplitViewController: NSSplitViewController {
 /// the title bar's own chrome is gone.
 final class DragRegionView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
+}
+
+/// The band across the very top of the window that an auto-hidden tab strip
+/// waits behind. It draws nothing and takes no clicks — hit testing goes
+/// straight through it to the document underneath — so the only thing it is
+/// for is the tracking area: the pointer arriving, and the pointer leaving.
+final class TabBarHotZoneView: NSView {
+    var onEnter: (() -> Void)?
+    var onExit: (() -> Void)?
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil
+        ))
+    }
+
+    // A pointer already sitting in the band when the band appears never
+    // enters it, so a move inside counts as an arrival too.
+    override func mouseEntered(with event: NSEvent) { onEnter?() }
+    override func mouseMoved(with event: NSEvent) { onEnter?() }
+    override func mouseExited(with event: NSEvent) { onExit?() }
 }
 
 /// The command pane: one line above the footer where `:` `/` `?` are typed,
@@ -3134,7 +3363,7 @@ extension MainWindowController: TabPickerPanelDelegate {
         focusEditor()
     }
 
-    /// The bookmarks panel's top row: exactly what ⇧⌘D does, Save As for an
+    /// The bookmarks panel's top row: exactly what ⌘D does, Save As for an
     /// untitled note included.
     func tabPickerDidRequestBookmarkCurrentTab(_ picker: TabPickerPanel) {
         toggleBookmarkForCurrentTab()
@@ -4127,6 +4356,10 @@ extension MainWindowController: TabBarViewDelegate {
 
     func tabBarDidRequestBookmarks(_ bar: TabBarView) {
         showBookmarksPicker()
+    }
+
+    func tabBarDidRequestSettings(_ bar: TabBarView) {
+        openSettings(nil)
     }
 
     func tabBar(_ bar: TabBarView, didToggleBookmarkAt index: Int) {

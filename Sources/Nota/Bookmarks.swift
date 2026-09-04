@@ -68,7 +68,7 @@ final class Bookmarks {
     // MARK: - Changing
 
     /// Adds the file if it is not bookmarked, removes it if it is, and says
-    /// which of the two it did — ⇧⌘D's whole behaviour.
+    /// which of the two it did — ⌘D's whole behaviour.
     @discardableResult
     func toggle(_ url: URL) -> Bool {
         if contains(url) {

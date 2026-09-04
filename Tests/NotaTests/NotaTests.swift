@@ -162,18 +162,62 @@ final class NotaTests: XCTestCase {
         _ = NSApplication.shared
         let controller = SettingsWindowController.shared
         let window = controller.window
+        defer { controller.selectPage(at: 0) }
 
         XCTAssertEqual(window?.title, "Settings")
-        XCTAssertFalse(window?.styleMask.contains(.resizable) ?? true)
         XCTAssertFalse(window?.isReleasedWhenClosed ?? true)
+        // The sidebar runs to the top of the window with the traffic lights
+        // over it, so the titlebar is glass and the title is not drawn there.
+        XCTAssertTrue(window?.styleMask.contains(.fullSizeContentView) ?? false)
+        XCTAssertTrue(window?.titlebarAppearsTransparent ?? false)
+        XCTAssertEqual(window?.titleVisibility, .hidden)
+
+        XCTAssertEqual(
+            controller.pageTitles,
+            ["General", "Appearance", "Editor", "Preview", "Status bar", "Shortcuts", "About"]
+        )
 
         func allViews(in root: NSView) -> [NSView] {
             [root] + root.subviews.flatMap(allViews)
         }
-        let views = window?.contentView.map(allViews) ?? []
+        func views() -> [NSView] { window?.contentView.map(allViews) ?? [] }
+
+        // Every on/off row is a label beside an NSSwitch now, so the row's own
+        // label is what names it.
+        func titles(on page: Int) -> [String] {
+            controller.rows(on: page).map(\.title)
+        }
+        XCTAssertEqual(titles(on: 0), ["Language", "Theme"])
+        XCTAssertEqual(titles(on: 1), ["Font", "Size", "Line spacing", "Padding",
+                                       "Hide tab bar", "Auto-hide tab bar",
+                                       "Hide traffic lights",
+                                       "Hide bookmark button", "Hide Settings button"])
+        XCTAssertEqual(titles(on: 2), ["Word wrap", "Line numbers", "Gutter separator", "Vim mode"])
+        XCTAssertEqual(titles(on: 3), ["Start supported files in preview mode"])
+        XCTAssertEqual(titles(on: 4), ["Show status bar", "Words", "Characters", "Images", "Lines",
+                                       "Text encoding", "Line endings", "Cursor position"])
+        for page in [2, 3, 4] {
+            for row in controller.rows(on: page) {
+                XCTAssertTrue(row.control is NSSwitch, "\(row.title) is not a switch")
+            }
+        }
+
+        // Every page lays out on its own: nothing ambiguous, and the rows
+        // inside a group have real height.
+        for page in 0..<controller.pageTitles.count {
+            controller.selectPage(at: page)
+            let root = window?.contentView
+            root?.layoutSubtreeIfNeeded()
+            XCTAssertFalse(root?.hasAmbiguousLayout ?? true, "page \(page) is ambiguous")
+            for row in controller.rows(on: page) {
+                XCTAssertGreaterThan(row.control.superview?.frame.height ?? 0, 0,
+                                     "\(row.title) has no row")
+            }
+        }
 
         // Font popup offers the four designs plus "Other…".
-        let fontPopUp = views.compactMap { $0 as? NSPopUpButton }.first {
+        controller.selectPage(at: 1)
+        let fontPopUp = views().compactMap { $0 as? NSPopUpButton }.first {
             $0.itemTitles.contains("Other…")
         }
         XCTAssertEqual(
@@ -181,28 +225,97 @@ final class NotaTests: XCTestCase {
             ["System", "Serif", "Rounded", "Monospaced", "Other…"]
         )
 
-        let buttonTitles = Set(views.compactMap { ($0 as? NSButton)?.title })
-        for title in ["Word wrap", "Line numbers", "Gutter separator", "Words", "Characters",
-                      "Images", "Lines", "Text encoding", "Line endings", "Cursor position",
-                      "Show status bar", "Vim mode", "Start supported files in preview mode",
-                      "Save"] {
-            XCTAssertTrue(buttonTitles.contains(title), "missing \(title)")
-        }
+        controller.selectPage(at: 0)
+        XCTAssertTrue(
+            views().compactMap { ($0 as? NSButton)?.title }.contains("Save"),
+            "Save is outside the pages, shared by all of them"
+        )
 
-        let labels = Set(views.compactMap { ($0 as? NSTextField)?.stringValue })
-        for heading in ["General", "Appearance", "Editor", "Preview", "Status bar"] {
-            XCTAssertTrue(labels.contains(heading), "missing \(heading) section")
-        }
-
-        let language = views.compactMap { $0 as? NSPopUpButton }.first {
+        let language = views().compactMap { $0 as? NSPopUpButton }.first {
             $0.itemTitles.contains("简体中文")
         }
         XCTAssertEqual(language?.itemTitles, ["System Default", "English", "简体中文"])
 
-        let theme = views.compactMap { $0 as? NSPopUpButton }.first {
+        let theme = views().compactMap { $0 as? NSPopUpButton }.first {
             $0.itemTitles.contains("Dark")
         }
         XCTAssertEqual(theme?.itemTitles, ["System Default", "Light", "Dark"])
+    }
+
+    /// The five window-chrome switches are draft like everything else: nothing
+    /// is written until Save, and then all five go together.
+    @MainActor
+    func testSavingAWindowChromeDraftWritesEveryToggle() throws {
+        _ = NSApplication.shared
+        let preferences = Preferences.shared
+        let original = (preferences.hidesTabBar, preferences.hidesTrafficLights,
+                        preferences.hidesBookmarkButton, preferences.hidesSettingsButton,
+                        preferences.autoHidesTabBar)
+        defer {
+            preferences.hidesTabBar = original.0
+            preferences.hidesTrafficLights = original.1
+            preferences.hidesBookmarkButton = original.2
+            preferences.hidesSettingsButton = original.3
+            preferences.autoHidesTabBar = original.4
+        }
+        preferences.hidesTabBar = false
+        preferences.hidesTrafficLights = false
+        preferences.hidesBookmarkButton = false
+        preferences.hidesSettingsButton = false
+        preferences.autoHidesTabBar = false
+
+        let controller = SettingsWindowController.shared
+        defer { controller.selectPage(at: 0) }
+        XCTAssertTrue(controller.selectPage(titled: "Appearance"))
+        let root = try XCTUnwrap(controller.window?.contentView)
+        func allViews(in view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(allViews)
+        }
+        let save = try XCTUnwrap(allViews(in: root).compactMap { $0 as? NSButton }
+            .first { $0.title == "Save" })
+        XCTAssertFalse(save.isEnabled, "a fresh draft has nothing to save")
+
+        // Auto-hide first: switching "Hide tab bar" on greys its row, and a
+        // row that is greyed is one the reader cannot reach either.
+        let chrome = ["Auto-hide tab bar", "Hide tab bar", "Hide traffic lights",
+                      "Hide bookmark button", "Hide Settings button"]
+        for title in chrome {
+            let control = try XCTUnwrap(
+                controller.rows(on: 1).first { $0.title == title }?.control as? NSSwitch
+            )
+            control.state = .on
+            _ = NSApp.sendAction(try XCTUnwrap(control.action), to: control.target, from: control)
+        }
+        XCTAssertTrue(save.isEnabled)
+        XCTAssertFalse(preferences.hidesTabBar, "nothing is written until Save")
+
+        save.performClick(nil)
+        XCTAssertTrue(preferences.hidesTabBar)
+        XCTAssertTrue(preferences.autoHidesTabBar)
+        XCTAssertTrue(preferences.hidesTrafficLights)
+        XCTAssertTrue(preferences.hidesBookmarkButton)
+        XCTAssertTrue(preferences.hidesSettingsButton)
+        XCTAssertFalse(save.isEnabled, "the draft is spent")
+    }
+
+    /// The last page is a plain about box: the icon, the name, and the version
+    /// the bundle carries.
+    @MainActor
+    func testAboutPageShowsTheVersion() throws {
+        _ = NSApplication.shared
+        let controller = SettingsWindowController.shared
+        defer { controller.selectPage(at: 0) }
+        XCTAssertTrue(controller.selectPage(titled: "About"))
+
+        let root = try XCTUnwrap(controller.window?.contentView)
+        func allViews(in view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(allViews)
+        }
+        let strings = allViews(in: root).compactMap { ($0 as? NSTextField)?.stringValue }
+        XCTAssertTrue(strings.contains("Nota"))
+        XCTAssertTrue(strings.contains("Version \(AppVersion.current)"),
+                      "no version line, only \(strings)")
+        XCTAssertTrue(strings.contains("A plain-text notebook."))
     }
 
     /// Theme is General's second row: Save puts it on the app as a whole,
@@ -220,6 +333,7 @@ final class NotaTests: XCTestCase {
 
         let controller = SettingsWindowController.shared
         let root = try XCTUnwrap(controller.window?.contentView)
+        controller.selectPage(at: 0)
         func allViews(in view: NSView) -> [NSView] {
             [view] + view.subviews.flatMap(allViews)
         }
@@ -252,6 +366,7 @@ final class NotaTests: XCTestCase {
 
         let controller = SettingsWindowController.shared
         let root = try XCTUnwrap(controller.window?.contentView)
+        controller.selectPage(at: 0)
         func allViews(in view: NSView) -> [NSView] {
             [view] + view.subviews.flatMap(allViews)
         }
@@ -268,6 +383,17 @@ final class NotaTests: XCTestCase {
 
         XCTAssertEqual(controller.window?.title, "设置")
         XCTAssertEqual(save.title, "保存")
+        // The sidebar and the rows are relabelled in place, not rebuilt.
+        XCTAssertEqual(controller.pageTitles.first, "通用")
+        XCTAssertEqual(controller.rows(on: 0).map(\.title), ["语言", "主题"])
+
+        // Footnotes are translated too, including the long one whose key is
+        // spelled over two lines.
+        XCTAssertTrue(controller.selectPage(titled: "外观"))
+        let translated = allViews(in: root).compactMap { ($0 as? NSTextField)?.stringValue }
+        XCTAssertTrue(translated.contains { $0.hasPrefix("标签栏和窗口自身的按钮") },
+                      "the Window footnote is still English: \(translated)")
+        controller.selectPage(at: 0)
     }
 
     @MainActor
@@ -1372,6 +1498,12 @@ final class NotaTests: XCTestCase {
         window.layoutIfNeeded()
 
         let footer = controller.footerRegions
+        // The caret label lives inside the footer's trailing stack, so its
+        // frame is the stack's; the counts and the badge stand in the
+        // workspace itself. One coordinate space for every comparison.
+        func inWorkspace(_ view: NSView) -> NSRect {
+            view.superview?.convert(view.frame, to: footer.counts.superview) ?? view.frame
+        }
         XCTAssertFalse(footer.badge.isHidden, "the badge shows while vim mode is on")
         XCTAssertFalse(footer.cursor.isHidden, "the caret position is always shown")
         // Nothing has been typed, so the pending keys stay away.
@@ -1384,7 +1516,7 @@ final class NotaTests: XCTestCase {
         // Left, centre, right — in that order, with real gaps between them.
         XCTAssertEqual(footer.badge.frame.height, 18)
         XCTAssertLessThan(footer.badge.frame.maxX, footer.counts.frame.minX)
-        XCTAssertLessThan(footer.counts.frame.maxX, footer.cursor.frame.minX)
+        XCTAssertLessThan(footer.counts.frame.maxX, inWorkspace(footer.cursor).minX)
         // The counts sit centred in the window.
         let content = try XCTUnwrap(window.contentView)
         let centre = footer.counts.superview.map {
@@ -1394,7 +1526,7 @@ final class NotaTests: XCTestCase {
 
         // All three sit on one line, inside the footer strip.
         XCTAssertEqual(footer.counts.frame.midY, footer.badge.frame.midY, accuracy: 1)
-        XCTAssertEqual(footer.cursor.frame.midY, footer.badge.frame.midY, accuracy: 1)
+        XCTAssertEqual(inWorkspace(footer.cursor).midY, footer.badge.frame.midY, accuracy: 1)
 
         // Zen fades the whole footer out with the rest of the chrome, and
         // giving it back respects the vim setting rather than showing
@@ -1460,7 +1592,7 @@ final class NotaTests: XCTestCase {
                            accuracy: 1,
                            "the label must be laid out at its full width, not squeezed")
             XCTAssertGreaterThanOrEqual(footer.counts.frame.width, textWidth)
-            XCTAssertLessThanOrEqual(footer.counts.frame.maxX, footer.cursor.frame.minX)
+            XCTAssertLessThanOrEqual(footer.counts.frame.maxX, inWorkspace(footer.cursor).minX)
             if !pending.isEmpty {
                 XCTAssertGreaterThanOrEqual(
                     footer.counts.frame.minX, footer.pendingKeys.frame.maxX
@@ -2629,7 +2761,9 @@ final class NotaTests: XCTestCase {
     @MainActor
     func testTabsShareOneWidthAndNoneAreHiddenUntilTheFloor() throws {
         _ = NSApplication.shared
-        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 1000, height: TabBarView.height))
+        // 1000pt of tabs, plus whatever the trailing controls take past the +.
+        let width = 1000 - 68 + TabStripLayout.trailingControls
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: width, height: TabBarView.height))
         bar.setItems(
             (0..<14).map { TabBarItem(title: "Note \($0)", isDirty: false) },
             selectedIndex: 0
@@ -2717,9 +2851,11 @@ final class NotaTests: XCTestCase {
                           "a half-empty strip does not park the + at the edge")
 
         // Twelve tabs at their floors (one at 60, eleven at 40, eleven gaps)
-        // plus the +, its gap, and the bookmark button, its gap and the
-        // reserve past it: 640pt, exactly full.
-        bar.frame.size.width = 640
+        // plus the +, its gap, and the trailing controls — the bookmark
+        // button, the gear, their gaps and the reserve past them: exactly full.
+        let tabsAtTheirFloors: CGFloat = 60 + 11 * 40 + 11 * 4
+        let plusAndGap: CGFloat = 24 + 4
+        bar.frame.size.width = tabsAtTheirFloors + plusAndGap + TabStripLayout.trailingControls
         bar.setItems(
             (0..<12).map { TabBarItem(title: "Note \($0)", isDirty: false) },
             selectedIndex: 0

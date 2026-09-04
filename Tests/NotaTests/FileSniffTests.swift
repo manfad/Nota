@@ -153,6 +153,21 @@ final class FileSniffTests: XCTestCase {
 
     // MARK: - Drop filter
 
+    /// `.ts` is a TypeScript module to a programmer and an MPEG-2 transport
+    /// stream to the system. The bytes settle it: text opens, however the
+    /// name is filed.
+    func testATypeScriptModuleOpensDespiteTheSystemCallingItVideo() throws {
+        let directory = try makeTemporaryDirectory()
+        for name in ["index.ts", "vite.config.ts", "worker.mts", "types.cts"] {
+            let url = directory.appendingPathComponent(name)
+            try "export const answer: number = 42\n".write(to: url, atomically: true, encoding: .utf8)
+            XCTAssertTrue(Note.isOpenable(url), "\(name) is text, whatever its extension claims")
+            XCTAssertFalse(TextFile.isDeliberatelyExcluded(url), name)
+        }
+        // A `.ts` that is not there to be read keeps the system's word for it.
+        XCTAssertFalse(Note.isOpenable(directory.appendingPathComponent("missing.ts")))
+    }
+
     func testAPDFNamedReportAndATextFileNamedConfigAreBothOpenable() throws {
         let directory = try makeTemporaryDirectory()
         let pdf = try makePDF(pages: 1, named: "report", in: directory)

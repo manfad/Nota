@@ -1586,11 +1586,12 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(plus.frame.minY, 0)
         XCTAssertLessThanOrEqual(plus.frame.maxY, tabBar.bounds.maxY + 0.5)
 
-        // The bookmark button is the one thing that sits *past* the + by
-        // design (SPEC Todo 13); everything else in the strip is a tab, and
-        // a tab stops short of it.
+        // The bookmark button and the Settings gear are the two things that
+        // sit *past* the + by design (SPEC Todo 13); everything else in the
+        // strip is a tab, and a tab stops short of it.
         for subview in tabBar.subviews
-        where subview !== plus && !(subview is BookmarksButton) && !subview.isHidden {
+        where subview !== plus && !(subview is BookmarksButton) && !(subview is SettingsButton)
+            && !subview.isHidden {
             XCTAssertFalse(
                 subview.frame.intersects(plus.frame),
                 "a tab sits on the +"

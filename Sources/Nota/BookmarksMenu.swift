@@ -6,10 +6,11 @@ import AppKit
 /// submenu opens, so it can never show a bookmark that has just been removed
 /// from another window sitting there stale.
 ///
-/// The one item that is *not* rebuilt is the first, the ⇧⌘D toggle: a key
-/// equivalent has to be in the menu tree before anybody opens the menu it
-/// lives in, so that item is made once, in `init`, and only its title is
-/// rewritten. Everything after it is thrown away and re-added.
+/// The two items that are *not* rebuilt are the first two, the ⌘D toggle and
+/// ⇧⌘D's Show Bookmarks…: a key equivalent has to be in the menu tree before
+/// anybody opens the menu it lives in, so both are made once and only the
+/// toggle's title is rewritten. Everything after them is thrown away and
+/// re-added.
 ///
 /// Then a separator, one item per bookmark in the order they were added —
 /// file name, its kind icon, the full path as the tooltip, greyed and inert
@@ -20,14 +21,25 @@ final class BookmarksMenu: NSObject, NSMenuDelegate {
     /// bookmark at all: the toggle's title and whether it is offered.
     private let frontTabState: () -> (canBookmark: Bool, isBookmarked: Bool)
     private let onToggleFrontTab: () -> Void
+    private let onShowAll: () -> Void
     private let onOpen: (String) -> Void
 
-    /// ⇧⌘D. ⌘D is Duplicate Line, and the editor keeps it.
+    /// ⌘D by default, but the key comes off the shortcut table, so it moves
+    /// when the user moves it.
     private lazy var toggleItem: NSMenuItem = {
         let item = NSMenuItem(
-            title: "Bookmark", action: #selector(toggleFrontTab(_:)), keyEquivalent: "d"
+            title: "Bookmark", action: #selector(toggleFrontTab(_:)), keyEquivalent: ""
         )
-        item.keyEquivalentModifierMask = [.command, .shift]
+        item.target = self
+        return item
+    }()
+
+    /// ⇧⌘D by default: the ⌘P picker opened straight into its bookmarks list,
+    /// the same thing the strip's bookmark button does.
+    private lazy var showItem: NSMenuItem = {
+        let item = NSMenuItem(
+            title: L10n.text("Show Bookmarks…"), action: #selector(showAll(_:)), keyEquivalent: ""
+        )
         item.target = self
         return item
     }()
@@ -36,27 +48,38 @@ final class BookmarksMenu: NSObject, NSMenuDelegate {
         bookmarks: Bookmarks,
         frontTabState: @escaping () -> (canBookmark: Bool, isBookmarked: Bool),
         onToggleFrontTab: @escaping () -> Void,
+        onShowAll: @escaping () -> Void = {},
         onOpen: @escaping (String) -> Void
     ) {
         self.bookmarks = bookmarks
         self.frontTabState = frontTabState
         self.onToggleFrontTab = onToggleFrontTab
+        self.onShowAll = onShowAll
         self.onOpen = onOpen
     }
 
-    /// The submenu, with the toggle already in it — so ⇧⌘D works before the
-    /// menu has ever been opened.
+    /// The submenu, with the two keyed items already in it — so ⌘D and ⇧⌘D
+    /// work before the menu has ever been opened.
     func makeMenu() -> NSMenu {
         let menu = NSMenu(title: "Bookmarks")
         menu.autoenablesItems = false
         menu.delegate = self
+        // The menu bar is rebuilt whole whenever the language or a shortcut
+        // changes, so the one item that outlives a rebuild has to be taken out
+        // of the menu it was in — AppKit will not have an item in two — and
+        // handed its key again.
+        for item in [toggleItem, showItem] { item.menu?.removeItem(item) }
+        toggleItem.applyShortcut(.bookmarkTab)
+        showItem.applyShortcut(.showBookmarks)
+        showItem.title = L10n.text("Show Bookmarks…")
         menu.addItem(toggleItem)
+        menu.addItem(showItem)
         return menu
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.autoenablesItems = false
-        while menu.numberOfItems > 1 { menu.removeItem(at: 1) }
+        while menu.numberOfItems > 2 { menu.removeItem(at: 2) }
 
         let state = frontTabState()
         toggleItem.title = state.isBookmarked ? "Remove Bookmark" : "Bookmark"
@@ -96,6 +119,8 @@ final class BookmarksMenu: NSObject, NSMenuDelegate {
         return item
     }
 
+    @objc private func showAll(_ sender: Any?) { onShowAll() }
+
     @objc private func toggleFrontTab(_ sender: Any?) {
         onToggleFrontTab()
     }
@@ -109,7 +134,7 @@ final class BookmarksMenu: NSObject, NSMenuDelegate {
         bookmarks.removeMissing()
     }
 
-    /// The toggle is reachable by ⇧⌘D without the menu ever opening, so its
+    /// The toggle is reachable by ⌘D without the menu ever opening, so its
     /// title is written here as well as in `menuNeedsUpdate`.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard menuItem === toggleItem else { return menuItem.isEnabled }

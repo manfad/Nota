@@ -87,9 +87,14 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
         PillView.style(field, placeholder: placeholder, owner: self)
         magnifierButton = glyphButton(tooltip: "Replace (⌥⌘F)", action: #selector(toggleReplace))
         previousButton = glyphButton(
-            tooltip: "Previous match (⇧⌘G)", action: #selector(previousMatch)
+            tooltip: "Previous match "
+                + "(\(Preferences.shared.combo(for: .findPrevious).displayName))",
+            action: #selector(previousMatch)
         )
-        nextButton = glyphButton(tooltip: "Next match (⌘G)", action: #selector(nextMatch))
+        nextButton = glyphButton(
+            tooltip: "Next match (\(Preferences.shared.combo(for: .findNext).displayName))",
+            action: #selector(nextMatch)
+        )
         closeButton = glyphButton(tooltip: "Close (Esc)", action: #selector(closeBar))
 
         replacePill.onFinderAction = { [weak self] action in self?.perform(action) }

@@ -1,8 +1,12 @@
 import AppKit
 
-/// Single-pane Settings window, in the shape macOS expects: fixed size,
-/// centred the first time it appears, closes with ⌘W or Escape, and never
-/// really goes away — it is hidden and reused.
+/// Settings, in the shape macOS System Settings uses: a source list of pages
+/// down the left, under the traffic lights, and one page at a time on the
+/// right with its controls in inset rounded groups.
+///
+/// Seven pages over one shared Save button. The button lives outside the pages
+/// on purpose: the draft is one draft, and Save applies every page's worth of
+/// it together.
 ///
 /// Controls stage a draft. Save applies that snapshot together, then rebuilds
 /// the dialog so a language change is visible without closing the window.
@@ -14,49 +18,96 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         static let otherFont = 200
     }
 
+    /// The pages, in sidebar order, each with the symbol its row wears.
+    private static let pageSymbols: [(key: String, symbol: String)] = [
+        ("General", "gearshape"),
+        ("Appearance", "paintbrush"),
+        ("Editor", "square.and.pencil"),
+        ("Preview", "doc.richtext"),
+        ("Status bar", "rectangle.bottomthird.inset.filled"),
+        ("Shortcuts", "keyboard"),
+        ("About", "info.circle"),
+    ]
+
+    private struct Page {
+        let key: String
+        let content: NSView
+        let rows: [SettingsRowView]
+    }
+
     private let fontPopUp = NSPopUpButton()
     private let sizeField = NSTextField()
     private let sizeStepper = NSStepper()
     private let spacingPopUp = NSPopUpButton()
     private let paddingPopUp = NSPopUpButton()
-    private let lineNumbersCheckbox = NSButton(checkboxWithTitle: "Line numbers", target: nil, action: nil)
-    private let gutterSeparatorCheckbox = NSButton(
-        checkboxWithTitle: "Gutter separator", target: nil, action: nil
-    )
-    private let wordWrapCheckbox = NSButton(checkboxWithTitle: "Word wrap", target: nil, action: nil)
-    private let previewModeCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    private let vimModeCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    private let footerCheckboxes: [(TextStats.Segment, NSButton)] = [
-        (.words, NSButton(checkboxWithTitle: "", target: nil, action: nil)),
-        (.characters, NSButton(checkboxWithTitle: "", target: nil, action: nil)),
-        (.images, NSButton(checkboxWithTitle: "", target: nil, action: nil)),
-        (.lines, NSButton(checkboxWithTitle: "", target: nil, action: nil)),
-    ]
-    private let footerEncodingCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    private let footerLineEndingsCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    private let footerCursorCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    private let statusBarCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let languagePopUp = NSPopUpButton()
     private let themePopUp = NSPopUpButton()
+    private let wordWrapSwitch = NSSwitch()
+    private let lineNumbersSwitch = NSSwitch()
+    private let gutterSeparatorSwitch = NSSwitch()
+    private let vimModeSwitch = NSSwitch()
+    private let previewModeSwitch = NSSwitch()
+    private let statusBarSwitch = NSSwitch()
+    private let hideTabBarSwitch = NSSwitch()
+    private let autoHideTabBarSwitch = NSSwitch()
+    private let hideTrafficLightsSwitch = NSSwitch()
+    private let hideBookmarkButtonSwitch = NSSwitch()
+    private let hideSettingsButtonSwitch = NSSwitch()
+    private let footerSwitches: [(TextStats.Segment, NSSwitch)] = [
+        (.words, NSSwitch()),
+        (.characters, NSSwitch()),
+        (.images, NSSwitch()),
+        (.lines, NSSwitch()),
+    ]
+    private let footerEncodingSwitch = NSSwitch()
+    private let footerLineEndingsSwitch = NSSwitch()
+    private let footerCursorSwitch = NSSwitch()
     private let hotKeyField = ShortcutRecorderField()
-    private let hotKeyWarning = NSTextField(labelWithString: "")
+    private let hotKeyWarning = WrappingLabel(text: "")
     private let clearHotKeyButton = NSButton()
     private let saveButton = NSButton()
+    private let resetShortcutsButton = NSButton()
+    private let shortcutWarning = WrappingLabel(text: "")
+    private let versionLabel = WrappingLabel(text: "")
+
+    private let pageTitleLabel = NSTextField(labelWithString: "")
+    private let pageHost = FlippedView()
+    private var pages: [Page] = []
+    private var sidebarRows: [SettingsSidebarRow] = []
+    private var selectedPage = 0
+
+    /// The row whose switch only means anything while line numbers are on.
+    private var gutterSeparatorRow: SettingsRowView?
+    /// Greyed while "Hide tab bar" is on: a strip that is gone for good has
+    /// nothing to slide in.
+    private var autoHideTabBarRow: SettingsRowView?
+    /// The region rows the status-bar switch turns off as a block.
+    private var statusDetailRows: [SettingsRowView] = []
+
+    private var shortcutFields: [ShortcutAction: ShortcutRecorderField] = [:]
     private var localizedLabels: [(field: NSTextField, key: String)] = []
     private var sectionTitles: [(field: NSTextField, key: String)] = []
     private var hasCentered = false
     private var isDirty = false
     private var isApplying = false
     private var pendingHotKey: GlobalHotKey.Shortcut?
+    private var pendingShortcuts: [ShortcutAction: KeyCombo] = [:]
     private var pendingFontFamily: EditorFontFamily = .system
     private var pendingCustomFontName: String?
+
+    /// The sidebar's width, and the height its first row starts at — far
+    /// enough down that the traffic lights sitting over it have their own air.
+    private static let sidebarWidth: CGFloat = 180
+    private static let sidebarTopInset: CGFloat = 46
+    /// Padding between the page's edge and its groups.
+    private static let pageInset: CGFloat = 24
 
     private var preferences: Preferences { .shared }
 
     private init() {
         let window = SettingsWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 620),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -64,6 +115,11 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
         window.title = L10n.text("Settings")
         window.isReleasedWhenClosed = false
+        // The sidebar runs the full height with the traffic lights over it, so
+        // the titlebar is glass and the title itself lives on the page.
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.contentMinSize = NSSize(width: 700, height: 440)
 
         buildUI()
         refresh()
@@ -91,11 +147,154 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    // MARK: - Testing hooks
+
+    /// The page titles, in the order the sidebar lists them.
+    var pageTitles: [String] { pages.map { L10n.text($0.key) } }
+
+    /// Only the selected page's controls are in the view hierarchy, the way
+    /// System Settings works, so a test looking for a row has to bring that
+    /// page forward first.
+    func selectPage(at index: Int) {
+        guard pages.indices.contains(index) else { return }
+        selectedPage = index
+        for (position, row) in sidebarRows.enumerated() { row.isSelected = position == index }
+        pageTitleLabel.stringValue = L10n.text(pages[index].key)
+
+        for view in pageHost.subviews { view.removeFromSuperview() }
+        let content = pages[index].content
+        pageHost.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: pageHost.topAnchor, constant: 8),
+            content.leadingAnchor.constraint(
+                equalTo: pageHost.leadingAnchor, constant: Self.pageInset
+            ),
+            content.trailingAnchor.constraint(
+                equalTo: pageHost.trailingAnchor, constant: -Self.pageInset
+            ),
+            content.bottomAnchor.constraint(equalTo: pageHost.bottomAnchor, constant: -20),
+        ])
+        pageHost.layoutSubtreeIfNeeded()
+    }
+
+    /// Selects the page with this title, English key or translation. False if
+    /// there is no such page.
+    @discardableResult
+    func selectPage(titled title: String) -> Bool {
+        guard let index = pages.firstIndex(where: { $0.key == title || L10n.text($0.key) == title })
+        else { return false }
+        selectPage(at: index)
+        return true
+    }
+
+    /// A page's rows as the user reads them: the label on the left and the
+    /// control on the right. Switches carry no title of their own, so this is
+    /// how a test names one.
+    func rows(on page: Int) -> [(title: String, control: NSControl)] {
+        guard pages.indices.contains(page) else { return [] }
+        return pages[page].rows.map { ($0.label.stringValue, $0.control) }
+    }
+
     // MARK: - Layout
 
     private func buildUI() {
         guard let window, let content = window.contentView else { return }
+        configureControls()
+        buildPages()
 
+        let sidebar = NSVisualEffectView()
+        sidebar.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.material = .sidebar
+        sidebar.blendingMode = .behindWindow
+        sidebar.state = .followsWindowActiveState
+
+        let rowStack = NSStackView(views: [])
+        rowStack.translatesAutoresizingMaskIntoConstraints = false
+        rowStack.orientation = .vertical
+        rowStack.alignment = .leading
+        rowStack.spacing = 2
+        for (index, entry) in Self.pageSymbols.enumerated() {
+            let row = SettingsSidebarRow(symbol: entry.symbol)
+            row.onSelect = { [weak self] in self?.selectPage(at: index) }
+            sidebarRows.append(row)
+            rowStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: rowStack.widthAnchor).isActive = true
+        }
+        sidebar.addSubview(rowStack)
+
+        let pane = NSView()
+        pane.translatesAutoresizingMaskIntoConstraints = false
+
+        pageTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        pageTitleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        pageTitleLabel.alignment = .center
+        pane.addSubview(pageTitleLabel)
+
+        let scroll = NSScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.automaticallyAdjustsContentInsets = false
+        scroll.documentView = pageHost
+        pane.addSubview(scroll)
+
+        let saveSpacer = NSView()
+        let saveRow = NSStackView(views: [saveSpacer, saveButton])
+        saveRow.translatesAutoresizingMaskIntoConstraints = false
+        saveRow.orientation = .horizontal
+        saveRow.spacing = 12
+        pane.addSubview(saveRow)
+
+        content.addSubview(sidebar)
+        content.addSubview(pane)
+
+        let clip = scroll.contentView
+        NSLayoutConstraint.activate([
+            sidebar.topAnchor.constraint(equalTo: content.topAnchor),
+            sidebar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            sidebar.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            sidebar.widthAnchor.constraint(equalToConstant: Self.sidebarWidth),
+
+            rowStack.topAnchor.constraint(
+                equalTo: sidebar.topAnchor, constant: Self.sidebarTopInset
+            ),
+            rowStack.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 10),
+            rowStack.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -10),
+
+            pane.topAnchor.constraint(equalTo: content.topAnchor),
+            pane.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            pane.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            pane.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+
+            pageTitleLabel.topAnchor.constraint(equalTo: pane.topAnchor, constant: 18),
+            pageTitleLabel.centerXAnchor.constraint(equalTo: pane.centerXAnchor),
+            pageTitleLabel.leadingAnchor.constraint(
+                greaterThanOrEqualTo: pane.leadingAnchor, constant: 20
+            ),
+
+            scroll.topAnchor.constraint(equalTo: pageTitleLabel.bottomAnchor, constant: 12),
+            scroll.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: saveRow.topAnchor, constant: -12),
+
+            pageHost.topAnchor.constraint(equalTo: clip.topAnchor),
+            pageHost.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
+            pageHost.widthAnchor.constraint(equalTo: clip.widthAnchor),
+
+            saveRow.leadingAnchor.constraint(
+                equalTo: pane.leadingAnchor, constant: Self.pageInset
+            ),
+            saveRow.trailingAnchor.constraint(
+                equalTo: pane.trailingAnchor, constant: -Self.pageInset
+            ),
+            saveRow.bottomAnchor.constraint(equalTo: pane.bottomAnchor, constant: -18),
+        ])
+
+        selectPage(at: 0)
+    }
+
+    private func configureControls() {
         fontPopUp.target = self
         fontPopUp.action = #selector(fontFamilyChanged)
 
@@ -115,52 +314,26 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         sizeStepper.target = self
         sizeStepper.action = #selector(sizeStepperChanged)
 
-        let sizeRow = NSStackView(views: [sizeField, sizeStepper])
-        sizeRow.orientation = .horizontal
-        sizeRow.spacing = 6
-        sizeField.widthAnchor.constraint(equalToConstant: 52).isActive = true
-
-        wordWrapCheckbox.target = self
-        wordWrapCheckbox.action = #selector(draftChanged)
-
-        lineNumbersCheckbox.target = self
-        lineNumbersCheckbox.action = #selector(lineNumbersDraftChanged)
-
-        gutterSeparatorCheckbox.target = self
-        gutterSeparatorCheckbox.action = #selector(draftChanged)
-        // Both gutter switches on one line, the separator second: it only
-        // means anything while the numbers are there.
-        let gutterRow = NSStackView(views: [lineNumbersCheckbox, gutterSeparatorCheckbox])
-        gutterRow.orientation = .horizontal
-        gutterRow.spacing = 10
-
-        previewModeCheckbox.target = self
-        previewModeCheckbox.action = #selector(draftChanged)
-
-        vimModeCheckbox.target = self
-        vimModeCheckbox.action = #selector(draftChanged)
-
-        for (_, checkbox) in footerCheckboxes {
-            checkbox.target = self
-            checkbox.action = #selector(draftChanged)
+        for control in [wordWrapSwitch, gutterSeparatorSwitch, vimModeSwitch, previewModeSwitch,
+                        autoHideTabBarSwitch, hideTrafficLightsSwitch, hideBookmarkButtonSwitch,
+                        hideSettingsButtonSwitch] {
+            control.target = self
+            control.action = #selector(draftChanged)
         }
-        for checkbox in [footerEncodingCheckbox, footerLineEndingsCheckbox, footerCursorCheckbox] {
-            checkbox.target = self
-            checkbox.action = #selector(draftChanged)
+        for (_, control) in footerSwitches {
+            control.target = self
+            control.action = #selector(draftChanged)
         }
-        statusBarCheckbox.target = self
-        statusBarCheckbox.action = #selector(statusBarDraftChanged)
-        // The visible status items mirror their order in the actual bar.
-        let footerGrid = NSGridView(views: [
-            [footerCheckboxes[0].1, footerCheckboxes[1].1],
-            [footerCheckboxes[2].1, footerCheckboxes[3].1],
-            [footerEncodingCheckbox, footerLineEndingsCheckbox],
-            [footerCursorCheckbox, NSView()],
-        ])
-        footerGrid.rowSpacing = 5
-        footerGrid.columnSpacing = 16
-        footerGrid.column(at: 0).xPlacement = .leading
-        footerGrid.column(at: 1).xPlacement = .leading
+        for control in [footerEncodingSwitch, footerLineEndingsSwitch, footerCursorSwitch] {
+            control.target = self
+            control.action = #selector(draftChanged)
+        }
+        lineNumbersSwitch.target = self
+        lineNumbersSwitch.action = #selector(lineNumbersDraftChanged)
+        hideTabBarSwitch.target = self
+        hideTabBarSwitch.action = #selector(hideTabBarDraftChanged)
+        statusBarSwitch.target = self
+        statusBarSwitch.action = #selector(statusBarDraftChanged)
 
         hotKeyField.onRecord = { [weak self] shortcut in
             self?.pendingHotKey = shortcut
@@ -170,99 +343,250 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         clearHotKeyButton.action = #selector(clearHotKey)
         clearHotKeyButton.bezelStyle = .rounded
         clearHotKeyButton.controlSize = .small
-        let hotKeyRow = NSStackView(views: [hotKeyField, clearHotKeyButton])
-        hotKeyRow.orientation = .horizontal
-        hotKeyRow.spacing = 6
-        hotKeyField.widthAnchor.constraint(equalToConstant: 118).isActive = true
 
-        hotKeyWarning.font = .systemFont(ofSize: 11)
         hotKeyWarning.textColor = .systemRed
         hotKeyWarning.isHidden = true
+        hotKeyWarning.setAccessibilityIdentifier("summon-warning")
+
+        shortcutWarning.textColor = .systemRed
+        shortcutWarning.isHidden = true
+        shortcutWarning.setAccessibilityIdentifier("shortcut-conflict")
+
+        resetShortcutsButton.target = self
+        resetShortcutsButton.action = #selector(resetShortcuts)
+        resetShortcutsButton.bezelStyle = .rounded
+        resetShortcutsButton.controlSize = .small
 
         saveButton.target = self
         saveButton.action = #selector(saveChanges)
         saveButton.bezelStyle = .rounded
         saveButton.keyEquivalent = "\r"
 
-        let actionSpacer = NSView()
-        let actionRow = NSStackView(views: [actionSpacer, saveButton])
-        actionRow.orientation = .horizontal
-        actionRow.spacing = 12
+        for popUp in [fontPopUp, spacingPopUp, paddingPopUp, languagePopUp, themePopUp] {
+            popUp.widthAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
+        }
+        sizeField.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        hotKeyField.widthAnchor.constraint(equalToConstant: 118).isActive = true
+    }
 
-        let general = section("General", rows: [
-            [label("Language"), languagePopUp],
-            [label("Theme"), themePopUp],
-            [label("Summon"), hotKeyRow],
-            [label(""), hotKeyWarning],
-        ])
-        let appearance = section("Appearance", rows: [
-            [label("Font"), fontPopUp],
-            [label("Size"), sizeRow],
-            [label("Line spacing"), spacingPopUp],
-            [label("Padding"), paddingPopUp],
-        ])
-        let editor = section("Editor", rows: [
-            [label(""), wordWrapCheckbox],
-            [label(""), gutterRow],
-        ])
-        let preview = section("Preview", rows: [
-            [label(""), previewModeCheckbox],
-        ])
-        let status = section("Status bar", rows: [
-            [label(""), statusBarCheckbox],
-            [label(""), footerGrid],
-            [label(""), vimModeCheckbox],
+    // MARK: - The pages
+
+    private func buildPages() {
+        pages = [
+            generalPage(), appearancePage(), editorPage(), previewPage(),
+            statusBarPage(), shortcutsPage(), aboutPage(),
+        ]
+    }
+
+    private func generalPage() -> Page {
+        let rows = [row("Language", control: languagePopUp), row("Theme", control: themePopUp)]
+        return page(
+            "General",
+            blocks: [groupBox(rows), footnote("System Default follows the Mac.")],
+            rows: rows
+        )
+    }
+
+    private func appearancePage() -> Page {
+        let sizeStack = NSStackView(views: [sizeField, sizeStepper])
+        sizeStack.orientation = .horizontal
+        sizeStack.spacing = 6
+
+        let text = [
+            row("Font", control: fontPopUp),
+            row("Size", control: sizeField, trailing: sizeStack),
+            row("Line spacing", control: spacingPopUp),
+            row("Padding", control: paddingPopUp),
+        ]
+        // What the window itself wears: each of these takes a piece of chrome
+        // away, and every one of them has a key that still works without it.
+        let autoHide = row("Auto-hide tab bar", control: autoHideTabBarSwitch)
+        autoHideTabBarRow = autoHide
+        let chrome = [
+            row("Hide tab bar", control: hideTabBarSwitch),
+            autoHide,
+            row("Hide traffic lights", control: hideTrafficLightsSwitch),
+            row("Hide bookmark button", control: hideBookmarkButtonSwitch),
+            row("Hide Settings button", control: hideSettingsButtonSwitch),
+        ]
+        return page(
+            "Appearance",
+            blocks: [
+                groupBox(text),
+                sectionHeading("Window"),
+                groupBox(chrome),
+                footnote(
+                    "The strip's buttons and the window's own buttons come back with their keys: "
+                        + "⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W all keep working. Auto-hide slides the strip in "
+                        + "when the pointer reaches the top edge, and away again when it leaves."
+                ),
+            ],
+            rows: text + chrome
+        )
+    }
+
+    private func editorPage() -> Page {
+        let separator = row("Gutter separator", control: gutterSeparatorSwitch)
+        gutterSeparatorRow = separator
+        let rows = [
+            row("Word wrap", control: wordWrapSwitch),
+            row("Line numbers", control: lineNumbersSwitch),
+            separator,
+            row("Vim mode", control: vimModeSwitch),
+        ]
+        return page("Editor", blocks: [groupBox(rows)], rows: rows)
+    }
+
+    private func previewPage() -> Page {
+        let rows = [
+            row("Start supported files in preview mode", control: previewModeSwitch),
+        ]
+        return page("Preview", blocks: [groupBox(rows)], rows: rows)
+    }
+
+    private func statusBarPage() -> Page {
+        let toggle = row("Show status bar", control: statusBarSwitch)
+        // The regions read in the order the actual bar draws them.
+        let titles = ["Words", "Characters", "Images", "Lines"]
+        var regions = zip(titles, footerSwitches).map { row($0.0, control: $0.1.1) }
+        regions.append(row("Text encoding", control: footerEncodingSwitch))
+        regions.append(row("Line endings", control: footerLineEndingsSwitch))
+        regions.append(row("Cursor position", control: footerCursorSwitch))
+        statusDetailRows = regions
+
+        return page(
+            "Status bar",
+            blocks: [groupBox([toggle]), groupBox(regions)],
+            rows: [toggle] + regions
+        )
+    }
+
+    /// Summon first — it is the one shortcut that works while Nota is not in
+    /// front — then the menu commands, grouped under the menu each lives in.
+    private func shortcutsPage() -> Page {
+        let hotKeyStack = NSStackView(views: [hotKeyField, clearHotKeyButton])
+        hotKeyStack.orientation = .horizontal
+        hotKeyStack.spacing = 6
+
+        let summon = row("Summon", control: hotKeyField, trailing: hotKeyStack)
+        var blocks: [NSView] = [
+            groupBox([summon]),
+            footnote("Summon brings Nota to the front from any app, even while it is hidden."),
+            hotKeyWarning,
+        ]
+        var rows = [summon]
+        for group in ShortcutAction.Group.allCases {
+            let commands = group.actions.map { action in
+                row(action.titleKey, control: recorder(for: action))
+            }
+            blocks.append(sectionHeading(group.rawValue))
+            blocks.append(groupBox(commands))
+            rows.append(contentsOf: commands)
+        }
+
+        let resetSpacer = NSView()
+        let resetRow = NSStackView(views: [resetSpacer, resetShortcutsButton])
+        resetRow.orientation = .horizontal
+        resetRow.spacing = 12
+
+        blocks.append(shortcutWarning)
+        blocks.append(footnote(
+            "Two commands cannot share a combination, and the Mac's own keys are off limits."
+        ))
+        blocks.append(resetRow)
+        return page("Shortcuts", blocks: blocks, rows: rows)
+    }
+
+    private func aboutPage() -> Page {
+        let icon = NSImageView()
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = NSApp.applicationIconImage
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 96),
+            icon.heightAnchor.constraint(equalToConstant: 96),
         ])
 
-        let stack = NSStackView(views: [general, appearance, editor, preview, status, actionRow])
+        let name = NSTextField(labelWithString: "Nota")
+        name.font = .systemFont(ofSize: 24, weight: .semibold)
+        name.alignment = .center
+
+        versionLabel.font = .systemFont(ofSize: 12)
+        versionLabel.textColor = .secondaryLabelColor
+        versionLabel.alignment = .center
+
+        let tagline = footnote("A plain-text notebook.")
+        tagline.alignment = .center
+
+        return page(
+            "About", blocks: [icon, name, versionLabel, tagline], rows: [], centered: true
+        )
+    }
+
+    // MARK: - Building blocks
+
+    private func page(
+        _ key: String, blocks: [NSView], rows: [SettingsRowView], centered: Bool = false
+    ) -> Page {
+        let stack = NSStackView(views: blocks)
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 20
-        content.addSubview(stack)
+        stack.alignment = centered ? .centerX : .leading
+        stack.spacing = centered ? 8 : 18
+        // A footnote belongs to the group above it, and a heading to the group
+        // below, so both sit closer than one group does to the next.
+        for (index, block) in blocks.enumerated() {
+            if block is SectionHeadingLabel {
+                stack.setCustomSpacing(6, after: block)
+            } else if index + 1 < blocks.count, blocks[index + 1] is WrappingLabel {
+                stack.setCustomSpacing(6, after: block)
+            }
+            if !centered {
+                block.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+            }
+        }
+        if centered, let first = blocks.first {
+            stack.setCustomSpacing(16, after: first)
+        }
+        return Page(key: key, content: stack, rows: rows)
+    }
 
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -24),
-            fontPopUp.widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
-            spacingPopUp.widthAnchor.constraint(equalTo: fontPopUp.widthAnchor),
-            paddingPopUp.widthAnchor.constraint(equalTo: fontPopUp.widthAnchor),
-            languagePopUp.widthAnchor.constraint(equalTo: fontPopUp.widthAnchor),
-            themePopUp.widthAnchor.constraint(equalTo: fontPopUp.widthAnchor),
-            actionRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
-        ])
+    private func groupBox(_ rows: [SettingsRowView]) -> NSView { GroupBoxView(rows: rows) }
 
-        content.layoutSubtreeIfNeeded()
-        window.setContentSize(content.fittingSize)
+    private func row(
+        _ key: String, control: NSControl, trailing: NSView? = nil
+    ) -> SettingsRowView {
+        SettingsRowView(label: label(key), control: control, trailing: trailing ?? control)
+    }
+
+    private func recorder(for action: ShortcutAction) -> ShortcutRecorderField {
+        let field = ShortcutRecorderField(kind: .appShortcut)
+        field.widthAnchor.constraint(equalToConstant: 118).isActive = true
+        field.defaultCombo = action.defaultCombo
+        field.onRecordCombo = { [weak self] combo in self?.record(combo, for: action) }
+        shortcutFields[action] = field
+        return field
     }
 
     private func label(_ key: String) -> NSTextField {
         let field = NSTextField(labelWithString: L10n.text(key))
-        field.alignment = .right
-        field.widthAnchor.constraint(equalToConstant: 112).isActive = true
+        field.lineBreakMode = .byTruncatingTail
         localizedLabels.append((field, key))
         return field
     }
 
-    private func section(_ title: String, rows: [[NSView]]) -> NSStackView {
-        let heading = NSTextField(labelWithString: L10n.text(title))
-        heading.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
-        sectionTitles.append((heading, title))
+    private func footnote(_ key: String) -> WrappingLabel {
+        let field = WrappingLabel(text: L10n.text(key))
+        field.font = .systemFont(ofSize: 12)
+        field.textColor = .secondaryLabelColor
+        localizedLabels.append((field, key))
+        return field
+    }
 
-        let grid = NSGridView(views: rows)
-        grid.rowSpacing = 8
-        grid.columnSpacing = 12
-        grid.column(at: 0).xPlacement = .trailing
-        grid.column(at: 1).xPlacement = .leading
-        for index in 0..<grid.numberOfRows { grid.row(at: index).yPlacement = .center }
-
-        let section = NSStackView(views: [heading, grid])
-        section.orientation = .vertical
-        section.alignment = .leading
-        section.spacing = 8
-        return section
+    private func sectionHeading(_ key: String) -> SectionHeadingLabel {
+        let field = SectionHeadingLabel(text: L10n.text(key))
+        sectionTitles.append((field, key))
+        return field
     }
 
     private func fill(_ popUp: NSPopUpButton, with entries: [(String, String)], action: Selector) {
@@ -286,35 +610,32 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     private func refresh() {
         pendingHotKey = preferences.hotKey
+        pendingShortcuts = preferences.shortcuts
         pendingFontFamily = preferences.fontFamily
         pendingCustomFontName = preferences.customFontName
         window?.title = L10n.text("Settings")
         for (field, key) in localizedLabels { field.stringValue = L10n.text(key) }
         for (field, key) in sectionTitles { field.stringValue = L10n.text(key) }
-
-        wordWrapCheckbox.title = L10n.text("Word wrap")
-        lineNumbersCheckbox.title = L10n.text("Line numbers")
-        gutterSeparatorCheckbox.title = L10n.text("Gutter separator")
-        previewModeCheckbox.title = L10n.text("Start supported files in preview mode")
-        vimModeCheckbox.title = L10n.text("Vim mode")
-        statusBarCheckbox.title = L10n.text("Show status bar")
-        let countTitles = ["Words", "Characters", "Images", "Lines"]
-        for (entry, title) in zip(footerCheckboxes, countTitles) {
-            entry.1.title = L10n.text(title)
+        for (index, row) in sidebarRows.enumerated() {
+            let key = Self.pageSymbols[index].key
+            row.title = L10n.text(key)
         }
-        footerEncodingCheckbox.title = L10n.text("Text encoding")
-        footerLineEndingsCheckbox.title = L10n.text("Line endings")
-        footerCursorCheckbox.title = L10n.text("Cursor position")
+        if pages.indices.contains(selectedPage) {
+            pageTitleLabel.stringValue = L10n.text(pages[selectedPage].key)
+        }
+        versionLabel.stringValue = String(
+            format: L10n.text("Version %@"), AppVersion.current
+        )
+
         clearHotKeyButton.title = L10n.text("Clear")
+        resetShortcutsButton.title = L10n.text("Reset to Defaults")
         saveButton.title = L10n.text("Save")
-        fontPopUp.setAccessibilityLabel(L10n.text("Font"))
-        sizeField.setAccessibilityLabel(L10n.text("Size"))
+        // A switch has no title of its own, so its row's label is its name —
+        // for VoiceOver and for the tests alike.
+        for page in pages {
+            for row in page.rows { row.control.setAccessibilityLabel(row.label.stringValue) }
+        }
         sizeStepper.setAccessibilityLabel(L10n.text("Size"))
-        spacingPopUp.setAccessibilityLabel(L10n.text("Line spacing"))
-        paddingPopUp.setAccessibilityLabel(L10n.text("Padding"))
-        languagePopUp.setAccessibilityLabel(L10n.text("Language"))
-        themePopUp.setAccessibilityLabel(L10n.text("Theme"))
-        hotKeyField.setAccessibilityLabel(L10n.text("Summon"))
 
         fill(spacingPopUp, with: LineSpacingOption.allCases.map { ($0.title, $0.rawValue) },
              action: #selector(lineSpacingChanged))
@@ -335,21 +656,27 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         select(paddingPopUp, raw: preferences.padding.rawValue)
         select(languagePopUp, raw: preferences.language.rawValue)
         select(themePopUp, raw: preferences.theme.rawValue)
-        wordWrapCheckbox.state = preferences.wrapsLines ? .on : .off
-        lineNumbersCheckbox.state = preferences.showsLineNumbers ? .on : .off
-        gutterSeparatorCheckbox.state = preferences.showsGutterSeparator ? .on : .off
-        gutterSeparatorCheckbox.isEnabled = preferences.showsLineNumbers
+        wordWrapSwitch.state = preferences.wrapsLines ? .on : .off
+        lineNumbersSwitch.state = preferences.showsLineNumbers ? .on : .off
+        gutterSeparatorSwitch.state = preferences.showsGutterSeparator ? .on : .off
+        gutterSeparatorRow?.isEnabled = preferences.showsLineNumbers
         let enabled = Set(preferences.footerSegments)
-        for (segment, checkbox) in footerCheckboxes {
-            checkbox.state = enabled.contains(segment) ? .on : .off
+        for (segment, control) in footerSwitches {
+            control.state = enabled.contains(segment) ? .on : .off
         }
-        footerEncodingCheckbox.state = preferences.footerShowsEncoding ? .on : .off
-        footerLineEndingsCheckbox.state = preferences.footerShowsLineEndings ? .on : .off
-        footerCursorCheckbox.state = preferences.footerShowsCursorPosition ? .on : .off
-        statusBarCheckbox.state = preferences.showsStatusBar ? .on : .off
+        footerEncodingSwitch.state = preferences.footerShowsEncoding ? .on : .off
+        footerLineEndingsSwitch.state = preferences.footerShowsLineEndings ? .on : .off
+        footerCursorSwitch.state = preferences.footerShowsCursorPosition ? .on : .off
+        statusBarSwitch.state = preferences.showsStatusBar ? .on : .off
         setStatusDetailsEnabled(preferences.showsStatusBar)
-        previewModeCheckbox.state = preferences.opensMarkdownInReadingMode ? .on : .off
-        vimModeCheckbox.state = preferences.vimMode ? .on : .off
+        previewModeSwitch.state = preferences.opensMarkdownInReadingMode ? .on : .off
+        vimModeSwitch.state = preferences.vimMode ? .on : .off
+        hideTabBarSwitch.state = preferences.hidesTabBar ? .on : .off
+        autoHideTabBarSwitch.state = preferences.autoHidesTabBar ? .on : .off
+        autoHideTabBarRow?.isEnabled = !preferences.hidesTabBar
+        hideTrafficLightsSwitch.state = preferences.hidesTrafficLights ? .on : .off
+        hideBookmarkButtonSwitch.state = preferences.hidesBookmarkButton ? .on : .off
+        hideSettingsButtonSwitch.state = preferences.hidesSettingsButton ? .on : .off
         hotKeyField.shortcut = pendingHotKey
 
         let failed = (NSApp.delegate as? AppDelegate)?.hotKeyRegistrationFailed ?? false
@@ -357,6 +684,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             ? L10n.text("Another app is using that shortcut.")
             : ""
         hotKeyWarning.isHidden = !failed
+        refreshShortcutFields()
+        showShortcutConflict()
         isDirty = false
         saveButton.isEnabled = false
         window?.contentView?.layoutSubtreeIfNeeded()
@@ -438,26 +767,89 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         markDirty()
     }
 
-    @objc private func lineNumbersDraftChanged(_ sender: NSButton) {
-        gutterSeparatorCheckbox.isEnabled = sender.state == .on
+    /// A row that has been put back to the key it ships with is not an
+    /// override at all, so it comes out of the draft rather than going in.
+    private func record(_ combo: KeyCombo, for action: ShortcutAction) {
+        pendingShortcuts[action] = combo == action.defaultCombo ? nil : combo
         markDirty()
     }
 
-    @objc private func statusBarDraftChanged(_ sender: NSButton) {
+    @objc private func resetShortcuts() {
+        pendingShortcuts = [:]
+        refreshShortcutFields()
+        markDirty()
+    }
+
+    private func draftCombo(for action: ShortcutAction) -> KeyCombo {
+        pendingShortcuts[action] ?? action.defaultCombo
+    }
+
+    private func refreshShortcutFields() {
+        for (action, field) in shortcutFields {
+            field.setAccessibilityLabel(action.title)
+            field.combo = draftCombo(for: action)
+        }
+    }
+
+    /// The first clash in the draft: two commands on one combination, or one
+    /// sitting on a key the Mac has already spoken for. Nil when the draft is
+    /// fit to save.
+    private func shortcutConflict() -> String? {
+        var owners: [KeyCombo: ShortcutAction] = [:]
+        for action in ShortcutAction.allCases {
+            let combo = draftCombo(for: action)
+            if let reserved = ShortcutAction.reservedCombos.first(where: { $0.combo == combo }) {
+                return String(
+                    format: L10n.text("%1$@ is reserved for %2$@."),
+                    combo.displayName, L10n.text(reserved.titleKey)
+                )
+            }
+            if let owner = owners[combo] {
+                return String(
+                    format: L10n.text("%1$@ and %2$@ both use %3$@."),
+                    owner.title, action.title, combo.displayName
+                )
+            }
+            owners[combo] = action
+        }
+        return nil
+    }
+
+    /// Shows the clash, if there is one, and says whether Save has to wait.
+    @discardableResult
+    private func showShortcutConflict() -> Bool {
+        let message = shortcutConflict()
+        shortcutWarning.stringValue = message ?? ""
+        shortcutWarning.isHidden = message == nil
+        return message != nil
+    }
+
+    @objc private func lineNumbersDraftChanged(_ sender: NSSwitch) {
+        gutterSeparatorRow?.isEnabled = sender.state == .on
+        markDirty()
+    }
+
+    /// Hiding the strip outright takes auto-hide with it: there is nothing
+    /// left for the top edge to slide in.
+    @objc private func hideTabBarDraftChanged(_ sender: NSSwitch) {
+        autoHideTabBarRow?.isEnabled = sender.state == .off
+        markDirty()
+    }
+
+    @objc private func statusBarDraftChanged(_ sender: NSSwitch) {
         setStatusDetailsEnabled(sender.state == .on)
         markDirty()
     }
 
     private func setStatusDetailsEnabled(_ enabled: Bool) {
-        for (_, checkbox) in footerCheckboxes { checkbox.isEnabled = enabled }
-        footerEncodingCheckbox.isEnabled = enabled
-        footerLineEndingsCheckbox.isEnabled = enabled
-        footerCursorCheckbox.isEnabled = enabled
+        for row in statusDetailRows { row.isEnabled = enabled }
     }
 
     private func markDirty() {
         isDirty = true
-        saveButton.isEnabled = true
+        // Two commands on one key would leave one of them unreachable, so the
+        // draft cannot be saved until the user picks a side.
+        saveButton.isEnabled = !showShortcutConflict()
     }
 
     private func rawValue<T: RawRepresentable>(of popUp: NSPopUpButton, as type: T.Type) -> T?
@@ -476,8 +868,9 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         let fontFamily = pendingFontFamily
         let customFontName = pendingCustomFontName
         let fontSize = Preferences.clampFontSize(CGFloat(sizeField.doubleValue))
+        guard shortcutConflict() == nil else { return }
         let hotKey = pendingHotKey
-        let segmentStates = Dictionary(uniqueKeysWithValues: footerCheckboxes.map {
+        let segmentStates = Dictionary(uniqueKeysWithValues: footerSwitches.map {
             ($0.0, $0.1.state == .on)
         })
 
@@ -487,20 +880,26 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         preferences.fontSize = fontSize
         preferences.lineSpacing = spacing
         preferences.padding = padding
-        preferences.wrapsLines = wordWrapCheckbox.state == .on
-        preferences.showsLineNumbers = lineNumbersCheckbox.state == .on
-        preferences.showsGutterSeparator = gutterSeparatorCheckbox.state == .on
-        preferences.opensMarkdownInReadingMode = previewModeCheckbox.state == .on
-        preferences.showsStatusBar = statusBarCheckbox.state == .on
+        preferences.wrapsLines = wordWrapSwitch.state == .on
+        preferences.showsLineNumbers = lineNumbersSwitch.state == .on
+        preferences.showsGutterSeparator = gutterSeparatorSwitch.state == .on
+        preferences.opensMarkdownInReadingMode = previewModeSwitch.state == .on
+        preferences.showsStatusBar = statusBarSwitch.state == .on
         preferences.footerShowsWords = segmentStates[.words] ?? false
         preferences.footerShowsCharacters = segmentStates[.characters] ?? false
         preferences.footerShowsImages = segmentStates[.images] ?? false
         preferences.footerShowsLines = segmentStates[.lines] ?? false
-        preferences.footerShowsEncoding = footerEncodingCheckbox.state == .on
-        preferences.footerShowsLineEndings = footerLineEndingsCheckbox.state == .on
-        preferences.footerShowsCursorPosition = footerCursorCheckbox.state == .on
-        preferences.vimMode = vimModeCheckbox.state == .on
+        preferences.footerShowsEncoding = footerEncodingSwitch.state == .on
+        preferences.footerShowsLineEndings = footerLineEndingsSwitch.state == .on
+        preferences.footerShowsCursorPosition = footerCursorSwitch.state == .on
+        preferences.vimMode = vimModeSwitch.state == .on
+        preferences.hidesTabBar = hideTabBarSwitch.state == .on
+        preferences.autoHidesTabBar = autoHideTabBarSwitch.state == .on
+        preferences.hidesTrafficLights = hideTrafficLightsSwitch.state == .on
+        preferences.hidesBookmarkButton = hideBookmarkButtonSwitch.state == .on
+        preferences.hidesSettingsButton = hideSettingsButtonSwitch.state == .on
         preferences.hotKey = hotKey
+        preferences.shortcuts = pendingShortcuts
         preferences.language = language
         preferences.theme = theme
         isApplying = false
@@ -539,5 +938,271 @@ final class SettingsWindow: NSWindow {
 
     override func cancelOperation(_ sender: Any?) {
         close()
+    }
+}
+
+// MARK: - The pieces the pages are made of
+
+/// The document view of the page's scroller. Flipped so a short page sits at
+/// the top of the scroller rather than the bottom.
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+}
+
+/// One row of a group: a label on the left, its control on the right edge.
+private final class SettingsRowView: NSView {
+    let label: NSTextField
+    let control: NSControl
+
+    /// Greys the label with the control, so a row switched off by another row
+    /// reads as off rather than merely unresponsive.
+    var isEnabled = true {
+        didSet {
+            control.isEnabled = isEnabled
+            label.textColor = isEnabled ? .labelColor : .tertiaryLabelColor
+        }
+    }
+
+    init(label: NSTextField, control: NSControl, trailing: NSView) {
+        self.label = label
+        self.control = control
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+        trailing.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        addSubview(trailing)
+
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        trailing.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 44),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            trailing.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            trailing.centerYAnchor.constraint(equalTo: centerYAnchor),
+            trailing.leadingAnchor.constraint(
+                greaterThanOrEqualTo: label.trailingAnchor, constant: 12
+            ),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+}
+
+/// The inset group System Settings puts its rows in: a rounded card with a
+/// hairline between one row and the next.
+private final class GroupBoxView: NSView {
+    init(rows: [SettingsRowView]) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+
+        var previous: NSView?
+        for row in rows {
+            addSubview(row)
+            if let previous {
+                let line = HairlineView()
+                addSubview(line)
+                NSLayoutConstraint.activate([
+                    line.topAnchor.constraint(equalTo: previous.bottomAnchor),
+                    line.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+                    line.trailingAnchor.constraint(equalTo: trailingAnchor),
+                    line.heightAnchor.constraint(equalToConstant: 1),
+                    row.topAnchor.constraint(equalTo: line.bottomAnchor),
+                ])
+            } else {
+                row.topAnchor.constraint(equalTo: topAnchor).isActive = true
+            }
+            NSLayoutConstraint.activate([
+                row.leadingAnchor.constraint(equalTo: leadingAnchor),
+                row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            ])
+            previous = row
+        }
+        previous?.bottomAnchor.constraint(equalTo: bottomAnchor).isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = SettingsPalette.groupFill.cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
+/// The line between two rows of a group.
+private final class HairlineView: NSView {
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.separatorColor.cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
+/// One row of the source list: an accent-coloured symbol and a title, filled
+/// with the accent colour when it is the page on screen.
+private final class SettingsSidebarRow: NSView {
+    private let symbolView = NSImageView()
+    private let titleField = NSTextField(labelWithString: "")
+    var onSelect: (() -> Void)?
+
+    var title: String {
+        get { titleField.stringValue }
+        set {
+            titleField.stringValue = newValue
+            setAccessibilityLabel(newValue)
+        }
+    }
+
+    var isSelected = false {
+        didSet {
+            applyTint()
+            needsDisplay = true
+        }
+    }
+
+    init(symbol: String) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.cornerCurve = .continuous
+
+        symbolView.translatesAutoresizingMaskIntoConstraints = false
+        symbolView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        symbolView.symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: 13, weight: .medium
+        )
+        symbolView.imageScaling = .scaleProportionallyDown
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        titleField.font = .systemFont(ofSize: 13)
+        titleField.lineBreakMode = .byTruncatingTail
+        addSubview(symbolView)
+        addSubview(titleField)
+
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 28),
+            symbolView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            symbolView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            symbolView.widthAnchor.constraint(equalToConstant: 18),
+            titleField.leadingAnchor.constraint(equalTo: symbolView.trailingAnchor, constant: 7),
+            titleField.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
+            titleField.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+
+        setAccessibilityRole(.button)
+        applyTint()
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    private func applyTint() {
+        symbolView.contentTintColor = isSelected ? .white : .controlAccentColor
+        titleField.textColor = isSelected ? .white : .labelColor
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onSelect?()
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = isSelected
+                ? NSColor.controlAccentColor.cgColor
+                : NSColor.clear.cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
+/// A label that wraps to whatever width it is given — the explanatory lines
+/// under a group, and the red warnings.
+private class WrappingLabel: NSTextField {
+    init(text: String) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        isEditable = false
+        isSelectable = false
+        isBordered = false
+        drawsBackground = false
+        font = .systemFont(ofSize: 12)
+        textColor = .secondaryLabelColor
+        lineBreakMode = .byWordWrapping
+        maximumNumberOfLines = 0
+        stringValue = text
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layout() {
+        if preferredMaxLayoutWidth != bounds.width {
+            preferredMaxLayoutWidth = bounds.width
+            invalidateIntrinsicContentSize()
+        }
+        super.layout()
+    }
+}
+
+/// The small caption over a group of shortcut rows.
+private final class SectionHeadingLabel: WrappingLabel {
+    override init(text: String) {
+        super.init(text: text)
+        font = .systemFont(ofSize: 12, weight: .semibold)
+        textColor = .secondaryLabelColor
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+}
+
+/// The one colour the redesign adds: the fill of an inset group. Light mode
+/// gets the card white that sits over the window's grey; dark mode gets a
+/// touch of white over the window instead, because the control background
+/// there is darker than the window and would read as a hole.
+private enum SettingsPalette {
+    static let groupFill = NSColor(name: "notaSettingsGroupFill") { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.06)
+            : .controlBackgroundColor
     }
 }

@@ -7,6 +7,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let windows: WindowRegistry
     private let hotKey = GlobalHotKey()
     private var installedLanguage: AppLanguage?
+    /// The shortcut table the menu was built from. A changed key has to
+    /// rebuild the menu, and only a comparison can tell that it changed.
+    private var installedShortcuts: [ShortcutAction: KeyCombo] = [:]
     /// File › Open Recent. `NSMenu.delegate` is weak, so this is what keeps
     /// it alive for as long as the app is.
     private lazy var recentDocumentsMenu = RecentDocumentsMenu { [weak self] url in
@@ -23,6 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onToggleFrontTab: { [weak self] in
             self?.activeController?.toggleBookmarkForCurrentTab()
         },
+        onShowAll: { [weak self] in
+            self?.showWindow()
+            self?.activeController?.showBookmarksPicker()
+        },
         onOpen: { [weak self] path in
             self?.showWindow()
             self?.activeController?.openBookmark(path: path)
@@ -35,9 +42,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The settings are carried over from the app's old bundle identifier
     /// before anything can read one, and the session store then carries over
     /// the old support directory as it resolves it.
-    override init() {
+    ///
+    /// The store is only ever passed by tests, so a menu can be built against
+    /// a scratch directory rather than the session you are actually working in.
+    init(store: SessionStore? = nil) {
         Preferences.migrateFromJotIfNeeded()
-        let store = SessionStore()
+        let store = store ?? SessionStore()
         self.store = store
         self.windows = WindowRegistry(store: store)
         super.init()
@@ -81,7 +91,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func preferencesChanged() {
         registerHotKey()
-        if installedLanguage != Preferences.shared.language { buildMenu() }
+        if installedLanguage != Preferences.shared.language
+            || installedShortcuts != Preferences.shared.shortcuts {
+            buildMenu()
+        }
     }
 
     /// Whether the last registration attempt failed — Settings shows a
@@ -335,6 +348,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menuItem
     }
 
+    /// A command whose key the user can change. The literal is gone from the
+    /// call site: the shortcut table is what decides, and the title comes off
+    /// the same case, so the row in Settings and the item here cannot drift.
+    private func item(
+        _ shortcut: ShortcutAction,
+        _ action: Selector?,
+        target: AnyObject? = nil,
+        tag: Int = 0
+    ) -> NSMenuItem {
+        let menuItem = item(shortcut.titleKey, action, target: target, tag: tag)
+        menuItem.applyShortcut(shortcut)
+        return menuItem
+    }
+
     private func submenu(_ title: String, in mainMenu: NSMenu, _ items: [NSMenuItem]) {
         let holder = NSMenuItem()
         let menu = NSMenu(title: L10n.text(title))
@@ -359,24 +386,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                  key: down, modifiers: [.option]),
             item("Duplicate Lines", #selector(NotaTextView.duplicateLines(_:)),
                  key: down, modifiers: [.option, .shift]),
-            // The title of this one is written as it is validated: duplicate
-            // with nothing in hand, select the next occurrence with something.
-            item("Duplicate Line", #selector(NotaTextView.duplicateOrSelectNext(_:)), key: "d"),
             .separator(),
-            item("Toggle Comment", #selector(NotaTextView.toggleLineComment(_:)), key: "/"),
-            item("Indent", #selector(NotaTextView.indentLines(_:)), key: "]"),
-            item("Outdent", #selector(NotaTextView.outdentLines(_:)), key: "["),
+            item(.toggleComment, #selector(NotaTextView.toggleLineComment(_:))),
+            item(.indent, #selector(NotaTextView.indentLines(_:))),
+            item(.outdent, #selector(NotaTextView.outdentLines(_:))),
         ]
     }
 
-    private func buildMenu() {
+    /// Rebuilt whole whenever the language or a shortcut changes. Internal
+    /// rather than private so a test can build it without launching the app.
+    func buildMenu() {
         installedLanguage = Preferences.shared.language
+        installedShortcuts = Preferences.shared.shortcuts
         let mainMenu = NSMenu()
 
         submenu("Nota", in: mainMenu, [
             item("About Nota", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
             .separator(),
-            item("Settings…", #selector(openSettings(_:)), key: ",", target: self),
+            item(.settings, #selector(openSettings(_:)), target: self),
             .separator(),
             item("Hide Nota", #selector(NSApplication.hide(_:)), key: "h"),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)),
@@ -395,39 +422,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bookmarksItem.submenu = bookmarksMenu.makeMenu()
 
         submenu("File", in: mainMenu, [
-            item("New Tab", #selector(newTab(_:)), key: "t", target: self),
+            item(.newTab, #selector(newTab(_:)), target: self),
             // ⌘N is Nota's older new-tab key, and also what brings a hidden
-            // window back; ⇧⌘N is the window itself.
+            // window back; ⇧⌘N is the window itself. It is fixed: the
+            // adjustable New Tab is the one above.
             item("New Tab", #selector(newWindowOrTab(_:)), key: "n", target: self),
-            item("New Window", #selector(newWindowItem(_:)), key: "n",
-                 modifiers: [.command, .shift], target: self),
-            item("Open…", #selector(openNote(_:)), key: "o", target: self),
+            item(.newWindow, #selector(newWindowItem(_:)), target: self),
+            item(.openFile, #selector(openNote(_:)), target: self),
             recentItem,
             bookmarksItem,
             .separator(),
-            item("Close Tab", #selector(closeTab(_:)), key: "w", target: self),
+            item(.closeTab, #selector(closeTab(_:)), target: self),
             .separator(),
-            item("Save", #selector(saveNote(_:)), key: "s", target: self),
-            item("Save As…", #selector(saveNoteAs(_:)), key: "s",
-                 modifiers: [.command, .shift], target: self),
+            item(.save, #selector(saveNote(_:)), target: self),
+            item(.saveAs, #selector(saveNoteAs(_:)), target: self),
         ])
 
         let findMenu = NSMenu(title: L10n.text("Find"))
         let findAction = #selector(NSTextView.performTextFinderAction(_:))
-        for entry in [
-            ("Find…", "f", NSEvent.ModifierFlags.command, NSTextFinder.Action.showFindInterface),
-            ("Find and Replace…", "f", [.command, .option], .showReplaceInterface),
-            ("Find Next", "g", .command, .nextMatch),
-            ("Find Previous", "g", [.command, .shift], .previousMatch),
-            ("Use Selection for Find", "e", .command, .setSearchString),
-        ] as [(String, String, NSEvent.ModifierFlags, NSTextFinder.Action)] {
-            findMenu.addItem(item(entry.0, findAction, key: entry.1,
-                                  modifiers: entry.2, tag: entry.3.rawValue))
-        }
-        findMenu.addItem(item("Go to Line…", #selector(goToLine(_:)), key: "l", target: self))
+        // Find and Replace and Use Selection stay as they are: neither is in
+        // the shortcut table, so neither can move.
+        findMenu.addItem(item(.find, findAction,
+                              tag: NSTextFinder.Action.showFindInterface.rawValue))
+        findMenu.addItem(item("Find and Replace…", findAction, key: "f",
+                              modifiers: [.command, .option],
+                              tag: NSTextFinder.Action.showReplaceInterface.rawValue))
+        findMenu.addItem(item(.findNext, findAction,
+                              tag: NSTextFinder.Action.nextMatch.rawValue))
+        findMenu.addItem(item(.findPrevious, findAction,
+                              tag: NSTextFinder.Action.previousMatch.rawValue))
+        findMenu.addItem(item("Use Selection for Find", findAction, key: "e",
+                              tag: NSTextFinder.Action.setSearchString.rawValue))
+        findMenu.addItem(item(.goToLine, #selector(goToLine(_:)), target: self))
         findMenu.addItem(.separator())
-        findMenu.addItem(item("Search All Notes…", #selector(searchAllNotes(_:)),
-                              key: "f", modifiers: [.command, .shift], target: self))
+        findMenu.addItem(item(.searchAllNotes, #selector(searchAllNotes(_:)), target: self))
         let findItem = NSMenuItem(title: L10n.text("Find"), action: nil, keyEquivalent: "")
         findItem.submenu = findMenu
 
@@ -446,29 +474,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
 
         submenu("View", in: mainMenu, [
-            item("Increase Font Size", #selector(zoomIn(_:)), key: "+", target: self),
-            item("Decrease Font Size", #selector(zoomOut(_:)), key: "-", target: self),
-            item("Actual Size", #selector(actualSize(_:)), key: "0", target: self),
+            item(.increaseFontSize, #selector(zoomIn(_:)), target: self),
+            item(.decreaseFontSize, #selector(zoomOut(_:)), target: self),
+            item(.actualSize, #selector(actualSize(_:)), target: self),
             .separator(),
-            item("Show Images", #selector(toggleImageSidebar(_:)), key: "b", target: self),
-            item("Markdown Preview", #selector(toggleMarkdownPreview(_:)), key: "p",
-                 modifiers: [.command, .shift], target: self),
-            item("Reading Mode", #selector(toggleReadingMode(_:)), key: "p",
-                 modifiers: [.command, .shift, .option], target: self),
-            item("Zen Mode", #selector(toggleZenMode(_:)), key: "z",
-                 modifiers: [.command, .option], target: self),
+            item(.showImages, #selector(toggleImageSidebar(_:)), target: self),
+            item(.markdownPreview, #selector(toggleMarkdownPreview(_:)), target: self),
+            item(.readingMode, #selector(toggleReadingMode(_:)), target: self),
+            item(.zenMode, #selector(toggleZenMode(_:)), target: self),
         ])
 
         var windowItems: [NSMenuItem] = [
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), key: "m"),
             item("Zoom", #selector(NSWindow.performZoom(_:))),
             .separator(),
-            item("Go to Tab…", #selector(showTabPicker(_:)), key: "p", target: self),
+            item(.goToTab, #selector(showTabPicker(_:)), target: self),
             .separator(),
-            item("Next Tab", #selector(selectNextTab(_:)), key: "\t",
-                 modifiers: [.control], target: self),
-            item("Previous Tab", #selector(selectPreviousTab(_:)), key: "\t",
-                 modifiers: [.control, .shift], target: self),
+            item(.nextTab, #selector(selectNextTab(_:)), target: self),
+            item(.previousTab, #selector(selectPreviousTab(_:)), target: self),
             .separator(),
         ]
         for number in 1...9 {

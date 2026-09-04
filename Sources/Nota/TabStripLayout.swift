@@ -23,18 +23,46 @@ struct TabStripLayout {
     /// by exactly this much.
     static let bookmarkSlot: CGFloat = 24
     static let bookmarkGap: CGFloat = 4
-    /// Room kept empty past the bookmark button, so it never reaches the
-    /// strip's end.
+    /// The Settings gear's slot, past the bookmark: the same 24pt, the same
+    /// gap. It is the last control before the reserve.
+    static let settingsSlot: CGFloat = 24
+    /// Room kept empty past the last button, so it never reaches the strip's
+    /// end.
     static let trailingReserve: CGFloat = 40
 
-    /// Everything the trailing edge holds past the +: the bookmark button,
-    /// its gap, and the empty run after it.
-    static var trailingControls: CGFloat { bookmarkSlot + bookmarkGap + trailingReserve }
+    /// Which of the two trailing buttons the strip is showing. Settings can
+    /// hide either; a hidden one gives its slot back to the tabs.
+    struct TrailingControls: Equatable {
+        var bookmark = true
+        var settings = true
+    }
 
-    /// Leading x of the bookmark button — pinned at the trailing edge, inside
+    /// One setting for the whole app, the way the preference behind it is —
+    /// set from `Preferences` by the window, read by every layout after.
+    static var controls = TrailingControls()
+
+    /// Everything the trailing edge holds past the +: whichever of the
+    /// bookmark button and the gear are showing, their gaps, and the empty
+    /// run after them.
+    static var trailingControls: CGFloat {
+        (controls.bookmark ? bookmarkSlot + bookmarkGap : 0)
+            + (controls.settings ? settingsSlot + bookmarkGap : 0)
+            + trailingReserve
+    }
+
+    /// Leading x of the Settings gear — pinned at the trailing edge, inside
     /// the reserve, whatever the tabs are doing.
+    static func settingsX(_ viewportWidth: CGFloat) -> CGFloat {
+        max(0, viewportWidth - trailingReserve - settingsSlot)
+    }
+
+    /// Leading x of the bookmark button: one slot and a gap before the gear,
+    /// or where the gear would be when the gear is hidden.
     static func bookmarkX(_ viewportWidth: CGFloat) -> CGFloat {
-        max(0, viewportWidth - trailingReserve - bookmarkSlot)
+        let edge = controls.settings
+            ? settingsX(viewportWidth) - bookmarkGap
+            : viewportWidth - trailingReserve
+        return max(0, edge - bookmarkSlot)
     }
 
     /// One width per tab, indexed like the items.

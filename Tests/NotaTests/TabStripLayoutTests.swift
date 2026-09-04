@@ -124,25 +124,29 @@ final class TabStripLayoutTests: XCTestCase {
         XCTAssertEqual(layout.visibleRange, 0..<3)
     }
 
-    // MARK: - The bookmark button's slot (SPEC Todo 13)
+    // MARK: - The bookmark button's and the gear's slots (SPEC Todo 13)
 
-    /// The bookmark button pins at the trailing edge, and the + steps left by
-    /// exactly the slot it takes — nothing overlaps and nothing is
-    /// subtracted twice.
+    /// The gear pins at the trailing edge, the bookmark button one slot and a
+    /// gap before it, and the + steps left by exactly what the two take —
+    /// nothing overlaps and nothing is subtracted twice.
     func testTheBookmarkButtonTakesASlotAndThePlusMovesLeftByIt() {
         let layout = TabStripLayout(count: 14, selectedIndex: 0, viewportWidth: 900)
+        let gearSlot = TabStripLayout.settingsSlot
+        let gap = TabStripLayout.bookmarkGap
 
-        XCTAssertEqual(TabStripLayout.bookmarkX(900), 900 - reserve - bookmarkSlot,
-                       "the bookmark button pins inside the reserve")
+        XCTAssertEqual(TabStripLayout.settingsX(900), 900 - reserve - gearSlot,
+                       "the gear pins inside the reserve")
+        XCTAssertEqual(TabStripLayout.bookmarkX(900), 900 - reserve - gearSlot - gap - bookmarkSlot,
+                       "the bookmark button sits one gap before the gear")
         XCTAssertEqual(layout.plusX, TabStripLayout.bookmarkX(900) - plusGap - plusSize,
                        accuracy: 0.001, "the + sits one gap to the left of it")
-        XCTAssertEqual(controls, bookmarkSlot + TabStripLayout.bookmarkGap + reserve)
+        XCTAssertEqual(controls, bookmarkSlot + gap + gearSlot + gap + reserve)
 
-        // The room the tabs get shrank by the slot and its gap, and by
-        // nothing else.
+        // The room the tabs get shrank by the two slots and their gaps, and
+        // by nothing else.
         XCTAssertEqual(
             TabStripLayout.tabsWidth(900),
-            900 - plusSize - plusGap - bookmarkSlot - TabStripLayout.bookmarkGap - reserve,
+            900 - plusSize - plusGap - bookmarkSlot - gap - gearSlot - gap - reserve,
             accuracy: 0.001
         )
         let total = layout.widths.reduce(0, +) + spacing * 13
