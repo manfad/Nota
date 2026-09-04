@@ -200,6 +200,10 @@ final class MainWindowController: NSWindowController {
     /// The four numbers behind the middle label, kept so a relayout can
     /// re-fit the text without walking the note again.
     private var counts = (words: 0, characters: 0, images: 0, lines: 1)
+    /// Ticked over total task items, for a `.md` that has any. `nil` for
+    /// every other tab and for a `.md` with none — the footer says nothing
+    /// about tasks where there are no tasks.
+    private var taskCounts: (done: Int, total: Int)?
     /// The counting job for a big note, and the number that says which one is
     /// current — an answer from an older job is thrown away rather than shown.
     private var wordCountWorkItem: DispatchWorkItem?
@@ -693,6 +697,9 @@ final class MainWindowController: NSWindowController {
         }
         previewColumn.onBlockClick = { [weak self] source in
             self?.goToSource(source)
+        }
+        previewColumn.onTaskToggle = { [weak self] source in
+            self?.toggleTask(inSource: source)
         }
         // ⌘F in reading mode opens a bar over the content, in the corner the
         // column's own mode control floats in.
@@ -1290,10 +1297,15 @@ final class MainWindowController: NSWindowController {
                 let stripped = note.countableText
                 counts.words = TextStats.wordCount(stripped)
                 counts.characters = TextStats.characterCount(stripped)
+                // The tasks are counted in the same place and the same pass
+                // the words are: at this size a scan of the note costs
+                // nothing worth deferring.
+                taskCounts = note.countsTasks ? TaskList.counts(in: stripped) : nil
             }
         } else {
             previewStatus = nil
             counts = (words: 0, characters: 0, images: 0, lines: 1)
+            taskCounts = nil
         }
         updateCountsLabel()
         updateCursorPosition()
@@ -1335,16 +1347,23 @@ final class MainWindowController: NSWindowController {
             snapshot = note.storage.string
         }
 
+        // The tasks ride this pass rather than one of their own: a big note's
+        // `3 / 7 done` is another whole-file scan, and the main thread is
+        // exactly where it must not happen.
+        let countsTasks = note.countsTasks
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let stripped = NoteText.strippingTokens(snapshot)
             let words = TextStats.wordCount(stripped)
             let characters = TextStats.characterCount(stripped)
+            let tasks = countsTasks ? TaskList.counts(in: stripped) : nil
             DispatchQueue.main.async {
                 guard let self, generation == self.wordCountGeneration,
                       self.currentNote === note
                 else { return }
                 self.counts.words = words
                 self.counts.characters = characters
+                self.taskCounts = tasks
                 self.updateCountsLabel()
             }
         }
@@ -1360,7 +1379,11 @@ final class MainWindowController: NSWindowController {
             ?? TextStats.countVariants(
                 words: counts.words, characters: counts.characters,
                 images: counts.images, lines: counts.lines,
-                segments: preferences.footerSegments
+                segments: preferences.footerSegments,
+                // A `.md` with task items in it says how many are done, after
+                // the counts and in the footer's own punctuation. It is the
+                // last thing given up when the middle runs short of room.
+                tasks: previewStatus == nil ? taskCounts : nil
             )
         // Measured through a label of its own rather than off the string: a
         // text field lays out a few points wider than the type it holds, and
@@ -2882,6 +2905,29 @@ extension MainWindowController {
 
     /// A block was clicked in the pane: put the caret on the first character
     /// of the source it came from and show it.
+    /// Ticking a checkbox in the render. One character of the note is
+    /// rewritten — the space or the `x` between the item's brackets — through
+    /// the editor's own undoable path, so ⌘Z puts it back the way it puts any
+    /// other edit back. The caret does not move and the editor does not
+    /// scroll: the reader is in the render, and a checkbox is not a jump.
+    ///
+    /// The render then comes back changed the way it does after any keystroke.
+    private func toggleTask(inSource source: NSRange) {
+        guard let note = currentNote, let storage = textView.textStorage,
+              storage === note.storage,
+              let box = TaskList.box(in: storage.mutableString, within: source)
+        else { return }
+        let target = NSRange(location: box.location, length: 1)
+        let replacement = box.isDone ? " " : "x"
+        guard textView.shouldChangeText(in: target, replacementString: replacement) else { return }
+        let caret = textView.selectedRange()
+        storage.replaceCharacters(in: target, with: replacement)
+        // Put back before `didChangeText`, which is what the window hears the
+        // edit through and where the caret would otherwise be written down.
+        textView.setSelectedRange(caret)
+        textView.didChangeText()
+    }
+
     private func goToSource(_ source: NSRange) {
         guard let note = currentNote else { return }
         let location = max(0, min(source.location, note.storage.length))

@@ -51,11 +51,13 @@ final class PreviewPaneView: NSView {
     // MARK: - What the column reports
 
     /// Run when the column changes width, when a block in it is clicked, when
-    /// its own ⌘F bar opens or closes, and when the reader moves to somewhere
-    /// the content is keeping. Each comes from the view in front and from no
-    /// other: a hidden view's news is not the column's.
+    /// a checkbox in it is ticked, when its own ⌘F bar opens or closes, and
+    /// when the reader moves to somewhere the content is keeping. Each comes
+    /// from the view in front and from no other: a hidden view's news is not
+    /// the column's.
     var onWidthChange: (() -> Void)?
     var onBlockClick: ((NSRange) -> Void)?
+    var onTaskToggle: ((NSRange) -> Void)?
     var onFindBarVisibilityChange: ((Bool) -> Void)?
     var onPositionChange: ((Int) -> Void)?
     var onZoomChange: ((CGFloat) -> Void)?
@@ -154,6 +156,10 @@ final class PreviewPaneView: NSView {
         content.onBlockClick = { [weak self, weak content] source in
             guard let self, isInFront(content) else { return }
             onBlockClick?(source)
+        }
+        content.onTaskToggle = { [weak self, weak content] source in
+            guard let self, isInFront(content) else { return }
+            onTaskToggle?(source)
         }
         content.onFindBarVisibilityChange = { [weak self, weak content] isVisible in
             guard let self, isInFront(content) else { return }

@@ -257,6 +257,11 @@ final class Note {
     /// Whether the tab has a preview beside its source.
     var supportsRenderedPreview: Bool { previewKind != nil }
 
+    /// Whether the footer counts this tab's task items. `- [ ]` is Markdown's
+    /// own, so only a `.md` has any — a `.txt` full of them is a `.txt` full
+    /// of dashes and brackets.
+    var countsTasks: Bool { previewKind == .markdown }
+
     /// Whether the tab has anything at all to put in the preview column: a
     /// render for a saved `.md` or `.tex`, the page for a `.html` or an
     /// `.svg`, the document for a PDF, the picture for an image. A `.txt` and

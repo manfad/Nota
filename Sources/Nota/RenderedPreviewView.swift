@@ -41,6 +41,12 @@ class RenderedPreviewView: NSView, PreviewContent {
     /// Run when a block is clicked, with the source it came from.
     var onBlockClick: ((NSRange) -> Void)?
 
+    /// Run when a task item's checkbox is clicked, with the source of the
+    /// item it belongs to. A checkbox is a control rather than a jump, so it
+    /// works in reading mode as well as split — and it is neither a block
+    /// click nor the start of a selection.
+    var onTaskToggle: ((NSRange) -> Void)?
+
     /// Run when the pane changes width. Pictures and rules are drawn to fit
     /// the pane, so a resize is a reason to render again.
     var onWidthChange: (() -> Void)?
@@ -163,6 +169,7 @@ class RenderedPreviewView: NSView, PreviewContent {
             .cursor: NSCursor.pointingHand,
         ]
         textView.onClick = { [weak self] index in self?.clicked(at: index) }
+        textView.onCheckboxClick = { [weak self] index in self?.tickedTask(at: index) }
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
@@ -355,6 +362,14 @@ class RenderedPreviewView: NSView, PreviewContent {
         onBlockClick?(blocks[block].source)
     }
 
+    /// A checkbox was pressed. Nothing is lit and nothing is jumped to: the
+    /// item's source goes out to be rewritten, and the render comes back
+    /// changed the way it does after any other edit.
+    private func tickedTask(at index: Int) {
+        guard !blocksAreStale, let block = blockIndex(forRendered: index) else { return }
+        onTaskToggle?(blocks[block].source)
+    }
+
     private func setHighlight(_ index: Int?) {
         highlightedSourceRange = index.map { blocks[$0].source }
         textView.highlightedRange = index.map { blocks[$0].range }
@@ -427,6 +442,11 @@ class RenderedPreviewView: NSView, PreviewContent {
 /// and by nothing else.
 private final class PreviewTextView: NSTextView {
     var onClick: ((Int) -> Void)?
+    /// A press that landed on a task item's checkbox, with the character it
+    /// is. It comes before everything else a press does here — a checkbox is
+    /// a control, so it is not a jump in split, not a caret in reading, and
+    /// never the start of a drag.
+    var onCheckboxClick: ((Int) -> Void)?
     var takesKeyboard = false
     /// The page's find bar. ⌘F, ⌘G, ⇧⌘G and ⌘E are nil-targeted
     /// `performTextFinderAction:` items, so they land here whenever this view
@@ -463,6 +483,14 @@ private final class PreviewTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        // In both modes, and before anything else: the box is the one thing
+        // in the render you press rather than read.
+        if let checkbox = checkboxIndex(at: point) {
+            onCheckboxClick?(checkbox)
+            return
+        }
+
         // Reading has no block sync to report to: every click behaves like
         // an ordinary text view's, including a link opening under it exactly
         // as `super` already handles for Split below.
@@ -471,7 +499,6 @@ private final class PreviewTextView: NSTextView {
             return
         }
 
-        let point = convert(event.locationInWindow, from: nil)
         let index = characterIndexForInsertion(at: point)
         // A link is the one thing in the pane that does something of its own
         // with a click; everything else is a block to be sent to.
@@ -481,6 +508,31 @@ private final class PreviewTextView: NSTextView {
             return
         }
         onClick?(index)
+    }
+
+    /// The task item's box under a point, if the point is on one. The nearest
+    /// glyph is not the same question as the glyph pressed — the insertion
+    /// point at the end of a line is the whole rest of the line away — so the
+    /// box's own rectangle has to hold the point as well.
+    private func checkboxIndex(at point: NSPoint) -> Int? {
+        guard let storage = textStorage, let layoutManager, let textContainer,
+              storage.length > 0
+        else { return nil }
+        let origin = textContainerOrigin
+        let inContainer = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
+        var fraction: CGFloat = 0
+        let glyph = layoutManager.glyphIndex(
+            for: inContainer, in: textContainer, fractionOfDistanceThroughGlyph: &fraction
+        )
+        let index = layoutManager.characterIndexForGlyph(at: glyph)
+        guard index < storage.length,
+              storage.attribute(.attachment, at: index, effectiveRange: nil)
+                  is TaskCheckboxAttachment
+        else { return nil }
+        let box = layoutManager.boundingRect(
+            forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer
+        )
+        return box.contains(inContainer) ? index : nil
     }
 
     override func drawBackground(in rect: NSRect) {
