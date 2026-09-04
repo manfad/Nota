@@ -418,11 +418,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
                 groupBox(text),
                 sectionHeading("Window"),
                 groupBox(chrome),
-                footnote(
-                    "The strip's buttons and the window's own buttons come back with their keys: "
-                        + "⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W all keep working. Auto-hide slides the strip in "
-                        + "when the pointer reaches the top edge, and away again when it leaves."
-                ),
             ],
             rows: text + chrome
         )
@@ -1174,6 +1169,11 @@ private class WrappingLabel: NSTextField {
         lineBreakMode = .byWordWrapping
         maximumNumberOfLines = 0
         stringValue = text
+        // A footnote takes the width it is given and wraps to it. Left at the
+        // default priority, one long line would hold the whole window open at
+        // the width of its single line instead.
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        setContentHuggingPriority(.defaultLow, for: .horizontal)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }

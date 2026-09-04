@@ -51,11 +51,6 @@ enum L10n {
             "无论正在用哪个应用，快速唤出都会把 Nota 调到最前，即使它已隐藏。",
         "Two commands cannot share a combination, and the Mac's own keys are off limits.":
             "两个命令不能共用同一组合键，系统保留的按键也不可使用。",
-        "The strip's buttons and the window's own buttons come back with their keys: "
-            + "⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W all keep working. Auto-hide slides the strip in "
-            + "when the pointer reaches the top edge, and away again when it leaves.":
-            "标签栏和窗口自身的按钮都可以用快捷键代替：⌘T、⌘P、⇧⌘D、⌘, 与 ⌘W 依然有效。"
-            + "开启自动隐藏后，指针移到窗口顶端时标签栏会滑入，离开后再滑走。",
         "Reset to Defaults": "恢复默认",
         "Press keys…": "请按快捷键…",
         "None": "无",

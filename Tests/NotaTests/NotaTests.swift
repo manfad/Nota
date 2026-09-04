@@ -387,13 +387,10 @@ final class NotaTests: XCTestCase {
         XCTAssertEqual(controller.pageTitles.first, "通用")
         XCTAssertEqual(controller.rows(on: 0).map(\.title), ["语言", "主题"])
 
-        // Footnotes are translated too, including the long one whose key is
-        // spelled over two lines.
-        XCTAssertTrue(controller.selectPage(titled: "外观"))
+        // Footnotes are translated too.
         let translated = allViews(in: root).compactMap { ($0 as? NSTextField)?.stringValue }
-        XCTAssertTrue(translated.contains { $0.hasPrefix("标签栏和窗口自身的按钮") },
-                      "the Window footnote is still English: \(translated)")
-        controller.selectPage(at: 0)
+        XCTAssertTrue(translated.contains("“跟随系统”由 Mac 决定。"),
+                      "the Theme footnote is still English: \(translated)")
     }
 
     @MainActor
