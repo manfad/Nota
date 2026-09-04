@@ -95,11 +95,256 @@ final class NotaTextView: NSTextView {
     }
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if let enabled = validateLineOperation(item) { return enabled }
         guard item.action == #selector(NSTextView.performTextFinderAction(_:)) else {
             return super.validateUserInterfaceItem(item)
         }
         guard let action = NSTextFinder.Action(rawValue: item.tag) else { return false }
         return TextFindSession.handles(action)
+    }
+
+    // MARK: - Line operations
+
+    /// The front note's line table — where every hard line starts, folded
+    /// forward one edit at a time by the note itself. The line keys ask it
+    /// rather than walking the text, so ⌥↓ in a 100 MB log costs the two
+    /// lines it swaps. An editor with no note behind it (a bare view in a
+    /// test) works the table out from its own storage instead.
+    var lineIndexProvider: (() -> LineIndex?)?
+
+    /// How the file being edited is spelled — the one thing ⌘/ needs, since
+    /// what a line is commented with is the author's own word for what the
+    /// file is.
+    var fileExtensionProvider: (() -> String?)?
+
+    /// Whether the line keys are the editor's to run at all. Plain Nota:
+    /// always. Vim mode: only while inserting, since everywhere else those
+    /// keys are vim's own and the menu must stand aside for them.
+    var lineOperationsAllowed: (() -> Bool)?
+
+    private var lineIndex: LineIndex {
+        if let index = lineIndexProvider?() { return index }
+        return LineIndex(textStorage?.mutableString ?? NSMutableString())
+    }
+
+    private var lineOperationsEnabled: Bool {
+        isEditable && (lineOperationsAllowed?() ?? true)
+    }
+
+    /// What the Edit menu's line items are validated on: this editor is the
+    /// one holding the keyboard, its note can be edited, and vim is not
+    /// holding the keys.
+    var canRunLineOperations: Bool {
+        lineOperationsEnabled && window?.firstResponder === self
+    }
+
+    /// The token this file's lines are commented with, or nil where the
+    /// format has none and ⌘/ is greyed out.
+    private var lineCommentToken: String? {
+        guard let spelling = fileExtensionProvider?(), !spelling.isEmpty else { return nil }
+        return LineOperations.commentToken(forExtension: spelling)
+    }
+
+    @objc func moveLinesUp(_ sender: Any?) { runLineOperation(LineOperations.moveUp) }
+
+    @objc func moveLinesDown(_ sender: Any?) { runLineOperation(LineOperations.moveDown) }
+
+    @objc func duplicateLines(_ sender: Any?) { runLineOperation(LineOperations.duplicate) }
+
+    @objc func indentLines(_ sender: Any?) { runLineOperation(LineOperations.indent) }
+
+    @objc func outdentLines(_ sender: Any?) { runLineOperation(LineOperations.outdent) }
+
+    /// ⌘D is two hands in one key: with nothing selected it duplicates the
+    /// line, and with something selected it reaches for the next place the
+    /// same characters appear.
+    @objc func duplicateOrSelectNext(_ sender: Any?) {
+        guard lineOperationsEnabled else { return }
+        if selectedRange().length > 0 {
+            selectNextOccurrence()
+        } else {
+            duplicateLines(sender)
+        }
+    }
+
+    @objc func toggleLineComment(_ sender: Any?) {
+        guard let token = lineCommentToken else { return }
+        runLineOperation { text, index, selection in
+            LineOperations.toggleComment(
+                text: text, index: index, selection: selection, token: token
+            )
+        }
+    }
+
+    /// The next occurrence joins the selection rather than replacing it —
+    /// press again for the one after, round the end of the note and back.
+    /// Once every occurrence is in hand there is nothing left to add and the
+    /// key does nothing.
+    private func selectNextOccurrence() {
+        guard lineOperationsEnabled, let storage = textStorage else { return }
+        let text = storage.mutableString
+        let ranges = selectedRanges.map(\.rangeValue).sorted { $0.location < $1.location }
+        guard let first = ranges.first, first.length > 0 else { return }
+        let needle = text.substring(with: first)
+        let from = ranges.map { NSMaxRange($0) }.max() ?? NSMaxRange(first)
+        guard let found = LineOperations.nextOccurrence(
+            of: needle, in: text, from: from, skipping: ranges
+        ) else { return }
+        selectedRanges = (ranges + [found])
+            .sorted { $0.location < $1.location }.map { NSValue(range: $0) }
+        scrollRangeToVisible(found)
+    }
+
+    private func runLineOperation(
+        _ operation: (NSString, LineIndex, NSRange) -> LineOperations.Edit?
+    ) {
+        guard lineOperationsEnabled, let storage = textStorage else { return }
+        guard let edit = operation(storage.mutableString, lineIndex, selectedRange()) else { return }
+        apply(edit)
+    }
+
+    /// One press, one edit, one undo step. The pieces that are the note's own
+    /// characters are lifted out of the storage with their attributes on —
+    /// which is what carries a picture through a line that moves — and the
+    /// lot goes in as a single replacement through `shouldChangeText` /
+    /// `didChangeText`, so undo, the dirty flag, the save and vim all see one
+    /// edit.
+    private func apply(_ edit: LineOperations.Edit) {
+        guard let storage = textStorage else { return }
+        let replacement = NSMutableAttributedString()
+        for piece in edit.pieces {
+            switch piece {
+            case .copy(let range):
+                replacement.append(storage.attributedSubstring(from: range))
+            case .text(let value):
+                replacement.append(NSAttributedString(string: value, attributes: attributes))
+            }
+        }
+        guard shouldChangeText(in: edit.range, replacementString: replacement.string) else { return }
+        storage.replaceCharacters(in: edit.range, with: replacement)
+        didChangeText()
+
+        let length = storage.length
+        let selection = edit.selection.map { range -> NSValue in
+            let location = max(0, min(range.location, length))
+            return NSValue(range: NSRange(
+                location: location, length: max(0, min(range.length, length - location))
+            ))
+        }
+        selectedRanges = selection
+        scrollRangeToVisible(selectedRange())
+    }
+
+    /// Tab and ⇧Tab with more than one line in hand indent and outdent the
+    /// block; on a single line Tab is still the tab character AppKit puts in.
+    override func insertTab(_ sender: Any?) {
+        guard lineOperationsEnabled, selectionSpansLines else {
+            super.insertTab(sender)
+            return
+        }
+        indentLines(sender)
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        guard lineOperationsEnabled, selectionSpansLines else {
+            super.insertBacktab(sender)
+            return
+        }
+        outdentLines(sender)
+    }
+
+    private var selectionSpansLines: Bool {
+        let range = selectedRange()
+        guard range.length > 0 else { return false }
+        let lines = LineOperations.lines(touching: range, in: lineIndex)
+        return lines.lowerBound != lines.upperBound
+    }
+
+    /// The carets a multi-range edit left behind. AppKit keeps a
+    /// discontiguous selection only while every range has something in it:
+    /// set two empty ones and it folds them into the first. So the editor
+    /// remembers them itself, and the next character typed still goes to all
+    /// of them — which is the whole point of ⌘D's second range. Any other
+    /// move of the selection puts them down.
+    private var multiCarets: [NSRange]?
+    private var isRestoringMultiCarets = false
+
+    /// The ranges a typed character means: every selected range while there
+    /// is more than one, and otherwise the carets the last multi-range edit
+    /// left, as long as the selection is still standing on one of them.
+    private func typingRanges(for replacementRange: NSRange) -> [NSRange] {
+        let meansTheSelection = replacementRange.location == NSNotFound
+            || NSEqualRanges(replacementRange, selectedRange())
+        guard meansTheSelection else { return [] }
+        let selected = selectedRanges.map(\.rangeValue).sorted { $0.location < $1.location }
+        if selected.count > 1 { return selected }
+        if let carets = multiCarets, carets.count > 1, let one = selected.first, one.length == 0,
+           carets.contains(where: { NSEqualRanges($0, one) }) {
+            return carets
+        }
+        return selected
+    }
+
+    /// AppKit keeps more than one selected range but types into only the
+    /// first of them, so ⌘D's second range would sit there doing nothing.
+    /// The editor types into all of them: back to front, so the earlier
+    /// ranges keep their places, in one undo step, each left as a caret after
+    /// what it took.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        let ranges = typingRanges(for: replacementRange)
+        guard ranges.count > 1, let storage = textStorage else {
+            super.insertText(string, replacementRange: replacementRange)
+            return
+        }
+        let typed = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
+        guard shouldChangeText(
+            inRanges: ranges.map { NSValue(range: $0) },
+            replacementStrings: Array(repeating: typed, count: ranges.count)
+        ) else { return }
+
+        let attributed = NSAttributedString(string: typed, attributes: attributes)
+        for range in ranges.reversed() {
+            storage.replaceCharacters(in: range, with: attributed)
+        }
+        didChangeText()
+
+        var carets: [NSRange] = []
+        var delta = 0
+        for range in ranges {
+            carets.append(NSRange(
+                location: range.location + delta + attributed.length, length: 0
+            ))
+            delta += attributed.length - range.length
+        }
+        // The last one is the one on screen — the place the next key that is
+        // not a character will act — and the rest are remembered.
+        isRestoringMultiCarets = true
+        selectedRanges = [NSValue(range: carets[carets.count - 1])]
+        isRestoringMultiCarets = false
+        multiCarets = carets
+    }
+
+    /// The Edit menu's line items are nil-targeted, so each is offered only
+    /// when this editor is the responder that would run it: the moment the
+    /// find field, the tab strip or a rendered page has the keyboard they all
+    /// grey out, and so do they in every vim mode but insert. ⌘/ needs one
+    /// thing more — a format whose lines can be commented at all.
+    private func validateLineOperation(_ item: NSValidatedUserInterfaceItem) -> Bool? {
+        switch item.action {
+        case #selector(moveLinesUp(_:)), #selector(moveLinesDown(_:)),
+             #selector(duplicateLines(_:)), #selector(indentLines(_:)),
+             #selector(outdentLines(_:)):
+            return canRunLineOperations
+        case #selector(duplicateOrSelectNext(_:)):
+            // One key, two jobs: the item says which of them it is about to do.
+            (item as? NSMenuItem)?.title = selectedRange().length > 0
+                ? "Select Next Occurrence" : "Duplicate Line"
+            return canRunLineOperations
+        case #selector(toggleLineComment(_:)):
+            return canRunLineOperations && lineCommentToken != nil
+        default:
+            return nil
+        }
     }
 
     // MARK: - The caret
@@ -169,6 +414,9 @@ final class NotaTextView: NSTextView {
     override func setSelectedRanges(
         _ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool
     ) {
+        // Any move of the selection that is not the multi-range edit putting
+        // its own carets back is the end of them.
+        if !isRestoringMultiCarets { multiCarets = nil }
         let previousBlock = drawnBlockRect
         let previousSelection = selectedRange()
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
