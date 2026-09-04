@@ -2394,13 +2394,41 @@ private final class VimModeBadge: NSView {
 
 extension MainWindowController {
 
+    /// The ⌘P panel itself, for the tests to type at.
+    var tabPickerPanel: TabPickerPanel { tabPicker }
+
     /// ⌘P.
     func showTabPicker() {
         guard let window else { return }
         showWindow(nil)
         tabPicker.show(
-            titles: notes.map(\.title), selectedIndex: selectedIndex, over: window
+            titles: notes.map(\.title), selectedIndex: selectedIndex,
+            loadHeadings: { [weak self] completion in
+                self?.loadFrontTabHeadings(completion: completion)
+            },
+            over: window
         )
+    }
+
+    /// `@` in the switcher (Todo 9): the front `.md` tab's headings, read
+    /// from its own text rather than the render. A note past
+    /// `BigFile.threshold` is scanned on a background queue so the panel
+    /// never waits on the run loop for it; an ordinary note answers on the
+    /// spot, the same call either way.
+    private func loadFrontTabHeadings(completion: @escaping ([MarkdownHeadings.Heading]) -> Void) {
+        guard let note = currentNote, note.previewKind == .markdown else {
+            completion([])
+            return
+        }
+        if BigFile.isBig(length: note.storage.length) {
+            let snapshot = note.storage.string
+            DispatchQueue.global(qos: .userInitiated).async {
+                let headings = MarkdownHeadings.extract(from: snapshot)
+                DispatchQueue.main.async { completion(headings) }
+            }
+        } else {
+            completion(MarkdownHeadings.extract(from: note.storage.string))
+        }
     }
 }
 
@@ -2408,6 +2436,10 @@ extension MainWindowController: TabPickerPanelDelegate {
     func tabPicker(_ picker: TabPickerPanel, didChoose tabIndex: Int) {
         selectTab(at: tabIndex)
         focusEditor()
+    }
+
+    func tabPicker(_ picker: TabPickerPanel, didChooseHeading heading: MarkdownHeadings.Heading) {
+        goToHeading(heading)
     }
 }
 
@@ -2939,6 +2971,25 @@ extension MainWindowController {
         revealInEditor(textView.selectedRange())
         // The pane is read, not typed in.
         focusEditor()
+    }
+
+    /// A heading chosen from the ⌘P switcher's `@` list (Todo 9): the caret
+    /// goes to its line start and is scrolled into view, and — in split or
+    /// reading, where there is a render to be pointing at — the pane is
+    /// walked to that block by hand, the same `highlightBlock(containingSource:)`
+    /// a caret move already drives in split. Reading has no editor on screen,
+    /// so the keyboard is left where it was rather than jumping to it.
+    private func goToHeading(_ heading: MarkdownHeadings.Heading) {
+        guard let note = currentNote else { return }
+        let location = max(0, min(heading.location, note.storage.length))
+        if preferences.vimMode, vimEngine.mode != .normal { vimEngine.enterNormalMode() }
+        textView.setSelectedRange(NSRange(location: location, length: 0))
+        if preferences.vimMode { vimEngine.clampCaret() }
+        revealInEditor(textView.selectedRange())
+        if installedPreviewMode == .split || installedPreviewMode == .reading {
+            previewColumn.current.highlightBlock(containingSource: location)
+        }
+        if installedPreviewMode != .reading { focusEditor() }
     }
 
     /// Scrolls the editor to a place in the note. Somewhere already on screen

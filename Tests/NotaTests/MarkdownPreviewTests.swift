@@ -1879,6 +1879,118 @@ final class MarkdownPreviewTests: XCTestCase {
         )
     }
 
+    // MARK: - Headings outline (Todo 9)
+
+    /// `@` in the ⌘P switcher lists the front tab's headings, in document
+    /// order, in place of the tab list.
+    @MainActor
+    func testAtInThePickerListsTheFrontTabsHeadingsInOrder() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        controller.open(url: try markdownFile(contents: """
+        # Intro
+
+        Some words.
+
+        ## Second
+
+        More words.
+
+        ### Third
+        """))
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        XCTAssertFalse(picker.isShowingHeadings, "opens on the tab list, same as ever")
+
+        picker.query = "@"
+        XCTAssertTrue(picker.isShowingHeadings)
+        XCTAssertEqual(picker.visibleRowTexts, ["Intro", "Second", "Third"])
+    }
+
+    /// The rest of the query fuzzy-filters the headings the same way it
+    /// fuzzy-filters tab titles.
+    @MainActor
+    func testAtIntroFiltersTheHeadings() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        controller.open(url: try markdownFile(contents: "# Intro\n\n## Second\n\n### Third"))
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        picker.query = "@intro"
+        XCTAssertEqual(picker.visibleRowTexts, ["Intro"])
+
+        picker.query = "@second"
+        XCTAssertEqual(picker.visibleRowTexts, ["Second"])
+
+        picker.query = "@zzz"
+        XCTAssertTrue(picker.visibleRowTexts.isEmpty, "no heading matches")
+
+        // Deleting the `@` back out returns to the tab list.
+        picker.query = ""
+        XCTAssertFalse(picker.isShowingHeadings)
+    }
+
+    /// Choosing a heading puts the caret at the start of its line, wherever
+    /// in the note that is.
+    @MainActor
+    func testChoosingAHeadingMovesTheCaretToItsLine() throws {
+        _ = NSApplication.shared
+        let markdown = "# Intro\n\nSome words.\n\n## Second\n\nMore words."
+        let controller = try makeController()
+        controller.open(url: try markdownFile(contents: markdown))
+        let picker = controller.tabPickerPanel
+        let expected = (markdown as NSString).range(of: "## Second").location
+
+        controller.showTabPicker()
+        picker.query = "@second"
+        picker.chooseSelection()
+
+        XCTAssertFalse(picker.isVisible, "choosing closes the panel")
+        XCTAssertEqual(controller.currentTabState.selection, expected)
+    }
+
+    /// In split, choosing a heading also walks the render to that block —
+    /// the same `highlightBlock(containingSource:)` a caret move already
+    /// drives, called by hand since a picker's jump is not a keystroke.
+    @MainActor
+    func testChoosingAHeadingInSplitLightsTheRendersBlock() throws {
+        _ = NSApplication.shared
+        let markdown = "# Intro\n\nSome words.\n\n## Second\n\nMore words."
+        let controller = try makeController()
+        controller.open(url: try markdownFile(contents: markdown))
+        controller.setPreviewMode(.split)
+        let preview = try previewView(of: controller)
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        picker.query = "@second"
+        picker.chooseSelection()
+
+        XCTAssertEqual(
+            preview.highlightedSourceRange,
+            (markdown as NSString).range(of: "## Second"),
+            "the block the heading's own line belongs to"
+        )
+    }
+
+    /// A front tab that is not `.md` has no headings to offer.
+    @MainActor
+    func testAtOverATxtTabShowsNoHeadings() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let file = try makeTemporaryDirectory().appendingPathComponent("notes.txt")
+        try "# Looks like a heading".write(to: file, atomically: true, encoding: .utf8)
+        controller.open(url: file)
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        picker.query = "@"
+        XCTAssertTrue(picker.isShowingHeadings)
+        XCTAssertTrue(picker.visibleRowTexts.isEmpty, "a .txt tab has no outline")
+    }
+
     // MARK: - Reading mode
 
     /// ⌥⇧⌘P is the shortcut for the render on its own: straight to it from
@@ -3047,6 +3159,14 @@ final class MarkdownPreviewTests: XCTestCase {
     private func makeMarkdownFile(named name: String) throws -> URL {
         let url = try makeTemporaryDirectory().appendingPathComponent(name)
         try "".write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    /// A `.md` file holding real text — for the `@` headings-outline tests,
+    /// which need something in the note to find headings in.
+    private func markdownFile(contents: String) throws -> URL {
+        let url = try makeTemporaryDirectory().appendingPathComponent("note.md")
+        try contents.write(to: url, atomically: true, encoding: .utf8)
         return url
     }
 

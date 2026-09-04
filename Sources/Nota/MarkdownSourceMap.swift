@@ -281,11 +281,13 @@ struct MarkdownSourceMap {
 
     // MARK: - Recognising markup
 
-    private static func isFence(_ line: String) -> Bool {
+    /// Whether a line opens or closes a fenced code block — shared with
+    /// `MarkdownHeadings`, which skips fences the same way.
+    static func isFence(_ line: String) -> Bool {
         fenceMarker(of: line) != nil
     }
 
-    private static func fenceMarker(of line: String) -> Character? {
+    static func fenceMarker(of line: String) -> Character? {
         let trimmed = line.drop { $0 == " " }
         guard let first = trimmed.first, first == "`" || first == "~" else { return nil }
         return trimmed.prefix { $0 == first }.count >= 3 ? first : nil
