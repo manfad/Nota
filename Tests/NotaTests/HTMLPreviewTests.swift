@@ -476,7 +476,7 @@ final class HTMLPreviewTests: XCTestCase {
     }
 
     func testTheViewItemIsCalledSVGPreviewOnADrawingTab() throws {
-        XCTAssertEqual(RenderedPreviewKind.previewMenuTitle(.svg), "SVG Preview")
+        XCTAssertEqual(RenderedPreviewKind.previewMenuTitle(.svg), "Mode Toggle")
         XCTAssertEqual(RenderedPreviewKind(fileExtension: "svg"), .svg)
         XCTAssertEqual(RenderedPreviewKind(fileExtension: "SVG"), .svg)
     }
@@ -526,19 +526,14 @@ final class HTMLPreviewTests: XCTestCase {
     }
 
     @MainActor
-    func testTheViewItemIsCalledHTMLPreviewOnAPageTab() throws {
+    func testTheViewItemIsCalledModeToggleOnEveryTab() throws {
         _ = NSApplication.shared
         let controller = try makeController(showing: "page.html", text: "<p>hi</p>",
                                             in: try makeTemporaryDirectory())
         XCTAssertEqual(controller.currentRenderedPreviewKind, .html)
-        XCTAssertEqual(
-            RenderedPreviewKind.previewMenuTitle(controller.currentRenderedPreviewKind),
-            "HTML Preview"
-        )
-        XCTAssertEqual(RenderedPreviewKind.previewMenuTitle(.latex), "LaTeX Preview")
-        XCTAssertEqual(RenderedPreviewKind.previewMenuTitle(.markdown), "Markdown Preview")
-        XCTAssertEqual(RenderedPreviewKind.previewMenuTitle(nil), "Markdown Preview",
-                       "a tab with no preview reads the plain name, greyed out")
+        for kind in [RenderedPreviewKind.html, .latex, .markdown, nil] {
+            XCTAssertEqual(RenderedPreviewKind.previewMenuTitle(kind), "Mode Toggle")
+        }
     }
 
     @MainActor

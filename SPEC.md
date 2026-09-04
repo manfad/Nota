@@ -129,7 +129,7 @@
   Adjustable: New Tab ⌘T, New Window ⇧⌘N, Open… ⌘O, Close Tab ⌘W, Save ⌘S, Save As… ⇧⌘S, Bookmark This
   Tab ⌘D, Show Bookmarks… ⇧⌘D, Go to Tab… ⌘P, Next Tab ⌃Tab, Previous Tab ⌃⇧Tab, Find… ⌘F, Find Next ⌘G,
   Find Previous ⇧⌘G, Search All Notes… ⇧⌘F, Go to Line… ⌘L, Toggle Comment ⌘/, Indent ⌘], Outdent ⌘[,
-  Increase Font Size ⌘+, Decrease Font Size ⌘-, Actual Size ⌘0, Show Images ⌘B, Markdown Preview ⇧⌘P,
+  Increase Font Size ⌘+, Decrease Font Size ⌘-, Actual Size ⌘0, Image Gallery ⌘B, Mode Toggle ⇧⌘P,
   Reading Mode ⌥⇧⌘P, Zen Mode ⌥⌘Z, Settings… ⌘,. The system-standard items are not adjustable and are
   reserved against: ⌘Q ⌘H ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A ⌘M, and neither is ⌘N, Nota's older new-tab key.
   A row records the next combination you press: ⌘ or ⌃ has to be in it (⌘ with a letter is fine), Esc
@@ -163,7 +163,7 @@
 
 ## Markdown preview — three modes (⇧⌘P cycles, View menu; per tab, remembered in the session)
 - **Editor** (default), **Split**, **Reading**. ⇧⌘P cycles editor → split → reading → editor; ⌥⇧⌘P jumps to reading and
-  back out to the editor. The View menu keeps "Markdown Preview" (checkmarked in split and reading) and adds
+  back out to the editor. The View menu keeps "Mode Toggle" (checkmarked in split and reading) and adds
   "Reading Mode" (checkmarked in reading). Both checkmarks are the front tab's.
 - Rendered files only: a note whose file is spelled `.md`, saved — or `.tex` (`.latex`, `.ltx`), which gets the LaTeX
   render below instead, or `.html` (`.htm`), which gets the HTML preview, and everything else here unchanged. Every
@@ -385,7 +385,7 @@
 ## HTML preview (decided 2026-09-03)
 - A `.html` (`.htm`) file is a tab with a preview beside it, the way a `.md` is: the same three modes, the same
   floating mode control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the session.
-  The View item is named "HTML Preview" on that tab. The setting is "Open Markdown, LaTeX and HTML files in reading mode".
+  The View item is "Mode Toggle" there as everywhere. The setting is "Open Markdown, LaTeX and HTML files in reading mode".
 - Drawn by WebKit (`WKWebView`): HTML is the one place a WebView is the native answer, the way PDFKit is for a PDF.
   The page is the page — CSS, the document's own type, scripts, images and stylesheets beside the file — not Nota's
   reading layout of it. No dependency; WebKit ships with macOS. A `.css` or a `.js` is still source and has no preview.
@@ -412,7 +412,7 @@
   news about the one being typed now. A page loaded again puts the query to the new document.
 - Untitled notes and every other extension have no HTML preview. Save As to `.html` is what turns a note into one.
 - An `.svg` is the same arrangement (decided 2026-09-04): text you edit, a drawing beside it, the same pane and the
-  same three modes, and the View item says "SVG Preview". It is handed to WebKit as `image/svg+xml`, so the root
+  same three modes, and the View item is the same "Mode Toggle". It is handed to WebKit as `image/svg+xml`, so the root
   `<svg>` is the document rather than a tag inside a page the file never had. It is never one of the picture tabs
   below — its bytes are text, and the system filing it under images does not make it one.
 - Shipped: `HTMLPreviewView` is the column's third content view. The editor's text is loaded under `nota-file://`, whose

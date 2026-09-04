@@ -237,7 +237,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleImageSidebar(_:)) {
             let showing = activeController?.isImageSidebarVisible ?? false
-            menuItem.title = L10n.text(showing ? "Hide Images" : "Show Images")
+            // One name, ticked while the gallery is up, rather than a title
+            // that flips between Show and Hide.
+            menuItem.title = L10n.text("Image Gallery")
+            menuItem.state = showing ? .on : .off
         }
         if menuItem.action == #selector(toggleZenMode(_:)) {
             let zen = activeController?.isZenMode ?? false

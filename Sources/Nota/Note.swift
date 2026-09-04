@@ -86,12 +86,9 @@ enum RenderedPreviewKind {
     /// A tab with no preview at all keeps the plain name, since the item is
     /// disabled there and only ever read greyed out.
     static func previewMenuTitle(_ kind: RenderedPreviewKind?) -> String {
-        switch kind {
-        case .latex: "LaTeX Preview"
-        case .html: "HTML Preview"
-        case .svg: "SVG Preview"
-        case .markdown, nil: "Markdown Preview"
-        }
+        // One name whatever the tab renders as: the item cycles the mode, and
+        // the mode is the same three places for Markdown, LaTeX, HTML and SVG.
+        "Mode Toggle"
     }
 }
 
