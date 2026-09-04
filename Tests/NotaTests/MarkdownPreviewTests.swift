@@ -1642,6 +1642,54 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(preview.codeBoxRects.isEmpty, "an inline span is not a block")
     }
 
+    // MARK: - Copying maths out of the render
+
+    /// A selection over both an inline and a display formula copies their
+    /// `plainText` in place, not the U+FFFC each is an attachment underneath.
+    @MainActor
+    func testCopyingASelectionWithFormulasCarriesTheirPlainText() throws {
+        _ = NSApplication.shared
+        let preview = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 360, height: 400))
+        preview.layoutSubtreeIfNeeded()
+        preview.show(result(
+            "The value $x^2$ here and $$\\frac{a}{b}$$ done.", width: preview.contentWidth
+        ))
+
+        let textView = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+        XCTAssertTrue(textView.string.contains("\u{FFFC}"), "the render itself still holds attachments")
+        textView.setSelectedRange(NSRange(location: 0, length: (textView.string as NSString).length))
+
+        let board = makePasteboard()
+        XCTAssertTrue(textView.writeSelection(to: board, type: .string))
+        let copied = try XCTUnwrap(board.string(forType: .string))
+
+        XCTAssertEqual(copied, "The value x² here and a/b done.")
+        XCTAssertFalse(copied.contains("\u{FFFC}"), "the formulas should read like words, not placeholders")
+    }
+
+    /// A selection with no maths in it is untouched — the same string a plain
+    /// `NSTextView` would have copied.
+    @MainActor
+    func testCopyingASelectionWithNoMathsIsUntouched() throws {
+        _ = NSApplication.shared
+        let preview = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 360, height: 400))
+        preview.layoutSubtreeIfNeeded()
+        preview.show(result("Just words, no math here.", width: preview.contentWidth))
+
+        let textView = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+        textView.setSelectedRange(NSRange(location: 0, length: (textView.string as NSString).length))
+
+        let board = makePasteboard()
+        XCTAssertTrue(textView.writeSelection(to: board, type: .string))
+        XCTAssertEqual(board.string(forType: .string), "Just words, no math here.")
+    }
+
+    private func makePasteboard() -> NSPasteboard {
+        let board = NSPasteboard(name: .init("NotaMarkdownPreviewTests-\(UUID().uuidString)"))
+        board.clearContents()
+        return board
+    }
+
     // MARK: - Block sync
 
     @MainActor

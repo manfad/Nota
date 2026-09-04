@@ -535,6 +535,41 @@ private final class PreviewTextView: NSTextView {
         return box.contains(inContainer) ? index : nil
     }
 
+    // MARK: - Copying
+
+    /// Copying a formula out of the pane should read like the words around
+    /// it, not the U+FFFC every attachment leaves in a plain string. The rich
+    /// flavours (RTF/RTFD) already carry the formula's own image at that
+    /// character, so only the plain-text flavour needs the substitution.
+    override func writeSelection(
+        to pboard: NSPasteboard, type: NSPasteboard.PasteboardType
+    ) -> Bool {
+        guard type == .string, let storage = textStorage else {
+            return super.writeSelection(to: pboard, type: type)
+        }
+        let range = selectedRange()
+        guard range.length > 0 else { return false }
+        let selection = storage.attributedSubstring(from: range)
+        return pboard.setString(Self.plainTextForCopy(selection), forType: .string)
+    }
+
+    /// The selection's characters, with every formula's attachment run
+    /// swapped for `plainText` — the Unicode approximation `MathLayout`
+    /// already keeps for accessibility. Any other attachment (a picture, a
+    /// rule) is left as the U+FFFC it has always copied as.
+    private static func plainTextForCopy(_ attributed: NSAttributedString) -> String {
+        var result = ""
+        let source = attributed.string as NSString
+        attributed.forEachAttachmentRun { value, range, _ in
+            if let math = value as? MathAttachment {
+                result += math.formula.plainText
+            } else {
+                result += source.substring(with: range)
+            }
+        }
+        return result
+    }
+
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
 
