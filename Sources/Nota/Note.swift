@@ -161,6 +161,17 @@ final class Note {
     let storage: NSTextStorage
     let undoManager = UndoManager()
 
+    /// Where every hard line of this note starts. The gutter, the line count
+    /// in the footer and the caret's line all read it rather than walking the
+    /// text, which is the whole of what keeps a 100 MB log usable. Built once
+    /// here and folded forward one edit at a time, so it costs nothing to
+    /// keep.
+    private(set) var lineIndex: LineIndex
+    /// The subscription that does the folding — the storage tells anyone who
+    /// asks what it just changed, which is exactly the three facts the table
+    /// needs.
+    private var editObserver: NSObjectProtocol?
+
     /// The PDF once it has been read, and whether reading it has been tried
     /// — a file that could not be opened must not be re-opened on every tab
     /// switch.
@@ -177,9 +188,48 @@ final class Note {
         self.untitledName = untitledName
         self.format = format
         self.kind = kind
-        self.storage = NSTextStorage(
-            attributedString: NoteText.render(text, attributes: attributes, assets: assets)
-        )
+        let rendered = NoteText.render(text, attributes: attributes, assets: assets)
+        self.storage = NSTextStorage(attributedString: rendered)
+        // Taken from the rendered string rather than from the storage: it is
+        // a plain immutable `NSString`, so the scan reads straight out of it
+        // instead of through the storage's live proxy.
+        self.lineIndex = LineIndex(rendered.string as NSString)
+        observeEdits()
+    }
+
+    deinit {
+        if let editObserver { NotificationCenter.default.removeObserver(editObserver) }
+    }
+
+    /// Fold every character edit into the line table as the storage makes it.
+    /// Attribute-only edits — a colour laid on a chip, the font changing —
+    /// move nothing, so they are ignored.
+    private func observeEdits() {
+        editObserver = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification,
+            object: storage, queue: nil
+        ) { [weak self] notification in
+            guard let self,
+                  let storage = notification.object as? NSTextStorage,
+                  storage.editedMask.contains(.editedCharacters)
+            else { return }
+            self.lineIndex.apply(
+                editedRange: storage.editedRange,
+                changeInLength: storage.changeInLength,
+                in: storage.string as NSString
+            )
+        }
+    }
+
+    /// How many pictures the note holds, counted through the storage's
+    /// attribute runs rather than by serialising the text and matching
+    /// tokens in it — a log with no pictures at all costs one run.
+    var imageCount: Int {
+        var count = 0
+        storage.forEachAttachmentRun { value, _, _ in
+            if value is NotaImageAttachment { count += 1 }
+        }
+        return count
     }
 
     /// The tab's name: the file's own, extension and all. `app.js` and

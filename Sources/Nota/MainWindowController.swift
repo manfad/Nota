@@ -175,6 +175,13 @@ final class MainWindowController: NSWindowController {
     /// The four numbers behind the middle label, kept so a relayout can
     /// re-fit the text without walking the note again.
     private var counts = (words: 0, characters: 0, images: 0, lines: 1)
+    /// The counting job for a big note, and the number that says which one is
+    /// current — an answer from an older job is thrown away rather than shown.
+    private var wordCountWorkItem: DispatchWorkItem?
+    private var wordCountGeneration = 0
+    /// The text a file was just opened from, kept only until the first count
+    /// has taken it.
+    private var openedText: (id: UUID, text: String)?
     /// How long the content in the preview column is in its own units, when
     /// it has any — a PDF's pages. `nil` whenever the editor's own words and
     /// characters are the answer, which is what puts them back.
@@ -369,6 +376,10 @@ final class MainWindowController: NSWindowController {
         content.addSubview(scrollView)
 
         let ruler = LineNumberRulerView(scrollView: scrollView, textView: textView)
+        // The gutter numbers from the front note's line table rather than by
+        // counting newlines itself, so scrolling a big file costs the rows on
+        // screen and nothing else.
+        ruler.lineIndexProvider = { [weak self] in self?.currentNote?.lineIndex }
         scrollView.verticalRulerView = ruler
         scrollView.hasVerticalRuler = true
         lineNumberRuler = ruler
@@ -1126,7 +1137,9 @@ final class MainWindowController: NSWindowController {
         updateModeControlOverlays()
     }
 
-    private func updateStatus() {
+    /// `countsDebounced` is the difference between a keystroke and everything
+    /// else: only typing can afford to let a big file's word count arrive late.
+    private func updateStatus(countsDebounced: Bool = false) {
         // A PDF has no words, characters, pictures or lines to speak of, and
         // neither has a picture. How long a document is, is how many pages;
         // how big a picture is, is how many pixels. The content in the column
@@ -1134,19 +1147,81 @@ final class MainWindowController: NSWindowController {
         // own to add, and the counts stand.
         if let status = currentPreviewFooterStatus {
             previewStatus = status
+        } else if let note = currentNote {
+            previewStatus = nil
+            // Lines and pictures are always cheap now: one is the size of the
+            // note's line table, the other a walk over its attribute runs.
+            counts.lines = note.lineIndex.lineCount
+            counts.images = note.imageCount
+            if BigFile.isBig(length: note.storage.length) {
+                // Words and characters are the two that cost the whole file,
+                // so a big one counts them off the main thread and the footer
+                // keeps the last answer until the new one lands.
+                scheduleWordCounts(for: note, debounced: countsDebounced)
+            } else {
+                // An ordinary note counts where it always did, on the spot:
+                // the footer is right the instant a key is pressed, and at
+                // this size that costs nothing worth deferring.
+                let stripped = note.countableText
+                counts.words = TextStats.wordCount(stripped)
+                counts.characters = TextStats.characterCount(stripped)
+            }
         } else {
             previewStatus = nil
-            let plain = currentNote?.text ?? ""
-            let stripped = NoteText.strippingTokens(plain)
-            counts = (
-                words: TextStats.wordCount(stripped),
-                characters: TextStats.characterCount(stripped),
-                images: NoteText.assetIDs(in: plain).count,
-                lines: TextStats.lineCount(currentNote?.storage.string ?? "")
-            )
+            counts = (words: 0, characters: 0, images: 0, lines: 1)
         }
         updateCountsLabel()
         updateCursorPosition()
+    }
+
+    /// Count the words and characters of a big note away from the run loop.
+    ///
+    /// Typing debounces — a burst of keystrokes counts once, about half a
+    /// second after it stops — while opening a file or switching to a tab
+    /// counts straight away, since the footer would otherwise be showing the
+    /// tab you just left. Each job takes a number; only the newest one, and
+    /// only while its note is still the one in front, is allowed to write to
+    /// the footer.
+    private func scheduleWordCounts(for note: Note, debounced: Bool) {
+        wordCountWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.startWordCounts(for: note) }
+        wordCountWorkItem = item
+        if debounced {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+        } else {
+            item.perform()
+        }
+    }
+
+    private func startWordCounts(for note: Note) {
+        wordCountWorkItem = nil
+        wordCountGeneration += 1
+        let generation = wordCountGeneration
+        // A storage's own `string` is a live proxy onto it, and a proxy must
+        // not cross a thread. The text a file was just read from is already a
+        // string of its own, which saves copying a hundred megabytes back out
+        // of the storage a moment after it went in.
+        let snapshot: String
+        if let opened = openedText, opened.id == note.id {
+            snapshot = opened.text
+            openedText = nil
+        } else {
+            snapshot = NSString(string: note.storage.string) as String
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let stripped = NoteText.strippingTokens(snapshot)
+            let words = TextStats.wordCount(stripped)
+            let characters = TextStats.characterCount(stripped)
+            DispatchQueue.main.async {
+                guard let self, generation == self.wordCountGeneration,
+                      self.currentNote === note
+                else { return }
+                self.counts.words = words
+                self.counts.characters = characters
+                self.updateCountsLabel()
+            }
+        }
     }
 
     /// Writes the longest form of the counts that fits between the two side
@@ -1207,9 +1282,16 @@ final class MainWindowController: NSWindowController {
             cursorLabel.stringValue = status.position ?? ""
             return
         }
-        let text = (currentNote?.storage.string ?? "") as NSString
+        let location = textView.selectedRange().location
+        guard let note = currentNote else {
+            cursorLabel.stringValue = TextStats.position(in: "" as NSString, at: location)
+            return
+        }
+        // Through the line table: the line is a binary search and the column
+        // is the caret's own line, rather than a walk from the top of the file
+        // on every arrow key.
         cursorLabel.stringValue = TextStats.position(
-            in: text, at: textView.selectedRange().location
+            in: note.storage.string as NSString, at: location, using: note.lineIndex
         )
     }
 
@@ -1332,6 +1414,11 @@ final class MainWindowController: NSWindowController {
         }
         notes.insert(note, at: min(selectedIndex + 1, notes.count))
         selectedIndex = notes.firstIndex { $0 === note } ?? notes.count - 1
+        // The first word count of a big file reads this rather than copying
+        // the text back out of the storage it has just been put into.
+        if note.kind == .text, BigFile.isBig(length: note.storage.length) {
+            openedText = (note.id, text)
+        }
         if note.writesToCache { store.writeText(note.text, for: note.id) }
         installCurrentNote()
         refreshTabs()
@@ -2610,9 +2697,7 @@ extension MainWindowController {
         var resized: [NSRange] = []
         var number = 1
 
-        storage.enumerateAttribute(
-            .attachment, in: NSRange(location: 0, length: storage.length)
-        ) { value, range, _ in
+        storage.forEachAttachmentRun { value, range, _ in
             guard let chip = value as? NotaImageAttachment else { return }
             assetIDs.append(chip.assetID)
             if chip.updateChip(font: font, index: number) { resized.append(range) }
@@ -2660,9 +2745,7 @@ extension MainWindowController {
     private func chipLocations() -> [Int] {
         guard let storage = currentNote?.storage else { return [] }
         var locations: [Int] = []
-        storage.enumerateAttribute(
-            .attachment, in: NSRange(location: 0, length: storage.length)
-        ) { value, range, _ in
+        storage.forEachAttachmentRun { value, range, _ in
             if value is NotaImageAttachment { locations.append(range.location) }
         }
         return locations
@@ -3051,7 +3134,7 @@ extension MainWindowController: NSTextViewDelegate {
             refreshTabs()
         }
         rememberSelection(note)
-        updateStatus()
+        updateStatus(countsDebounced: true)
         // The matches have moved with the edit.
         vimEngine.refreshSearchHighlights()
         scheduleImageRefresh()
