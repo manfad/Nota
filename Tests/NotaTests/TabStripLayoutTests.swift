@@ -9,6 +9,8 @@ import XCTest
 final class TabStripLayoutTests: XCTestCase {
     private let plusSize = TabStripLayout.plusSize
     private let reserve = TabStripLayout.trailingReserve
+    private let controls = TabStripLayout.trailingControls
+    private let bookmarkSlot = TabStripLayout.bookmarkSlot
     private let plusGap = TabStripLayout.plusGap
     private let spacing = TabStripLayout.spacing
 
@@ -22,7 +24,7 @@ final class TabStripLayoutTests: XCTestCase {
         // The + rides right after the third tab rather than sitting at the
         // trailing edge of a half-empty strip.
         XCTAssertEqual(layout.plusX, 368 + 180 + plusGap)
-        XCTAssertLessThan(layout.plusX, 900 - reserve - plusSize)
+        XCTAssertLessThan(layout.plusX, 900 - controls - plusSize)
     }
 
     func testManyTabsShrinkEvenlyAndPinThePlusAtTheEdge() {
@@ -35,11 +37,11 @@ final class TabStripLayoutTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(width, TabStripLayout.minInactiveWidth)
         }
         XCTAssertEqual(layout.visibleRange, 0..<14, "shrinking, not scrolling: nothing is hidden")
-        XCTAssertEqual(layout.plusX, 900 - reserve - plusSize, accuracy: 0.001, "a full strip pins the + short of the reserve")
+        XCTAssertEqual(layout.plusX, 900 - controls - plusSize, accuracy: 0.001, "a full strip pins the + short of the trailing controls")
 
         // Everything, gaps and + included, lands inside the strip.
         let total = layout.widths.reduce(0, +) + spacing * 13
-        XCTAssertLessThanOrEqual(total, 900 - plusSize - plusGap - reserve + 0.001)
+        XCTAssertLessThanOrEqual(total, 900 - plusSize - plusGap - controls + 0.001)
     }
 
     func testTheSelectedTabKeepsRoomForItsCloseButtonAndTheRestPayForIt() {
@@ -53,7 +55,7 @@ final class TabStripLayoutTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(width, TabStripLayout.minInactiveWidth)
         }
         let total = layout.widths.reduce(0, +) + spacing * 13
-        XCTAssertLessThanOrEqual(total, 900 - plusSize - plusGap - reserve + 0.001, "the raise did not overflow")
+        XCTAssertLessThanOrEqual(total, 900 - plusSize - plusGap - controls + 0.001, "the raise did not overflow")
     }
 
     func testPastTheFloorTheStripBecomesASlidingWindowAroundTheSelectedTab() {
@@ -120,5 +122,38 @@ final class TabStripLayoutTests: XCTestCase {
         XCTAssertEqual(layout.xs, [0, 144, 288])
         XCTAssertEqual(layout.plusX, 576, "the + does not close up the gap either")
         XCTAssertEqual(layout.visibleRange, 0..<3)
+    }
+
+    // MARK: - The bookmark button's slot (SPEC Todo 13)
+
+    /// The bookmark button pins at the trailing edge, and the + steps left by
+    /// exactly the slot it takes — nothing overlaps and nothing is
+    /// subtracted twice.
+    func testTheBookmarkButtonTakesASlotAndThePlusMovesLeftByIt() {
+        let layout = TabStripLayout(count: 14, selectedIndex: 0, viewportWidth: 900)
+
+        XCTAssertEqual(TabStripLayout.bookmarkX(900), 900 - reserve - bookmarkSlot,
+                       "the bookmark button pins inside the reserve")
+        XCTAssertEqual(layout.plusX, TabStripLayout.bookmarkX(900) - plusGap - plusSize,
+                       accuracy: 0.001, "the + sits one gap to the left of it")
+        XCTAssertEqual(controls, bookmarkSlot + TabStripLayout.bookmarkGap + reserve)
+
+        // The room the tabs get shrank by the slot and its gap, and by
+        // nothing else.
+        XCTAssertEqual(
+            TabStripLayout.tabsWidth(900),
+            900 - plusSize - plusGap - bookmarkSlot - TabStripLayout.bookmarkGap - reserve,
+            accuracy: 0.001
+        )
+        let total = layout.widths.reduce(0, +) + spacing * 13
+        XCTAssertLessThanOrEqual(total, layout.plusX + 0.001, "the tabs stop short of the +")
+    }
+
+    /// A strip too narrow to hold anything still hands back sane numbers
+    /// rather than negative ones.
+    func testAVeryNarrowStripKeepsBothButtonsOnIt() {
+        XCTAssertEqual(TabStripLayout.bookmarkX(20), 0)
+        let layout = TabStripLayout(count: 3, selectedIndex: 0, viewportWidth: 20)
+        XCTAssertGreaterThanOrEqual(layout.plusX, 0)
     }
 }

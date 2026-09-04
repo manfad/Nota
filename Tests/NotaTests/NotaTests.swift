@@ -1249,7 +1249,7 @@ final class NotaTests: XCTestCase {
         XCTAssertEqual(VimMode.operatorPending.badgeTitle, "Normal")
         XCTAssertEqual(VimMode.insert.badgeTitle, "Insert")
         XCTAssertEqual(VimMode.visual.badgeTitle, "Visual")
-        XCTAssertEqual(VimMode.visualLine.badgeTitle, "Visual line")
+        XCTAssertEqual(VimMode.visualLine.badgeTitle, "Visual")
         XCTAssertEqual(VimMode.replace.badgeTitle, "Replace")
         XCTAssertTrue(VimMode.insert.showsCapsule)
         for mode in [VimMode.normal, .operatorPending, .visual, .visualLine,
@@ -1406,7 +1406,7 @@ final class NotaTests: XCTestCase {
 
         controller.open(url: url)
 
-        XCTAssertEqual(controller.footerRegions.encoding.stringValue, "Windows-1252 ·")
+        XCTAssertEqual(controller.footerRegions.encoding.stringValue, "Windows-1252")
         XCTAssertEqual(controller.footerRegions.lineEnding.stringValue, "CRLF")
     }
 
@@ -1430,7 +1430,7 @@ final class NotaTests: XCTestCase {
         controller.convertEncoding(to: .utf8)
         XCTAssertTrue(controller.currentTabState.isDirty)
         XCTAssertEqual(controller.openNotes.last?.format.encoding, .utf8)
-        XCTAssertEqual(controller.footerRegions.encoding.stringValue, "UTF-8 ·")
+        XCTAssertEqual(controller.footerRegions.encoding.stringValue, "UTF-8")
 
         controller.convertLineEnding(to: .lf)
         XCTAssertEqual(controller.openNotes.last?.format.lineEnding, .lf)
@@ -2513,8 +2513,8 @@ final class NotaTests: XCTestCase {
 
     // MARK: - Tab bar
 
-    /// Every tab shows the placeholder `text.page` icon (SPEC Todo 15's
-    /// first step, ahead of per-type artwork).
+    /// Every tab shows a leading file icon, whatever its kind
+    /// (`FileKindIconTests` covers which symbol each kind gets).
     @MainActor
     func testEveryTabShowsALeadingFileIcon() throws {
         _ = NSApplication.shared
@@ -2644,16 +2644,17 @@ final class NotaTests: XCTestCase {
                           "a half-empty strip does not park the + at the edge")
 
         // Twelve tabs at their floors (one at 60, eleven at 40, eleven gaps)
-        // plus the +, its gap and the reserve past it: 612pt, exactly full.
-        bar.frame.size.width = 612
+        // plus the +, its gap, and the bookmark button, its gap and the
+        // reserve past it: 640pt, exactly full.
+        bar.frame.size.width = 640
         bar.setItems(
             (0..<12).map { TabBarItem(title: "Note \($0)", isDirty: false) },
             selectedIndex: 0
         )
         bar.layoutSubtreeIfNeeded()
         XCTAssertEqual(bar.newTabButtonFrameForTesting.maxX,
-                       bar.bounds.maxX - TabStripLayout.trailingReserve, accuracy: 0.01,
-                       "a full strip pins the + at the trailing edge, short of the reserve")
+                       bar.bounds.maxX - TabStripLayout.trailingControls, accuracy: 0.01,
+                       "a full strip pins the + short of the bookmark button and the reserve")
         XCTAssertEqual(bar.hiddenTabsForTesting, Array(repeating: false, count: 12))
 
         // Past that the strip is a window, and the + still follows whatever
@@ -2669,8 +2670,8 @@ final class NotaTests: XCTestCase {
         )
         XCTAssertEqual(bar.newTabButtonFrameForTesting.minX, lastVisible.maxX + 4, accuracy: 0.01)
         XCTAssertLessThanOrEqual(bar.newTabButtonFrameForTesting.maxX,
-                                 bar.bounds.maxX - TabStripLayout.trailingReserve + 0.01,
-                                 "the + never enters the reserve")
+                                 bar.bounds.maxX - TabStripLayout.trailingControls + 0.01,
+                                 "the + never enters the bookmark button's slot or the reserve")
     }
 
     /// Whatever the strip does, the tab in front is on screen and fully

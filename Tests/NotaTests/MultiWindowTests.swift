@@ -223,6 +223,84 @@ final class MultiWindowTests: XCTestCase {
         XCTAssertEqual(registry.controllers.count, 1)
     }
 
+    // MARK: - ⌘W on the only tab
+
+    /// Closing the only tab closes the tab and then the window goes the way
+    /// closing the window goes: a lone window hides, a second window closes
+    /// for real and hands its (fresh, blank) tab to the one before it —
+    /// exactly as the title-bar close button would.
+    @MainActor
+    func testClosingTheOnlyTabGoesTheWayClosingTheWindowGoes() throws {
+        _ = NSApplication.shared
+        let directory = try makeTemporaryDirectory()
+        let store = SessionStore(directory: directory)
+        let registry = WindowRegistry(store: store)
+
+        let lone = MainWindowController(store: store)
+        registry.add(lone)
+        lone.window?.makeKeyAndOrderFrontOffscreen()
+
+        lone.closeTab(at: 0)
+
+        XCTAssertEqual(lone.openNotes.map(\.text), [""], "a strip is never empty")
+        XCTAssertEqual(lone.openNotes.map(\.title), ["Untitled"])
+        XCTAssertEqual(lone.window?.isVisible, false, "the last window only hides")
+        XCTAssertEqual(registry.controllers.count, 1, "hiding keeps it around to be summoned back")
+
+        let other = registry.newWindow()
+        other.window?.makeKeyAndOrderFrontOffscreen()
+        XCTAssertEqual(registry.controllers.count, 2)
+
+        other.closeTab(at: 0)
+
+        XCTAssertEqual(registry.controllers.count, 1, "a second window really closes")
+        XCTAssertTrue(registry.controllers.first === lone, "the one before it took its tab")
+    }
+
+    /// Closing one of two tabs is an ordinary tab close: the window stays
+    /// open and untouched, holding the tab that is left.
+    @MainActor
+    func testClosingOneOfTwoTabsLeavesTheWindowOpenWithTheOther() throws {
+        _ = NSApplication.shared
+        let directory = try makeTemporaryDirectory()
+        let store = SessionStore(directory: directory)
+        let registry = WindowRegistry(store: store)
+        let source = MainWindowController(store: store)
+        registry.add(source)
+        source.window?.makeKeyAndOrderFrontOffscreen()
+        // Tab 0 stays clean so the close needs no save-changes prompt; only
+        // the tab that is kept has an edit in it.
+        source.addTab()
+        type("beta", into: source)
+
+        source.closeTab(at: 0)
+
+        XCTAssertEqual(source.openNotes.map(\.text), ["beta"])
+        XCTAssertEqual(source.window?.isVisible, true, "the window was never asked to close")
+        XCTAssertEqual(registry.controllers.count, 1)
+    }
+
+    /// Cancelling the save-changes prompt on a dirty last tab leaves it,
+    /// and the window, exactly as they were — the same as any other close.
+    @MainActor
+    func testCancellingTheDirtyPromptOnTheLastTabKeepsItAndTheWindow() throws {
+        _ = NSApplication.shared
+        let directory = try makeTemporaryDirectory()
+        let store = SessionStore(directory: directory)
+        let registry = WindowRegistry(store: store)
+        let source = MainWindowController(store: store)
+        registry.add(source)
+        source.window?.makeKeyAndOrderFrontOffscreen()
+        type("unsaved", into: source)
+        source.confirmDiscardOverrideForTesting = { .alertThirdButtonReturn }
+
+        source.closeTab(at: 0)
+
+        XCTAssertEqual(source.openNotes.map(\.text), ["unsaved"], "the dirty tab is still there")
+        XCTAssertEqual(source.window?.isVisible, true, "cancelling asks for nothing to close")
+        XCTAssertEqual(registry.controllers.count, 1)
+    }
+
     @MainActor
     func testTheActiveWindowIsTheOneThatWasLastInFront() throws {
         _ = NSApplication.shared

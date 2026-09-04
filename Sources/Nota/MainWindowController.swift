@@ -64,6 +64,22 @@ final class MainWindowController: NSWindowController {
     /// every display, so a run of the suite never flashes a window up.
     var windowPresenter: ((NSWindow) -> Void)?
 
+    /// The app's bookmarks (SPEC Todo 13). The registry hands every window
+    /// the one list, so a file bookmarked here is bookmarked everywhere; a
+    /// controller standing on its own gets one of its own, read from and
+    /// written back to the session file it owns.
+    var bookmarks = Bookmarks() {
+        didSet {
+            observeBookmarks()
+            refreshTabs()
+        }
+    }
+
+    /// Where a save with no file of its own gets one. The real panel unless
+    /// a test hands in something else — `nil` from it is the panel being
+    /// cancelled, which is the case ⇧⌘D on an untitled note turns on.
+    var savePanelProvider: ((Note) -> URL?)?
+
     private var preferences: Preferences { .shared }
     private var fontSize: CGFloat { preferences.fontSize }
 
@@ -96,6 +112,9 @@ final class MainWindowController: NSWindowController {
     /// Fired once a watched file's change has been dealt with — reloaded, or
     /// marked and offered. The tests wait on it; nothing in the app sets it.
     var onExternalChangeForTesting: (() -> Void)?
+    /// Stands in for the real save-changes alert so a dirty-tab close can be
+    /// driven without putting a modal on screen. Nothing in the app sets it.
+    var confirmDiscardOverrideForTesting: (() -> NSApplication.ModalResponse)?
     private var lineNumberRuler: LineNumberRulerView?
     private let tabBar = TabBarView()
     private lazy var imageSidebar = ImageSidebarView(topInset: 8)
@@ -142,6 +161,10 @@ final class MainWindowController: NSWindowController {
     private var deferredPreviewModeSlides: Bool?
     /// Counts the slides, so the one that lands is the one that took off.
     private var previewModeSlideNumber = 0
+    /// Whether the editor's text container is being held at the width it is
+    /// leaving for the length of a preview-mode slide — see
+    /// `freezeEditorWrapWidth()`.
+    private var editorWrapWidthIsFrozen = false
     /// True only while a tab is being swapped into the editor and the
     /// selection is being put down for it — see `installCurrentNote`.
     private var isSwappingNote = false
@@ -356,6 +379,7 @@ final class MainWindowController: NSWindowController {
         // another window's cached text is not rubbish.
         let loaded = sessionWindow == nil && adoptedNotes.isEmpty ? store.load() : nil
         if let size = loaded?.fontSize { preferences.fontSize = CGFloat(size) }
+        if let saved = loaded?.bookmarks { bookmarks.replace(with: saved) }
         let restored = sessionWindow ?? loaded?.windows.first
 
         // Before the tabs, so the first save this window makes already has
@@ -372,9 +396,30 @@ final class MainWindowController: NSWindowController {
             self, selector: #selector(preferencesChanged),
             name: Preferences.didChange, object: nil
         )
+        observeBookmarks()
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
+
+    /// Every window's strip has to say the same thing about a file the
+    /// moment any of them bookmarks it, so the list itself is what is
+    /// listened to rather than the window that changed it. The registry
+    /// swaps this window's list for the app's after `init`, which is why the
+    /// old one is dropped first.
+    private func observeBookmarks() {
+        NotificationCenter.default.removeObserver(self, name: Bookmarks.didChange, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(bookmarksChanged),
+            name: Bookmarks.didChange, object: bookmarks
+        )
+    }
+
+    @objc private func bookmarksChanged() {
+        refreshTabs()
+        // With a registry there is one writer for the whole app and it is
+        // listening too; on its own, this window is the session.
+        if sessionWriter == nil { writeSessionFile() }
+    }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -470,7 +515,7 @@ final class MainWindowController: NSWindowController {
 
         for label in [formatEncodingLabel, formatLineEndingLabel] {
             label.translatesAutoresizingMaskIntoConstraints = false
-            label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            label.font = .systemFont(ofSize: 11, weight: .medium)
             label.textColor = .secondaryLabelColor
             workspace.addSubview(label)
         }
@@ -535,7 +580,7 @@ final class MainWindowController: NSWindowController {
                                                             constant: -12),
             formatLineEndingLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
             formatEncodingLabel.trailingAnchor.constraint(
-                equalTo: formatLineEndingLabel.leadingAnchor, constant: -4
+                equalTo: formatLineEndingLabel.leadingAnchor, constant: -6
             ),
             formatEncodingLabel.centerYAnchor.constraint(equalTo: modeBadge.centerYAnchor),
 
@@ -1042,6 +1087,13 @@ final class MainWindowController: NSWindowController {
         let wraps = preferences.wrapsLines
         scrollView.hasHorizontalScroller = !wraps
 
+        // A slide is holding the container at the width it is leaving —
+        // see `freezeEditorWrapWidth()`. Anything that calls in here while
+        // that is true (a settings change mid-slide, say) leaves the width
+        // alone; `thawEditorWrapWidth()` calls back in once there is a final
+        // width to wrap to.
+        guard !editorWrapWidthIsFrozen else { return }
+
         let visibleWidth = editorVisibleWidth
         if wraps {
             textView.isHorizontallyResizable = false
@@ -1089,6 +1141,37 @@ final class MainWindowController: NSWindowController {
         textView.layoutManager?.ensureLayout(forBoundingRect: scrollView.contentView.bounds, in: container)
         textView.sizeToFit()
         lineNumberRuler?.refresh()
+    }
+
+    /// The editor's side of the trick `RenderedPreviewView.freezeWidth()`
+    /// plays on the render: hold the text container at the width it is
+    /// leaving so a preview-mode slide does not re-wrap the whole note on
+    /// every frame the divider crosses. With word wrap on, the container is
+    /// welded to the text view's width (`widthTracksTextView`), so as the
+    /// split resizes the editor every frame, AppKit re-wraps every frame
+    /// along with it — turning that tracking off for the length of the slide
+    /// is what removes the lag.
+    ///
+    /// Word wrap off leaves the container unbounded already, so there is
+    /// nothing to freeze. And an editor coming in from a collapsed column
+    /// has no width worth holding either — its first real width is the one
+    /// it lands at — the same rule `freezeWidth()` applies to the render.
+    private func freezeEditorWrapWidth() {
+        guard preferences.wrapsLines, !editorWrapWidthIsFrozen,
+              let container = textView.textContainer, container.size.width > 1
+        else { return }
+        editorWrapWidthIsFrozen = true
+        container.widthTracksTextView = false
+    }
+
+    /// Lets the editor take the column's width again and wrap to it once, at
+    /// the width the slide landed on. A no-op when nothing was frozen — the
+    /// non-animated paths call this too, the way `thawWidth()` is safe to
+    /// call whether or not `freezeWidth()` ever took.
+    private func thawEditorWrapWidth() {
+        guard editorWrapWidthIsFrozen else { return }
+        editorWrapWidthIsFrozen = false
+        applyWordWrap()
     }
 
     /// Restyles every tab, not just the visible one, so switching tabs after a
@@ -1338,7 +1421,9 @@ final class MainWindowController: NSWindowController {
         tabBar.setItems(
             notes.map {
                 TabBarItem(title: $0.title, isDirty: $0.isDirty,
-                           hasExternalChange: $0.isDirty && $0.hasExternalChange)
+                           hasExternalChange: $0.isDirty && $0.hasExternalChange,
+                           symbolName: FileKindIcon.symbolName(for: $0.fileURL),
+                           isBookmarked: $0.fileURL.map(bookmarks.contains) ?? false)
             },
             selectedIndex: selectedIndex
         )
@@ -1388,7 +1473,7 @@ final class MainWindowController: NSWindowController {
         updateFormatLabel()
     }
 
-    /// The note's own shape, at the right of the counts: `UTF-8 ·` and `LF`,
+    /// The note's own shape, at the right of the counts: `UTF-8` and `LF`,
     /// read straight off `note.format` since it is already what ⌘S would
     /// write. Empty for a PDF or a picture, which has no such thing.
     private func updateFormatLabel() {
@@ -1397,7 +1482,7 @@ final class MainWindowController: NSWindowController {
             formatLineEndingLabel.stringValue = ""
             return
         }
-        formatEncodingLabel.stringValue = TextFileFormat.displayName(for: note.format.encoding) + " ·"
+        formatEncodingLabel.stringValue = TextFileFormat.displayName(for: note.format.encoding)
         formatLineEndingLabel.stringValue = note.format.lineEnding.displayName
     }
 
@@ -1722,7 +1807,7 @@ final class MainWindowController: NSWindowController {
 
     /// The footer's regions, for the layout tests: the vim badge, the
     /// centred counts, the caret position, and the note's own shape —
-    /// `encoding` reads `"UTF-8 ·"`, `lineEnding` reads `"LF"`, both empty
+    /// `encoding` reads `"UTF-8"`, `lineEnding` reads `"LF"`, both empty
     /// over a PDF or a picture.
     var footerRegions: (badge: NSView, pendingKeys: NSTextField,
                         counts: NSTextField, cursor: NSTextField,
@@ -1907,7 +1992,10 @@ final class MainWindowController: NSWindowController {
         store.deleteText(for: note.id)
         notes.remove(at: index)
 
-        if notes.isEmpty {
+        let closedTheOnlyTab = notes.isEmpty
+        if closedTheOnlyTab {
+            // A strip is never empty: this keeps a hidden window that gets
+            // summoned again coming back blank, exactly as it does today.
             notes.append(makeUntitledNote())
             selectedIndex = 0
             store.writeText("", for: notes[0].id)
@@ -1925,9 +2013,18 @@ final class MainWindowController: NSWindowController {
         updateStatus()
         refreshImages(force: true)
         flush()
+
+        // The only tab just closed: the window goes the way closing the
+        // window goes — the title-bar close button's own path, so the
+        // registry's decision (hide the last window, close any other for
+        // real) and the session write happen exactly as they do there.
+        if closedTheOnlyTab {
+            window?.performClose(nil)
+        }
     }
 
     private func confirmDiscard(_ note: Note) -> NSApplication.ModalResponse {
+        if let confirmDiscardOverrideForTesting { return confirmDiscardOverrideForTesting() }
         let alert = NSAlert()
         alert.messageText = "Save changes to “\(note.title)”?"
         alert.informativeText = "Your changes will be lost if you don’t save them."
@@ -2001,6 +2098,11 @@ final class MainWindowController: NSWindowController {
     }
 
     private func runSavePanel(for note: Note) -> URL? {
+        if let savePanelProvider { return savePanelProvider(note) }
+        return presentSavePanel(for: note)
+    }
+
+    private func presentSavePanel(for note: Note) -> URL? {
         let panel = NSSavePanel()
         // Every text type Nota knows, and `allowsOtherFileTypes` for the ones
         // it does not — a `.toml` typed into the panel stays a `.toml`.
@@ -2346,7 +2448,8 @@ final class MainWindowController: NSWindowController {
     /// the whole session.
     private func writeSessionFile() {
         guard let sessionWriter else {
-            store.save(SessionState(windows: [sessionWindow], fontSize: Double(fontSize)))
+            store.save(SessionState(windows: [sessionWindow], fontSize: Double(fontSize),
+                                    bookmarks: bookmarks.paths))
             return
         }
         sessionWriter()
@@ -2447,6 +2550,59 @@ final class MainWindowController: NSWindowController {
     /// Whether ⌘S and ⇧⌘S mean anything on the tab in front — what the File
     /// menu greys its two items out by. A PDF is read, never written.
     var currentTabIsSavable: Bool { currentNote?.kind == .text }
+
+    // MARK: Bookmarks
+
+    /// Whether the tab in front is bookmarked — the title File › Bookmarks ▸
+    /// Bookmark and the tab's context menu are written with.
+    var currentTabIsBookmarked: Bool {
+        currentNote?.fileURL.map(bookmarks.contains) ?? false
+    }
+
+    /// Whether ⇧⌘D means anything here. Any tab does — a PDF and a picture
+    /// are files worth coming back to, and an untitled note is asked for a
+    /// name first — so this is only about there being a tab at all.
+    var canBookmarkCurrentTab: Bool { currentNote != nil }
+
+    /// ⇧⌘D, and "Bookmark" / "Remove Bookmark" in the tab's context menu.
+    func toggleBookmarkForCurrentTab() {
+        guard notes.indices.contains(selectedIndex) else { return }
+        toggleBookmark(at: selectedIndex)
+    }
+
+    /// A bookmark is a path, so a note that has never been saved has nothing
+    /// to bookmark: ⇧⌘D asks it to be saved first, and a cancelled panel
+    /// leaves the note exactly as unbookmarked as it was.
+    func toggleBookmark(at index: Int) {
+        guard notes.indices.contains(index) else { return }
+        let note = notes[index]
+        if note.fileURL == nil {
+            guard save(note: note, forcePanel: false), note.fileURL != nil else { return }
+        }
+        guard let url = note.fileURL else { return }
+        bookmarks.toggle(url)
+        refreshTabs()
+        writeSessionFile()
+    }
+
+    /// Choosing a bookmark, from the menu or either picker list. The file
+    /// this window already has open is a tab switch; anything else is an
+    /// ordinary open, which is also what puts it in Open Recent.
+    func openBookmark(path: String) {
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        if let index = notes.firstIndex(where: { $0.fileURL?.standardizedFileURL == url }) {
+            selectTab(at: index)
+            focusEditor()
+            return
+        }
+        open(url: url)
+    }
+
+    func removeBookmark(path: String) {
+        bookmarks.remove(path: path)
+        refreshTabs()
+        writeSessionFile()
+    }
 
     func selectNextTab() {
         guard notes.count > 1 else { return }
@@ -2677,30 +2833,88 @@ final class VimCommandPane: NSView {
     }
 }
 
-/// One clickable half of the footer's format field — `UTF-8 ·` or `LF` — in
-/// the footer's own secondary-label look, popping its own menu on a click
-/// rather than opening on hover: nothing else in the footer is hover-only, so
-/// this is not either.
+/// One clickable half of the footer's format field — `UTF-8` or `LF` — as a
+/// capsule in the vim badge's own family, so it reads as something to press
+/// rather than a word that happens to be there. The click pops the menu, and
+/// hover only brightens the capsule: nothing in the footer opens on hover.
 private final class FooterMenuLabel: NSTextField {
     var onClick: (() -> Void)?
+    private var isHovered = false {
+        didSet { if isHovered != oldValue { needsDisplay = true } }
+    }
 
     init() {
         super.init(frame: .zero)
+        cell = FooterBadgeCell(textCell: "")
         isEditable = false
         isSelectable = false
         isBordered = false
         isBezeled = false
         drawsBackground = false
+        lineBreakMode = .byClipping
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // An empty field — a PDF or a picture — is no field at all.
+        if !stringValue.isEmpty {
+            NSColor.labelColor.withAlphaComponent(isHovered ? 0.12 : 0.06).setFill()
+            NSBezierPath(
+                roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2
+            ).fill()
+        }
+        super.draw(dirtyRect)
+    }
 
     override func mouseDown(with event: NSEvent) {
         onClick?()
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
+/// The badge's cell: the vim chip's 18pt height and 8pt of air either side
+/// of the word, the word itself centred in the capsule. Empty, it takes no
+/// room at all.
+private final class FooterBadgeCell: NSTextFieldCell {
+    static let height: CGFloat = 18
+    static let horizontalPadding: CGFloat = 8
+
+    override var cellSize: NSSize {
+        guard !stringValue.isEmpty else { return .zero }
+        var size = super.cellSize
+        size.width += Self.horizontalPadding * 2
+        size.height = Self.height
+        return size
+    }
+
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        let textHeight = super.cellSize.height
+        let inset = rect.insetBy(dx: Self.horizontalPadding, dy: 0)
+        return NSRect(
+            x: inset.minX, y: inset.midY - textHeight / 2,
+            width: inset.width, height: textHeight
+        )
     }
 }
 
@@ -2808,12 +3022,39 @@ extension MainWindowController {
         guard let window else { return }
         showWindow(nil)
         tabPicker.show(
-            titles: notes.map(\.title), selectedIndex: selectedIndex,
+            titles: notes.map(\.title),
+            symbolNames: notes.map { FileKindIcon.symbolName(for: $0.fileURL) },
+            selectedIndex: selectedIndex,
+            bookmarks: unopenedBookmarks,
+            missingBookmarks: Set(bookmarks.missingPaths),
             loadHeadings: { [weak self] completion in
                 self?.loadFrontTabHeadings(completion: completion)
             },
             over: window
         )
+    }
+
+    /// The bookmark button in the strip: the same panel, listing bookmarks
+    /// alone.
+    func showBookmarksPicker() {
+        guard let window else { return }
+        showWindow(nil)
+        tabPicker.showBookmarks(
+            bookmarks: bookmarks.paths,
+            missingBookmarks: Set(bookmarks.missingPaths),
+            frontTab: (
+                canBookmark: canBookmarkCurrentTab, isBookmarked: currentTabIsBookmarked
+            ),
+            over: window
+        )
+    }
+
+    /// What ⌘P offers under the open tabs: the bookmarks this window does
+    /// not already have a tab for. One that is open is reachable as a tab,
+    /// and listing it twice would only make the list longer.
+    private var unopenedBookmarks: [String] {
+        let open = Set(notes.compactMap { $0.fileURL?.standardizedFileURL.path })
+        return bookmarks.paths.filter { !open.contains($0) }
     }
 
     /// `@` in the switcher (Todo 9): the front `.md` tab's headings, read
@@ -2846,6 +3087,26 @@ extension MainWindowController: TabPickerPanelDelegate {
 
     func tabPicker(_ picker: TabPickerPanel, didChooseHeading heading: MarkdownHeadings.Heading) {
         goToHeading(heading)
+    }
+
+    /// The switcher's "Add new tab" row: exactly what ⌘T does.
+    func tabPickerDidRequestNewTab(_ picker: TabPickerPanel) {
+        newTab()
+        focusEditor()
+    }
+
+    /// The bookmarks panel's top row: exactly what ⇧⌘D does, Save As for an
+    /// untitled note included.
+    func tabPickerDidRequestBookmarkCurrentTab(_ picker: TabPickerPanel) {
+        toggleBookmarkForCurrentTab()
+    }
+
+    func tabPicker(_ picker: TabPickerPanel, didChooseBookmark path: String) {
+        openBookmark(path: path)
+    }
+
+    func tabPicker(_ picker: TabPickerPanel, didRemoveBookmark path: String) {
+        removeBookmark(path: path)
     }
 }
 
@@ -2965,6 +3226,7 @@ extension MainWindowController {
         guard animated, let window, window.isVisible, !reduceMotion else {
             placeDivider(for: mode)
             previewColumn.thawWidth()
+            thawEditorWrapWidth()
             updateModeControlOverlays()
             return
         }
@@ -2975,8 +3237,11 @@ extension MainWindowController {
         previewModeIsSliding = true
         refreshPreviewContent()
         // The render rides the animation at the width it was made for, rather
-        // than re-wrapping itself on every frame of it.
+        // than re-wrapping itself on every frame of it — and the editor rides
+        // it the same way, so word wrap does not re-flow the note on every
+        // frame the divider narrows it by.
         _ = previewColumn.freezeWidth()
+        freezeEditorWrapWidth()
         previewModeSlideNumber += 1
         let slide = previewModeSlideNumber
         slideDivider(to: mode) { [weak self] in self?.previewModeSlideDidLand(slide) }
@@ -2992,6 +3257,7 @@ extension MainWindowController {
         window?.layoutIfNeeded()
         lastSplitWidth = workspaceSplitViewController.splitView.bounds.width
         previewColumn.thawWidth()
+        thawEditorWrapWidth()
         // Only now is there a final width to fit a picture or a rule to, and
         // only a render that depends on one is made again — for a plain note
         // the key still matches and nothing happens here at all.
@@ -3800,6 +4066,14 @@ extension MainWindowController: TabBarViewDelegate {
 
     func tabBar(_ bar: TabBarView, didMove index: Int, to newIndex: Int) {
         moveTab(from: index, to: newIndex)
+    }
+
+    func tabBarDidRequestBookmarks(_ bar: TabBarView) {
+        showBookmarksPicker()
+    }
+
+    func tabBar(_ bar: TabBarView, didToggleBookmarkAt index: Int) {
+        toggleBookmark(at: index)
     }
 
     // MARK: Tear-off

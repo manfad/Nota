@@ -259,7 +259,7 @@ final class PDFTests: XCTestCase {
 
         // And back the moment a text tab is in front.
         controller.newTab()
-        XCTAssertEqual(controller.footerRegions.encoding.stringValue, "UTF-8 ·")
+        XCTAssertEqual(controller.footerRegions.encoding.stringValue, "UTF-8")
         XCTAssertEqual(controller.footerRegions.lineEnding.stringValue, "LF")
     }
 

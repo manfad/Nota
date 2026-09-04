@@ -11,9 +11,10 @@
   except PDF, the one binary Nota opens, and it opens it as a viewer (see PDF).
 - Editing a named file only updates the cache; disk changes on ⌘S only. A named file keeps its extension, encoding
   (UTF-8 / UTF-16 / Latin-1 / Windows-1252 detected on open) and line endings (LF / CRLF) on save.
-- The footer shows a text note's own shape at the right of the counts, `UTF-8 · LF` (done 2026-09-04, see Todo 2):
-  clicking either half pops a menu to convert it, which marks the tab dirty for the next ⌘S. Empty over a PDF or a
-  picture, which has neither.
+- The footer shows a text note's own shape at the right of the counts, `UTF-8` and `LF` as two capsule badges in
+  the vim chip's family (done 2026-09-04, see Done 2): clicking either pops a menu to convert it, which marks the tab
+  dirty for the next ⌘S; hover brightens the capsule so it reads as pressable. Empty over a PDF or a picture, which
+  has neither.
 - **A named tab watches its file** (done 2026-09-04). Each note owns a `FileWatcher`: a `DispatchSource` on the file's
   own descriptor *and* one on the folder holding it. Most editors save by writing a temporary file and renaming it
   over the original, which leaves the first descriptor open on an inode nobody can reach again, so the file's watch is
@@ -295,7 +296,7 @@
 - The render and the pane are the Markdown ones: `RenderStyle` holds the look both wear — heading scales, list indents,
   quote bar, code box, table, rule — and `RenderedPreviewView` holds everything a rendered pane does, so each renderer is
   a subclass that says which grammar it reads and nothing else.
-- Export as PDF… on a `.tex` tab is a Todo (see Todo 6).
+- Export as PDF… on a `.tex` tab is a Todo (see Todo 1).
 - Out for now: `\input` `\include`, theorem environments, `\newcommand` expansion, bibliographies from `.bib`.
 
 ## HTML preview (decided 2026-09-03)
@@ -376,11 +377,31 @@
 
 ## Tabs
 - One width for every tab, `clamp((viewport − plus − gaps) / n, 40, 180)`, shrinking as tabs are added; the strip never scrolls. The selected tab is raised to 60pt so its ✕ fits and the others shrink evenly to pay for it. Titles clip with a fade rather than an ellipsis; under 60pt the trailing slot goes and the unsaved dot rides on the icon. A separator hairline shows only between two plain tabs. The + rides after the last tab and pins at the trailing edge once the strip is full; it opens a new tab (same as ⌘T). ⌘P fuzzy tab switcher by title.
-- `@` as the switcher's first character (Todo 9, done 2026-09-04) swaps the list for the front `.md` tab's headings, indented by level, and the rest of the query fuzzy-filters those instead; `MarkdownHeadings` reads them straight from the note's own text — ATX and setext, fences skipped the way `MarkdownSourceMap` skips them — off the main thread once a note is past `BigFile.threshold`. A tab that is not `.md` answers with a quiet "No headings" row.
+- The switcher's first row sits above its search field and never filters away: "Add new tab", with a `plus`, which ↑ from the top of the list reaches and Return (or a click) turns into a new tab, ⌘T by another door. It is there in the `@` mode too. It is a one-row table of its own, sharing the list's cell view and taking the list's own resolved table style, so it is drawn as a list row — same inset, same rounded selection highlight, icon and title at the list rows' own x. In the bookmarks panel the row is the front tab's bookmark instead: "Bookmark this tab" with a `bookmark`, or "Remove bookmark from this tab" with `bookmark.fill` once it is one, and choosing it is ⇧⌘D by another door; with no tab to bookmark it is greyed and takes no selection.
+- Every tab carries a leading icon for its kind, in the strip and in the switcher's rows, from `FileKindIcon`: Markdown `text.document`, plain text and no extension `doc.plaintext`, PDF `doc.richtext`, pictures `photo`, HTML `globe`, TeX `function`, SQL `cylinder`, JSON/YAML/TOML/XML `curlybraces`, CSV/TSV `tablecells`, logs `list.bullet.rectangle`, code `chevron.left.forwardslash.chevron.right`, an unsaved note `doc`, anything else `text.page`. A symbol the running system lacks falls back to an older spelling. Heading rows keep their bare indent, with no icon.
+- `@` as the switcher's first character (Done 9) swaps the list for the front `.md` tab's headings, indented by level, and the rest of the query fuzzy-filters those instead; `MarkdownHeadings` reads them straight from the note's own text — ATX and setext, fences skipped the way `MarkdownSourceMap` skips them — off the main thread once a note is past `BigFile.threshold`. A tab that is not `.md` answers with a quiet "No headings" row.
 - Choosing a heading puts the caret at its line start and scrolls it into view; in split or reading the render is walked to that block too, by hand through the `highlightBlock(containingSource:)` a caret move already drives.
 - The selected tab is always fully in view: at 40pt the strip stops shrinking and becomes a sliding window over the tabs, anchored on the selected one. Closing with the ✕ freezes the widths until the pointer leaves the strip, so a run of closes keeps each next ✕ under it; ⌘W does not freeze.
 - Tabs reorder by drag: the dragged tab rides the pointer and its neighbours slide into the gap; the order is the session's order.
-- Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab.
+- Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab. Right-click a tab for Bookmark / Remove Bookmark and Close Tab. Closing the only tab closes the window too, the way the title-bar close button does: the last window hides, any other closes for real.
+- **Bookmarks** (Done 13). A bookmark is a file path, app-wide, kept in `session.json` beside the
+  windows in the order they were added. ⇧⌘D bookmarks the tab in front — any named tab, PDFs and pictures included —
+  and an untitled note is asked for a name first, staying unbookmarked if the save panel is cancelled. File ›
+  Bookmarks holds that toggle (its title reads Remove Bookmark when the front tab is one), then every bookmark by file
+  name with its kind icon and the full path as a tooltip, then Remove Missing Bookmarks; it is rebuilt on
+  `menuNeedsUpdate` the way Open Recent is, except for the ⇧⌘D item itself, which is made once so the key equivalent
+  is in the tree before the menu is ever opened. A bookmarked tab wears a 7pt `bookmark.fill` badge on the corner of
+  its leading icon — bottom-right, moving to the bottom-left on a tab narrow enough that the unsaved dot has already
+  taken that corner. A `bookmark` button pins in the strip's top-right, in a 24pt slot of its own past where the +
+  pins; `TabStripLayout` reserves it, so the tabs and the + step left by exactly that much and nothing subtracts it
+  twice. Pressing it opens the ⌘P panel in bookmarks mode: every bookmark, fuzzy-filtered by file name, ⌘⌫ (or ⌫ with
+  the field empty) taking one off the list without closing the panel, and "No bookmarks" when there are none. Plain
+  ⌘P lists the bookmarks this window does not already have open under the tabs — both halves ranked by the same fuzzy
+  match and merged by score, with an open tab taking any tie — carrying the `bookmark` symbol instead of a kind icon
+  so they read as not-open-yet. A bookmark whose file has gone stays in the list, greyed to tertiary in the picker and
+  disabled in the menu, and Return on it does nothing; it goes when it is removed by hand or by Remove Missing
+  Bookmarks. Choosing one selects the tab if this window has the file open, and otherwise opens it, which is also what
+  puts it in Open Recent.
 - A tab can move to another window: the note keeps its id, text, unsaved edits, caret and undo history, its cached
   text is never deleted on the way, and the window it left selects the neighbour (or keeps one untitled tab if it was
   the last). Dragging a tab out of the strip is that same move by hand: 40pt clear of the strip the tab becomes a
@@ -428,12 +449,26 @@
 ## Explicitly out
 - Created-date header, git/auto-commit, theming, menu-bar icon, collapse/expand images, jk escape, app icon (for now).
 
-## Known issues (later)
-- The split slide can feel laggy with word wrap on: every frame narrows the editor, and the text view re-wraps the
-  whole note to the new width as it goes. Fix candidates: freeze the editor's container width for the slide the way the
-  render's is frozen, or slide a snapshot of the editor and re-wrap once on landing.
-
 ## Todo (in rough priority)
+1. **Print / PDF.** ⌥⌘P prints the reading layout (⌘P is the tab switcher); Export as PDF… in File, same
+   layout, page margins from the render's inset. Plain-text tabs print the text with line numbers if the gutter is on.
+   Export a `.tex` tab as PDF via `pdflatex` / `tectonic` / `xelatex` if one is installed, showing the result in a PDF
+   tab; with none installed it prints the native render, the same as the Markdown export.
+   A PDF tab prints the PDF itself rather than a render — the open half of Done 12.
+2. **Ship it.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on another Mac
+   without the Gatekeeper dance; `Nota.app.zip` as the release artifact next to the tag.
+3. **EPUB viewer.** An `.epub` opens as a viewer tab, the third kind after PDF and pictures: read-only, never dirty,
+   never cached, a `book` icon in the strip. The sniff decides, not the extension — a zip whose first entry is
+   `mimetype` reading `application/epub+zip`. Unpack to a temp folder (`/usr/bin/ditto`; ZIPFoundation only if a
+   package earns its keep), read `META-INF/container.xml` → the OPF → the spine for reading order, and show each
+   chapter's XHTML in the existing HTML preview with the book's own CSS and pictures resolved from the unpacked
+   folder. Chapters from the TOC (EPUB 3 nav, else NCX) under `@` in the ⌘P switcher; ⌘F through the HTML find
+   session; the chapter and scroll position remembered per tab in the session. EPUB 2 and 3, no DRM. Print goes
+   with Todo 1.
+4. **Tab strip overflow chevron.** The one piece of the Chromium strip still open (Done 15-A): a chevron at the
+   trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
+
+## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
 1. **External changes to an open file (done 2026-09-04).** A named tab watches its file — a `DispatchSource` on the
    file's descriptor and one on its folder, so a temp-file-and-rename save is caught as well as a write in place.
    Clean reloads silently, dirty is marked with a ring round its unsaved dot and offered Reload / Keep mine in a pill
@@ -441,7 +476,7 @@
    Missing file → the existing dirty behaviour. See the Model section for the whole of it.
 2. **Encoding and line endings in the status bar (done 2026-09-04).** `UTF-8 · LF` at the right of the counts; click
    either half for a menu that converts (UTF-8 / UTF-16 / Latin-1 / Windows-1252; LF / CRLF), the current one ticked.
-   Two clickable `NSTextField`s in the footer's own secondary-label look, read straight off `note.format` and rebuilt
+   Two clickable `NSTextField`s drawn as capsule badges in the vim chip's look, read straight off `note.format` and rebuilt
    whenever the front tab changes; picking another shape sets `note.format`, marks the tab dirty, and ⌘S writes the
    new shape — `write(note:to:)` already read `note.format`, so nothing there had to change. UTF-16 is one menu item
    for either byte order; converting to it gives the file a BOM (the only way `TextFile.decode` would ever recognise
@@ -462,10 +497,6 @@
 5. **Task lists (done 2026-09-04).** `- [ ]` / `- [x]` as real checkboxes in the render, ticking one rewrites the one
    source character undoably; counted `3 / 7 done` in the footer for a `.md` that has any. See the Markdown preview
    section for what it does.
-6. **Print / PDF of the render.** ⌥⌘P prints the reading layout (⌘P is the tab switcher); Export as PDF… in File, same
-   layout, page margins from the render's inset. Plain-text tabs print the text with line numbers if the gutter is on.
-   Export a `.tex` tab as PDF via `pdflatex` / `tectonic` / `xelatex` if one is installed, showing the result in a PDF
-   tab; with none installed it prints the native render, the same as the Markdown export.
 7. **Line operations (done 2026-09-04).** The Notepad++ hands outside vim mode: ⌥↑ / ⌥↓ move line, ⇧⌥↓ duplicate,
    ⌘D duplicate/select-next, ⌘/ toggle a `#`/`//` comment by extension, Tab / ⇧Tab indent a selection, ⌘] ⌘[ likewise.
    `LineOperations` works each one out from the note's `LineIndex` and hands the editor one replacement to apply; see
@@ -483,25 +514,34 @@
    The storage's `string` bridges to Swift by copying: hot paths read `mutableString` instead.
 9. **Headings outline (done 2026-09-04).** `@` in the ⌘P switcher lists the front `.md` tab's headings; choosing one puts the caret there
    and, in split/reading, scrolls the render to the block.
-10. **Ship it.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on another Mac
-    without the Gatekeeper dance; `Nota.app.zip` as the release artifact next to the tag.
-11. Fix the word-wrap re-flow lag in the split slide (Known issues above).
+11. **Fix the word-wrap re-flow lag in the split slide (done 2026-09-04).** With word wrap on, the editor's text
+    container is welded to the text view's width (`widthTracksTextView`), so narrowing the editor every frame of the
+    0.2s divider slide re-wrapped the whole note every frame along with it. The editor now freezes that tracking at
+    the width it is leaving for the length of the slide — the same trick `RenderedPreviewView.freezeWidth()` already
+    plays for the render — and wraps once, to the width it landed at, when the divider lands.
 12. **⌘F inside a PDF (done 2026-09-04) and Print of a PDF tab.** The find half is shipped: the same `FindBarView`
     pill the editor and the render use, driven by a `PDFFindSession` over PDFKit's selections — `findString` for the
     list and for each step, `highlightedSelections` for the bands and `currentSelection` for the one being stood on —
     with `NotaPDFView` taking `performTextFinderAction:` off `PDFView` so PDFKit's own bar never appears. See the PDF
-    section for what it does. Still open: ⌥⌘P printing the PDF rather than the render.
-13. **Bookmarks (v0.5 or v0.6).** A tab can be bookmarked (⌘D-style toggle in File and in the tab's context menu; a
-    dot or pin on the tab). A bookmark is the file's path, kept in `session.json` beside the tabs, so closing the tab
-    does not lose the note: File › Bookmarks lists them and ⌘P's switcher offers them under the open tabs, and choosing
-    one reopens the file where it was. Bookmarking an untitled note asks it to be saved first. A bookmark whose file has
-    gone stays in the list greyed out until removed.
+    section for what it does. Printing the PDF itself is Todo 1.
+13. **Bookmarks (done 2026-09-04).** A bookmark is a file's path and nothing else — not a tab, not a note id — so
+    closing the tab does not lose the note. `Bookmarks` holds the one app-wide list, in the order they were added;
+    `WindowRegistry` owns it, hands the same object to every window, and writes `SessionState.bookmarks` on any change
+    it hears (`Bookmarks.didChange`, which is also what re-badges every window's strip). The key is decoded with
+    `decodeIfPresent`, so a session written before this opens with none rather than refusing. ⇧⌘D toggles it — ⌘D is
+    Duplicate Line — from File › Bookmarks and from a tab's new context menu; an untitled note is put through Save
+    first and is bookmarked only if that lands (`savePanelProvider` makes the panel injectable, so the cancelled case
+    is a test). See the Tabs section for the badge, the button and the two picker lists.
 14. **Copying maths out of the render (done 2026-09-04).** `PreviewTextView.writeSelection` overrides the `.string`
     flavour: `forEachAttachmentRun` walks the selection and swaps each `MathAttachment` for its formula's `plainText`,
     leaving every other character — and the rich flavours, which already carry the formula as a real image — as they
     were.
 15. **Tab strip, Chromium style (after the LaTeX preview; design agreed 2026-09-03 with a second reviewer).** Every
-    tab shows a leading icon: the SF Symbol `text.page` for every kind today (done), per-kind artwork later. Then, in
+    tab shows a leading icon, per file kind (done 2026-09-04): `FileKindIcon` maps the name's extension to a symbol —
+    `.md` `text.document`, `.txt`/none `doc.plaintext`, `.pdf` `doc.richtext`, pictures `photo`, `.html` `globe`,
+    `.tex` `function`, `.sql` `cylinder`, JSON/YAML/TOML/XML `curlybraces`, `.csv` `tablecells`, `.log`
+    `list.bullet.rectangle`, code `chevron.left.forwardslash.chevron.right`, untitled `doc`, the rest `text.page` —
+    with an older spelling behind any symbol this macOS does not have, and the same icon in the ⌘P rows. Then, in
     this order:
     - **C. One press to select and drag (done 2026-09-03).** The first drag on a tab moved the window: native
       title-bar dragging and the tab's reorder gesture were running at the same time. Fix: `window.isMovable = false`
@@ -514,7 +554,7 @@
       wheel handling and auto-scroll are gone. Titles clip with a 12pt fade, the trailing slot and its ✕ disappear
       under 60pt (the unsaved dot moves onto the icon), separators show only between two plain tabs, a ✕ close holds
       the widths still until the pointer leaves the strip, and a drag near either edge reveals one hidden slot at a
-      time. Still to come: the overflow chevron for the tabs the window is not showing.
+      time. The overflow chevron for the tabs the window is not showing is Todo 4.
     - **B. The + follows the tabs (done 2026-09-03).** `plusX = min(lastVisibleTab.maxX + 4, bounds.width − 24)`: it
       rides after the last tab and pins at the trailing edge once the strip is full. The ⇧⌘F field already narrows the
       bar's bounds, and nothing subtracts it twice.
@@ -554,5 +594,6 @@
     `RenderedPreviewView.show` lays out its whole render; vim's `text` copies the storage per motion;
     `preferencesChanged` restyles every note in full (settings only).
 
-Order from here: v0.4 (tab drag, PDF tabs, maths in Markdown) → workspace refactor → LaTeX preview (v0.5, done) →
-HTML preview → tab strip → big files (done) → find/replace and go to line as floating pills (done).
+Order from here: everything above the ledger is shipped through bookmarks and the tab strip (v0.5 and after). Next,
+in Todo order: print / PDF export → Ship it (signing, notarization, the zip) → EPUB viewer → the strip's overflow
+chevron.

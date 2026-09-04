@@ -922,6 +922,109 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertFalse(controller.isSlidingPreviewMode, "an untitled tab simply appears")
     }
 
+    /// The render freezes its own container width for the length of a slide
+    /// (`RenderedPreviewView.freezeWidth()`) so it does not re-wrap on every
+    /// frame the divider moves through; the editor plays the same trick with
+    /// word wrap on, since its container is just as welded to its width.
+    /// Frozen while the divider moves, wrapped once at the width it lands on.
+    @MainActor
+    func testEditorContainerIsFrozenDuringPreviewModeSlide() throws {
+        _ = NSApplication.shared
+        let previous = Preferences.shared.wrapsLines
+        defer { Preferences.shared.wrapsLines = previous }
+        Preferences.shared.wrapsLines = true
+
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        window.layoutIfNeeded()
+        try XCTSkipUnless(window.isVisible, "no window server here — nothing slides")
+
+        let container = try XCTUnwrap(controller.editorScrolling.container)
+        XCTAssertTrue(container.widthTracksTextView, "wrapping, before any slide")
+
+        controller.setPreviewMode(.split)
+        XCTAssertTrue(controller.isSlidingPreviewMode)
+        XCTAssertFalse(
+            container.widthTracksTextView,
+            "held at the width it is leaving for the length of the slide"
+        )
+
+        settle(0.5)
+        XCTAssertFalse(controller.isSlidingPreviewMode)
+        XCTAssertTrue(container.widthTracksTextView, "thawed once the slide lands")
+        // `container.size` only reports the width last written to it — once
+        // tracking is back on, AppKit itself reads the text view's frame for
+        // layout, which is the live number `editorScrolling.visibleWidth`
+        // matches the same way `testWordWrapTogglesHorizontalScrolling` does.
+        XCTAssertEqual(
+            controller.editorScrolling.textView.frame.width,
+            controller.editorScrolling.visibleWidth, accuracy: 1,
+            "and wrapped once, to the width it landed at"
+        )
+    }
+
+    /// Word wrap off leaves the container unbounded already — a slide has
+    /// nothing to hold and nothing to disturb, so it is unaffected either way.
+    @MainActor
+    func testWordWrapOffIsUnaffectedByAPreviewModeSlide() throws {
+        _ = NSApplication.shared
+        let previous = Preferences.shared.wrapsLines
+        defer { Preferences.shared.wrapsLines = previous }
+        Preferences.shared.wrapsLines = false
+
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        window.layoutIfNeeded()
+        try XCTSkipUnless(window.isVisible, "no window server here — nothing slides")
+
+        let container = try XCTUnwrap(controller.editorScrolling.container)
+        XCTAssertFalse(container.widthTracksTextView, "not wrapping, before any slide")
+
+        controller.setPreviewMode(.split)
+        XCTAssertTrue(controller.isSlidingPreviewMode)
+        XCTAssertFalse(container.widthTracksTextView, "still unbounded mid-slide")
+
+        settle(0.5)
+        XCTAssertFalse(controller.isSlidingPreviewMode)
+        XCTAssertFalse(container.widthTracksTextView, "and after it lands")
+    }
+
+    /// An editor coming in from a collapsed column — reading mode gives it
+    /// nothing — has no width worth holding, the same rule the render's own
+    /// `freezeWidth()` applies: its first real width is the one it lands at.
+    @MainActor
+    func testEditorWithNoWidthYetIsNotFrozenByASlide() throws {
+        _ = NSApplication.shared
+        let previous = Preferences.shared.wrapsLines
+        defer { Preferences.shared.wrapsLines = previous }
+        Preferences.shared.wrapsLines = true
+
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        window.layoutIfNeeded()
+        try XCTSkipUnless(window.isVisible, "no window server here — nothing slides")
+
+        controller.setPreviewMode(.reading)
+        settle(0.5)
+        XCTAssertFalse(controller.isSlidingPreviewMode)
+
+        let container = try XCTUnwrap(controller.editorScrolling.container)
+        XCTAssertLessThanOrEqual(container.size.width, 1, "the editor is collapsed to nothing")
+
+        controller.setPreviewMode(.split)
+        XCTAssertTrue(controller.isSlidingPreviewMode)
+        XCTAssertTrue(
+            container.widthTracksTextView,
+            "nothing to hold coming in from collapsed, so tracking is left on"
+        )
+
+        settle(0.5)
+        XCTAssertTrue(controller.editorScrolling.container?.widthTracksTextView ?? false)
+    }
+
     /// ⇧⌘P is a key people hold down. At any cadence — twenty taps inside
     /// one 0.2s slide, or taps spaced just under and just over it — the
     /// window comes out the size it went in, and split comes back at the
@@ -1483,7 +1586,11 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(plus.frame.minY, 0)
         XCTAssertLessThanOrEqual(plus.frame.maxY, tabBar.bounds.maxY + 0.5)
 
-        for subview in tabBar.subviews where subview !== plus && !subview.isHidden {
+        // The bookmark button is the one thing that sits *past* the + by
+        // design (SPEC Todo 13); everything else in the strip is a tab, and
+        // a tab stops short of it.
+        for subview in tabBar.subviews
+        where subview !== plus && !(subview is BookmarksButton) && !subview.isHidden {
             XCTAssertFalse(
                 subview.frame.intersects(plus.frame),
                 "a tab sits on the +"
@@ -2037,6 +2144,216 @@ final class MarkdownPreviewTests: XCTestCase {
         picker.query = "@"
         XCTAssertTrue(picker.isShowingHeadings)
         XCTAssertTrue(picker.visibleRowTexts.isEmpty, "a .txt tab has no outline")
+    }
+
+    // MARK: - The switcher's Add new tab row and file-kind icons (Todo 15)
+
+    /// ↑ from the first list row lands on the fixed "Add new tab" row above
+    /// the field, and ↓ goes straight back to the list.
+    @MainActor
+    func testUpFromTheTopOfTheListSelectsTheAddNewTabRow() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        controller.newTab()
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        XCTAssertFalse(picker.isTopRowSelected, "the list holds the selection to begin with")
+
+        // The panel opens on the tab in front, which is the second of the
+        // two: the first ↑ is still a move inside the list.
+        picker.moveSelectionUp()
+        XCTAssertFalse(picker.isTopRowSelected)
+
+        picker.moveSelectionUp()
+        XCTAssertTrue(picker.isTopRowSelected, "↑ from the top row leaves the list")
+
+        picker.moveSelectionUp()
+        XCTAssertTrue(picker.isTopRowSelected, "there is nothing above it")
+
+        picker.moveSelectionDown()
+        XCTAssertFalse(picker.isTopRowSelected, "back into the list")
+    }
+
+    /// Return on the row closes the panel and opens a tab, the same as ⌘T.
+    @MainActor
+    func testReturnOnTheAddNewTabRowOpensATab() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let before = controller.openNotes.count
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        picker.moveSelectionUp()
+        picker.chooseSelection()
+
+        XCTAssertFalse(picker.isVisible, "choosing closes the panel")
+        XCTAssertEqual(controller.openNotes.count, before + 1)
+    }
+
+    /// The row is above the field, not in the list, so `@` — which swaps the
+    /// whole list for the outline — leaves it exactly where it was.
+    @MainActor
+    func testTheAddNewTabRowIsThereInHeadingsModeToo() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        controller.open(url: try markdownFile(contents: "# Intro\n\n## Second"))
+        let before = controller.openNotes.count
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        picker.query = "@"
+        XCTAssertTrue(picker.isShowingHeadings)
+
+        picker.moveSelectionUp()
+        XCTAssertTrue(picker.isTopRowSelected)
+        picker.chooseSelection()
+        XCTAssertEqual(controller.openNotes.count, before + 1)
+    }
+
+    /// Typing is a return to the list: the query re-ranks it and the row
+    /// above the field gives the selection back.
+    @MainActor
+    func testTypingTakesTheSelectionBackToTheList() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        picker.moveSelectionUp()
+        XCTAssertTrue(picker.isTopRowSelected)
+
+        picker.query = "n"
+        XCTAssertFalse(picker.isTopRowSelected)
+    }
+
+    /// With no tabs to move through at all, ↑ from the field still reaches
+    /// the row — and ↓ has nowhere to put the selection, so it stays.
+    @MainActor
+    func testTheRowIsReachableWithAnEmptyList() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        picker.query = "zzzznothing"
+        XCTAssertTrue(picker.visibleRowTexts.isEmpty)
+
+        picker.moveSelectionUp()
+        XCTAssertTrue(picker.isTopRowSelected)
+        picker.moveSelectionDown()
+        XCTAssertTrue(picker.isTopRowSelected, "nothing below to move to")
+    }
+
+    /// The row above the field is drawn as a list row, not as something that
+    /// only looks like one: its icon and its title stand at exactly the x the
+    /// list's own rows do.
+    @MainActor
+    func testTheTopRowLinesUpWithTheListRows() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        defer { picker.hide() }
+
+        let top = try XCTUnwrap(picker.topRowContentXForTesting)
+        let list = try XCTUnwrap(picker.firstListRowContentXForTesting)
+        XCTAssertEqual(top.icon, list.icon, accuracy: 0.5, "the icons stand at the same x")
+        XCTAssertEqual(top.title, list.title, accuracy: 0.5, "and so do the titles")
+    }
+
+    /// The row is drawn, not merely reserved: the inset table style pads its
+    /// content above the first row, so the one-row-tall window onto it has to
+    /// be pinned to the row itself or the panel shows a blank strip.
+    @MainActor
+    func testTheTopRowActuallyDrawsItsRow() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        defer { picker.hide() }
+        settle(0.2)
+
+        let cell = try XCTUnwrap(picker.topRowCellForTesting, "no row view was ever laid out")
+        XCTAssertEqual(cell.text, "Add new tab")
+        XCTAssertTrue(
+            picker.topRowVisibleRectForTesting.contains(cell.frame),
+            "\(cell.frame) is outside the \(picker.topRowVisibleRectForTesting) on show"
+        )
+    }
+
+    /// ⌘P's row is the new-tab row it has always been — the bookmark wording
+    /// belongs to the bookmarks panel alone.
+    @MainActor
+    func testTheTopRowReadsAddNewTabInTheSwitcher() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        defer { picker.hide() }
+
+        XCTAssertEqual(picker.topRowText, "Add new tab")
+        XCTAssertEqual(picker.topRowSymbol, "plus")
+
+        picker.query = "@"
+        XCTAssertEqual(picker.topRowText, "Add new tab", "the outline does not change it")
+    }
+
+    /// Every tab row carries its file's kind, and an untitled tab the plain
+    /// `doc` that says it has no file yet.
+    @MainActor
+    func testPickerRowsCarryTheirFilesKindIcon() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        controller.open(url: try markdownFile(contents: "# Intro"))
+        controller.newTab()
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        let titles = picker.visibleRowTexts
+        let symbols = picker.visibleRowSymbolNames
+        XCTAssertEqual(symbols.count, titles.count)
+        XCTAssertEqual(
+            symbols,
+            titles.map {
+                $0.hasSuffix(".md")
+                    ? FileKindIcon.symbolName(forTitle: $0)
+                    : FileKindIcon.untitledSymbolName
+            },
+            "\(titles) drew \(symbols)"
+        )
+        XCTAssertTrue(
+            symbols.contains(FileKindIcon.symbolName(forTitle: "x.md")),
+            "the Markdown tab's own kind"
+        )
+        XCTAssertTrue(
+            symbols.contains(FileKindIcon.untitledSymbolName),
+            "the untitled tab has no file to have a kind"
+        )
+    }
+
+    /// Headings keep the bare indented look they had — an outline is not a
+    /// second list of files.
+    @MainActor
+    func testHeadingRowsShowNoIcon() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        controller.open(url: try markdownFile(contents: "# Intro\n\n## Second"))
+        let picker = controller.tabPickerPanel
+
+        controller.showTabPicker()
+        XCTAssertFalse(picker.visibleRowSymbolNames.isEmpty)
+
+        picker.query = "@"
+        XCTAssertEqual(picker.visibleRowTexts, ["Intro", "Second"])
+        XCTAssertTrue(picker.visibleRowSymbolNames.isEmpty)
     }
 
     // MARK: - Reading mode

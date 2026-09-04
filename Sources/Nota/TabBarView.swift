@@ -7,6 +7,12 @@ struct TabBarItem {
     /// of its own. Drawn as a hairline ring round the unsaved dot — the dot
     /// still says "unsaved", the ring says "and the file has moved".
     var hasExternalChange: Bool = false
+    /// The leading icon's SF Symbol, from the file's kind (`FileKindIcon`).
+    /// Defaulted so a strip test that only cares about titles need not say.
+    var symbolName: String = FileKindIcon.untitledSymbolName
+    /// The file behind this tab is bookmarked (SPEC Todo 13). Drawn as a
+    /// small `bookmark.fill` badge on the corner of the leading icon.
+    var isBookmarked: Bool = false
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -26,14 +32,22 @@ protocol TabBarViewDelegate: AnyObject {
     func tabBarDragMoved(_ bar: TabBarView, to screenPoint: NSPoint)
     /// The release (`committed`) or Esc (`false`) that ends a torn-off drag.
     func tabBarDragEnded(_ bar: TabBarView, committed: Bool, at screenPoint: NSPoint)
+
+    /// The bookmark button at the trailing edge of the strip: the picker, in
+    /// bookmarks mode.
+    func tabBarDidRequestBookmarks(_ bar: TabBarView)
+    /// "Bookmark" / "Remove Bookmark" in a tab's context menu.
+    func tabBar(_ bar: TabBarView, didToggleBookmarkAt index: Int)
 }
 
-/// Tear-off is the only part of the strip a delegate may ignore — a test
-/// recorder that only cares about selection still compiles.
+/// Tear-off and bookmarks are the parts of the strip a delegate may ignore —
+/// a test recorder that only cares about selection still compiles.
 extension TabBarViewDelegate {
     func tabBar(_ bar: TabBarView, tearOff index: Int, grabOffset: NSPoint, screenPoint: NSPoint) {}
     func tabBarDragMoved(_ bar: TabBarView, to screenPoint: NSPoint) {}
     func tabBarDragEnded(_ bar: TabBarView, committed: Bool, at screenPoint: NSPoint) {}
+    func tabBarDidRequestBookmarks(_ bar: TabBarView) {}
+    func tabBar(_ bar: TabBarView, didToggleBookmarkAt index: Int) {}
 }
 
 /// The strip of tabs that sits in the title bar next to the traffic lights.
@@ -80,6 +94,7 @@ final class TabBarView: NSView {
     private var selectedIndex = 0
     private var itemViews: [TabItemView] = []
     private let newTabButton = NewTabButton()
+    private let bookmarksButton = BookmarksButton()
 
     /// Where the sliding window starts when the tabs no longer fit even at
     /// their floor. Fed back into the next layout so the window stays put
@@ -152,6 +167,9 @@ final class TabBarView: NSView {
         newTabButton.target = self
         newTabButton.action = #selector(requestNewTab)
         addSubview(newTabButton)
+        bookmarksButton.target = self
+        bookmarksButton.action = #selector(requestBookmarks)
+        addSubview(bookmarksButton)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -239,13 +257,15 @@ final class TabBarView: NSView {
         items.map { ($0.isDirty, $0.hasExternalChange) }
     }
 
-    /// Test hook: whether the tab at `index` shows the leading file icon
-    /// (the same placeholder symbol for every kind, until per-type artwork
-    /// arrives).
+    /// Test hook: whether the tab at `index` shows its leading file icon.
     internal func hasFileIconForTesting(at index: Int) -> Bool {
         guard itemViews.indices.contains(index) else { return false }
         return itemViews[index].iconImageForTesting != nil
     }
+
+    /// Test hook: the SF Symbol each tab's leading icon draws — the file
+    /// kind the strip thinks that tab is.
+    internal var iconSymbolNamesForTesting: [String] { itemViews.map(\.iconSymbolName) }
 
     /// Test hook: the view for the tab at `index`, for hit-testing.
     internal func tabViewForTesting(at index: Int) -> NSView? {
@@ -260,6 +280,22 @@ final class TabBarView: NSView {
 
     /// Test hook: where the + sits.
     internal var newTabButtonFrameForTesting: NSRect { newTabButton.frame }
+
+    /// Test hook: where the bookmark button sits.
+    internal var bookmarksButtonFrameForTesting: NSRect { bookmarksButton.frame }
+
+    /// Test hook: which tabs are drawing the bookmark badge on their icon.
+    internal var bookmarkBadgesForTesting: [Bool] { itemViews.map(\.showsBookmarkBadge) }
+
+    /// Test hook: the context menu a right-click on the tab at `index` puts
+    /// up — there is no window server here to raise one.
+    internal func contextMenuForTesting(at index: Int) -> NSMenu? {
+        guard itemViews.indices.contains(index) else { return nil }
+        return contextMenu(for: itemViews[index])
+    }
+
+    /// Test hook: clicks the bookmark button at the trailing edge.
+    internal func pressBookmarksButtonForTesting() { requestBookmarks() }
 
     /// Test hook: closes the tab at `index` the way its ✕ does — ⌘W arrives
     /// through `setItems` instead and never freezes the widths.
@@ -347,6 +383,7 @@ final class TabBarView: NSView {
             view.onDragEnd = { [weak self] tab, committed, screen in
                 self?.endDrag(for: tab, committed: committed, screenPoint: screen)
             }
+            view.onContextMenu = { [weak self] tab in self?.contextMenu(for: tab) }
             addSubview(view, positioned: .below, relativeTo: newTabButton)
             itemViews.append(view)
         }
@@ -358,6 +395,45 @@ final class TabBarView: NSView {
 
     @objc private func requestNewTab() {
         delegate?.tabBarDidRequestNewTab(self)
+    }
+
+    @objc private func requestBookmarks() {
+        delegate?.tabBarDidRequestBookmarks(self)
+    }
+
+    /// The tab's context menu (right-click, ctrl-click): bookmark it, or
+    /// close it. Built here rather than on the tab view so the strip's own
+    /// indices — the only ones the delegate knows — are what the items carry.
+    private func contextMenu(for view: TabItemView) -> NSMenu? {
+        guard let index = itemViews.firstIndex(of: view), items.indices.contains(index) else {
+            return nil
+        }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let bookmark = NSMenuItem(
+            title: items[index].isBookmarked ? "Remove Bookmark" : "Bookmark",
+            action: #selector(toggleBookmarkFromMenu(_:)), keyEquivalent: ""
+        )
+        bookmark.target = self
+        bookmark.tag = index
+        menu.addItem(bookmark)
+        menu.addItem(.separator())
+        let close = NSMenuItem(
+            title: "Close Tab", action: #selector(closeFromMenu(_:)), keyEquivalent: ""
+        )
+        close.target = self
+        close.tag = index
+        menu.addItem(close)
+        return menu
+    }
+
+    @objc private func toggleBookmarkFromMenu(_ sender: NSMenuItem) {
+        delegate?.tabBar(self, didToggleBookmarkAt: sender.tag)
+    }
+
+    @objc private func closeFromMenu(_ sender: NSMenuItem) {
+        guard itemViews.indices.contains(sender.tag) else { return }
+        close(itemViews[sender.tag])
     }
 
     private func select(_ view: TabItemView) {
@@ -468,6 +544,7 @@ final class TabBarView: NSView {
     }
 
     private func place(_ plan: TabStripLayout) {
+        placeBookmarksButton()
         let plusSize = Self.newTabButtonSize
         newTabButton.frame = NSRect(
             x: plan.plusX,
@@ -489,6 +566,19 @@ final class TabBarView: NSView {
             // not clickable either.
             view.isHidden = !plan.visibleRange.contains(index)
         }
+    }
+
+    /// The bookmark button is pinned at the trailing edge and never moves
+    /// with the tabs, so it is placed the same way whatever else the strip
+    /// is doing — a drag included.
+    private func placeBookmarksButton() {
+        let size = TabStripLayout.bookmarkSlot
+        bookmarksButton.frame = NSRect(
+            x: TabStripLayout.bookmarkX(bounds.width),
+            y: (bounds.height - size) / 2,
+            width: size,
+            height: size
+        )
     }
 
     /// Brave draws a hairline only between two plain tabs — never beside the
@@ -733,6 +823,7 @@ final class TabBarView: NSView {
     /// where the drag last put it (and is never hidden), while its siblings
     /// go to their current `visualOrder` slot.
     private func layoutDuringDrag(_ session: DragSession) {
+        placeBookmarksButton()
         let plusSize = Self.newTabButtonSize
         newTabButton.frame = NSRect(
             x: session.plusX,
@@ -853,8 +944,10 @@ final class TabBarView: NSView {
 }
 
 /// Trailing control on the tab strip. Same density as a tab (24pt), not an
-/// iOS-sized hit target; it rides after the last tab and pins at the edge.
-final class NewTabButton: NSButton {
+/// iOS-sized hit target; a quiet template symbol that lights up under the
+/// pointer, and — like the tabs and the ✕ — a press it must keep for itself
+/// rather than letting AppKit turn into a window drag.
+class StripButton: NSButton {
     private var hoverArea: NSTrackingArea?
     private var isHovered = false {
         didSet { if isHovered != oldValue { needsDisplay = true } }
@@ -862,17 +955,17 @@ final class NewTabButton: NSButton {
 
     override var mouseDownCanMoveWindow: Bool { false }
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    init(symbolName: String, name: String, toolTip: String) {
+        super.init(frame: .zero)
         let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
-        image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")?
+        image = NSImage(systemSymbolName: symbolName, accessibilityDescription: name)?
             .withSymbolConfiguration(config)
         isBordered = false
         bezelStyle = .inline
         imagePosition = .imageOnly
         contentTintColor = .secondaryLabelColor
-        toolTip = "New Tab  ⌘T"
-        setAccessibilityLabel("New Tab")
+        self.toolTip = toolTip
+        setAccessibilityLabel(name)
         setAccessibilityRole(.button)
     }
 
@@ -914,6 +1007,25 @@ final class NewTabButton: NSButton {
     }
 }
 
+/// The + that rides after the last tab and pins at the trailing edge.
+final class NewTabButton: StripButton {
+    init() {
+        super.init(symbolName: "plus", name: "New Tab", toolTip: "New Tab  ⌘T")
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+}
+
+/// The bookmark button in the strip's top-right corner (SPEC Todo 13): the
+/// ⌘P picker, opened straight into its bookmarks list.
+final class BookmarksButton: StripButton {
+    init() {
+        super.init(symbolName: "bookmark", name: "Bookmarks", toolTip: "Bookmarks")
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+}
+
 // MARK: - One tab
 
 /// A tab in the Safari/Xcode shape: a soft rounded fill when selected, the
@@ -947,6 +1059,9 @@ private final class TabItemView: NSView {
     /// `true` on mouse-up, `false` when Esc abandoned it mid-gesture, with
     /// the pointer on screen at that moment.
     var onDragEnd: ((TabItemView, Bool, NSPoint) -> Void)?
+    /// The menu a right-click or ctrl-click on this tab puts up. The strip
+    /// builds it: only the strip knows this tab's index.
+    var onContextMenu: ((TabItemView) -> NSMenu?)?
 
     private static let font = NSFont.systemFont(ofSize: 12)
     private static let horizontalPadding: CGFloat = 10
@@ -963,14 +1078,19 @@ private final class TabItemView: NSView {
     private static let minimumTitleWidth: CGFloat = 12
     /// The unsaved dot when it has to sit on the icon instead of in the slot.
     private static let compactDotDiameter: CGFloat = 5
-    /// Every tab shows this symbol regardless of file kind for now (SPEC
-    /// Todo 15's first step); keeping the name here means swapping in
-    /// per-type artwork later only touches this one line.
-    private static let fileSymbolName = "text.page"
+    /// The bookmark badge on the corner of the leading icon: small enough to
+    /// be a mark rather than a second icon, drawn in the same quiet grey as
+    /// the unsaved dot.
+    private static let bookmarkBadgeSize: CGFloat = 7
+    /// The size every kind's symbol is drawn at.
+    private static let iconSymbolConfiguration = NSImage.SymbolConfiguration(
+        pointSize: 11, weight: .regular
+    )
 
     private var title = ""
     private var isDirty = false
     private var hasExternalChange = false
+    private var isBookmarked = false
     private var isSelected = false
     private var isHovered = false
     private var isHoveringClose = false
@@ -990,9 +1110,7 @@ private final class TabItemView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
 
-        let iconConfig = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
-        iconView.image = NSImage(systemSymbolName: Self.fileSymbolName, accessibilityDescription: nil)?
-            .withSymbolConfiguration(iconConfig)
+        setIcon(named: FileKindIcon.untitledSymbolName)
         iconView.contentTintColor = .secondaryLabelColor
         iconView.imageScaling = .scaleProportionallyDown
         addSubview(iconView)
@@ -1024,10 +1142,26 @@ private final class TabItemView: NSView {
     /// every tab gets one without launching the app.
     internal var iconImageForTesting: NSImage? { iconView.image }
 
+    /// Test hook: which SF Symbol the leading icon is drawing, so a test can
+    /// check a tab's icon follows its file kind.
+    internal private(set) var iconSymbolName = ""
+
+    /// Test hook: whether the bookmark badge is on this tab's icon.
+    internal var showsBookmarkBadge: Bool { isBookmarked }
+
+    private func setIcon(named symbolName: String) {
+        guard symbolName != iconSymbolName else { return }
+        iconSymbolName = symbolName
+        iconView.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(Self.iconSymbolConfiguration)
+    }
+
     func configure(_ item: TabBarItem, isSelected: Bool) {
         title = item.title
+        setIcon(named: item.symbolName)
         isDirty = item.isDirty
         hasExternalChange = item.hasExternalChange
+        isBookmarked = item.isBookmarked
         dotView.showsRing = item.hasExternalChange
         self.isSelected = isSelected
         toolTip = item.title
@@ -1235,6 +1369,13 @@ private final class TabItemView: NSView {
         return superview.convert(window.convertPoint(fromScreen: screen), from: nil)
     }
 
+    /// Right-click and ctrl-click: bookmark this tab, or close it. Returning
+    /// a menu from here is all AppKit needs — it raises it itself, and the
+    /// press never reaches `mouseDown`'s tracking loop.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        onContextMenu?(self)
+    }
+
     /// Middle-click closes, the way it does in a browser.
     override func otherMouseDown(with event: NSEvent) {
         guard event.buttonNumber == 2 else {
@@ -1263,6 +1404,8 @@ private final class TabItemView: NSView {
         }
 
         drawTitle()
+
+        drawBookmarkBadge()
 
         // With the slot gone, the only place left to say "unsaved" is the
         // corner of the icon.
@@ -1336,6 +1479,30 @@ private final class TabItemView: NSView {
         )
         context.endTransparencyLayer()
         context.restoreGState()
+    }
+
+    /// A `bookmark.fill` on the corner of the leading icon. It sits at the
+    /// icon's bottom-right, where a badge belongs — except on a tab narrow
+    /// enough to have lost its trailing slot *and* carrying unsaved edits,
+    /// where the dot has already taken that corner; the badge then goes to
+    /// the bottom-left rather than the two drawing on top of each other.
+    private func drawBookmarkBadge() {
+        guard isBookmarked else { return }
+        let size = Self.bookmarkBadgeSize
+        let config = NSImage.SymbolConfiguration(pointSize: size, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [.secondaryLabelColor]))
+        guard let badge = NSImage(systemSymbolName: "bookmark.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        else { return }
+
+        let onTheLeft = isCompact && isDirty
+        let drawn = badge.size
+        badge.draw(in: NSRect(
+            x: onTheLeft ? iconRect.minX - 1 : iconRect.maxX - drawn.width + 1,
+            y: iconRect.minY - 1,
+            width: drawn.width,
+            height: drawn.height
+        ))
     }
 }
 

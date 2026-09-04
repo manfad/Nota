@@ -19,13 +19,24 @@ final class WindowRegistry {
     /// over the session file that is still being read.
     var isRestoring = false
 
+    /// The app's bookmarks (SPEC Todo 13). One list for every window, and
+    /// the one place they are written from: any change to it, wherever it
+    /// came from — a strip, a menu, the picker's ⌘⌫ — is a session write.
+    let bookmarks = Bookmarks()
+
     init(store: SessionStore) {
         self.store = store
         NotificationCenter.default.addObserver(
             self, selector: #selector(windowDidBecomeKey),
             name: NSWindow.didBecomeKeyNotification, object: nil
         )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(bookmarksChanged),
+            name: Bookmarks.didChange, object: bookmarks
+        )
     }
+
+    @objc private func bookmarksChanged() { saveSession() }
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
@@ -106,6 +117,7 @@ final class WindowRegistry {
     func add(_ controller: MainWindowController) {
         guard !controllers.contains(where: { $0 === controller }) else { return }
         controller.sessionWriter = { [weak self] in self?.saveSession() }
+        controller.bookmarks = bookmarks
         controller.windowCloseHandler = { [weak self] in self?.windowShouldClose($0) ?? false }
         // Everything a tab dragged out of this window's strip needs: a
         // window to land in, the strip it is dropped on, and a way for the
@@ -175,7 +187,8 @@ final class WindowRegistry {
         guard !isRestoring else { return }
         store.save(SessionState(
             windows: controllers.map(\.sessionWindow),
-            fontSize: Double(Preferences.shared.fontSize)
+            fontSize: Double(Preferences.shared.fontSize),
+            bookmarks: bookmarks.paths
         ))
     }
 

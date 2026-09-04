@@ -325,6 +325,10 @@ struct SessionState: Codable, Equatable {
     /// One entry per open window, in the order they were opened.
     var windows: [SessionWindow]
     var fontSize: Double
+    /// Bookmarked file paths, in the order they were added (SPEC Todo 13).
+    /// App-wide rather than per window: a file bookmarked in one window is
+    /// bookmarked in all of them, and it outlives every tab that held it.
+    var bookmarks: [String]
 
     /// The first window's tabs and selection. The file used to be this flat
     /// pair and nothing else; both are still written beside `windows` for a
@@ -333,24 +337,27 @@ struct SessionState: Codable, Equatable {
     var tabs: [SessionTab] { windows.first?.tabs ?? [] }
     var selectedTabID: UUID? { windows.first?.selectedTabID }
 
-    init(windows: [SessionWindow], fontSize: Double) {
+    init(windows: [SessionWindow], fontSize: Double, bookmarks: [String] = []) {
         self.windows = windows
         self.fontSize = fontSize
+        self.bookmarks = bookmarks
     }
 
     /// One window's worth — what a lone window, and every test that does not
     /// care about more than one, writes.
-    init(tabs: [SessionTab], selectedTabID: UUID?, fontSize: Double) {
+    init(tabs: [SessionTab], selectedTabID: UUID?, fontSize: Double,
+         bookmarks: [String] = []) {
         self.init(
             windows: [SessionWindow(tabs: tabs, selectedTabID: selectedTabID)],
-            fontSize: fontSize
+            fontSize: fontSize,
+            bookmarks: bookmarks
         )
     }
 
     static let empty = SessionState(tabs: [], selectedTabID: nil, fontSize: 13)
 
     private enum CodingKeys: String, CodingKey {
-        case windows, tabs, selectedTabID, fontSize
+        case windows, tabs, selectedTabID, fontSize, bookmarks
     }
 
     /// A file with no `windows` key was written before Nota had more than
@@ -358,6 +365,9 @@ struct SessionState: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         fontSize = try container.decode(Double.self, forKey: .fontSize)
+        // A file written before Todo 13 has no `bookmarks` key at all, and
+        // opens with none rather than refusing to decode.
+        bookmarks = try container.decodeIfPresent([String].self, forKey: .bookmarks) ?? []
         if let windows = try container.decodeIfPresent([SessionWindow].self, forKey: .windows) {
             self.windows = windows
         } else {
@@ -372,6 +382,7 @@ struct SessionState: Codable, Equatable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(windows, forKey: .windows)
         try container.encode(fontSize, forKey: .fontSize)
+        try container.encode(bookmarks, forKey: .bookmarks)
         try container.encode(tabs, forKey: .tabs)
         try container.encodeIfPresent(selectedTabID, forKey: .selectedTabID)
     }

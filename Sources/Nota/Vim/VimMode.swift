@@ -22,8 +22,9 @@ enum VimMode: Equatable {
         switch self {
         case .normal, .operatorPending: "Normal"
         case .insert: "Insert"
-        case .visual: "Visual"
-        case .visualLine: "Visual line"
+        // One word for both visual modes: the selection on screen already
+        // says whether it is by character or by line.
+        case .visual, .visualLine: "Visual"
         case .replace: "Replace"
         case .commandLine: "Command"
         }

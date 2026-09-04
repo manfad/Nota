@@ -17,9 +17,25 @@ struct TabStripLayout {
     static let spacing: CGFloat = 4
     static let plusSize: CGFloat = 24
     static let plusGap: CGFloat = 4
-    /// Room kept empty past the +, so it never reaches the strip's end.
-    /// Brave keeps a tab-search chevron there; Nota keeps it clear for now.
+    /// The bookmark button's slot at the trailing edge (SPEC Todo 13): the
+    /// same 24pt the + gets, sitting past it, with the same gap between the
+    /// two. Everything to the left of it — the tabs and the + — moves along
+    /// by exactly this much.
+    static let bookmarkSlot: CGFloat = 24
+    static let bookmarkGap: CGFloat = 4
+    /// Room kept empty past the bookmark button, so it never reaches the
+    /// strip's end.
     static let trailingReserve: CGFloat = 40
+
+    /// Everything the trailing edge holds past the +: the bookmark button,
+    /// its gap, and the empty run after it.
+    static var trailingControls: CGFloat { bookmarkSlot + bookmarkGap + trailingReserve }
+
+    /// Leading x of the bookmark button — pinned at the trailing edge, inside
+    /// the reserve, whatever the tabs are doing.
+    static func bookmarkX(_ viewportWidth: CGFloat) -> CGFloat {
+        max(0, viewportWidth - trailingReserve - bookmarkSlot)
+    }
 
     /// One width per tab, indexed like the items.
     let widths: [CGFloat]
@@ -108,14 +124,14 @@ struct TabStripLayout {
         self.visibleRange = first..<(last + 1)
         self.plusX = frozenPlusX ?? min(
             self.xs[last] + widths[last] + Self.plusGap,
-            max(0, viewportWidth - Self.trailingReserve - Self.plusSize)
+            max(0, viewportWidth - Self.trailingControls - Self.plusSize)
         )
     }
 
     /// Room the tabs themselves may use: the strip minus the +, its gap, and
-    /// the reserve past it.
+    /// everything the trailing edge keeps past it.
     static func tabsWidth(_ viewportWidth: CGFloat) -> CGFloat {
-        max(0, viewportWidth - plusSize - plusGap - trailingReserve)
+        max(0, viewportWidth - plusSize - plusGap - trailingControls)
     }
 
     /// One width for everybody, shrinking with the count; the selected tab is

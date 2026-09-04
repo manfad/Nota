@@ -11,6 +11,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var recentDocumentsMenu = RecentDocumentsMenu { [weak self] url in
         self?.openRecentDocument(url)
     }
+    /// File › Bookmarks. Kept alive here for the same reason — `NSMenu`'s
+    /// delegate is weak — and handed the one bookmark list the app has.
+    private lazy var bookmarksMenu = BookmarksMenu(
+        bookmarks: windows.bookmarks,
+        frontTabState: { [weak self] in
+            (self?.activeController?.canBookmarkCurrentTab ?? false,
+             self?.activeController?.currentTabIsBookmarked ?? false)
+        },
+        onToggleFrontTab: { [weak self] in
+            self?.activeController?.toggleBookmarkForCurrentTab()
+        },
+        onOpen: { [weak self] path in
+            self?.showWindow()
+            self?.activeController?.openBookmark(path: path)
+        }
+    )
 
     /// The window every action means — nil only before the first one exists.
     private var activeController: MainWindowController? { windows.activeController }
@@ -46,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func restoreWindows() {
         let state = store.load()
         if let size = state?.fontSize { Preferences.shared.fontSize = CGFloat(size) }
+        windows.bookmarks.replace(with: state?.bookmarks ?? [])
         windows.isRestoring = true
         for sessionWindow in state?.windows ?? [] {
             windows.restoreWindow(sessionWindow)
@@ -368,6 +385,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
         recentItem.submenu = recentMenu
 
+        let bookmarksItem = NSMenuItem(title: "Bookmarks", action: nil, keyEquivalent: "")
+        bookmarksItem.submenu = bookmarksMenu.makeMenu()
+
         submenu("File", in: mainMenu, [
             item("New Tab", #selector(newTab(_:)), key: "t", target: self),
             // ⌘N is Nota's older new-tab key, and also what brings a hidden
@@ -377,6 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                  modifiers: [.command, .shift], target: self),
             item("Open…", #selector(openNote(_:)), key: "o", target: self),
             recentItem,
+            bookmarksItem,
             .separator(),
             item("Close Tab", #selector(closeTab(_:)), key: "w", target: self),
             .separator(),
