@@ -3144,7 +3144,14 @@ final class NotaTests: XCTestCase {
                        "the drag is underway even though selection rebuilt the strip")
 
         tab.mouseUp(with: try event(.leftMouseUp, at: draggedPoint))
-        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        // The move is reported when the settle animation lands. How long that
+        // takes depends on how busy the process is — with the whole suite's
+        // windows still alive it can run past a fixed wait — so wait for the
+        // report itself, up to a generous deadline.
+        let deadline = Date().addingTimeInterval(3)
+        while recorder.moved == nil, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
         XCTAssertEqual(recorder.moved?.from, 1)
         XCTAssertEqual(recorder.moved?.to, 0)
     }
