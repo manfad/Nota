@@ -108,11 +108,32 @@ enum TextStats {
         return (line, head.count + 1)
     }
 
+    /// The same answer, taken from a note's line table instead of by counting
+    /// newlines from the top of the file: the line is a binary search, and the
+    /// column costs the one line the caret is on.
+    static func cursorPosition(
+        in text: NSString, at location: Int, using index: LineIndex
+    ) -> (line: Int, column: Int) {
+        let caret = max(0, min(location, text.length))
+        let line = index.lineNumber(at: caret)
+        let lineStart = min(index.lineStart(ofLine: line), caret)
+        let head = text.substring(with: NSRange(location: lineStart, length: caret - lineStart))
+        return (line, head.count + 1)
+    }
+
     /// `"Ln 12, Col 5"` — shown at the right of the footer, spelled out the
     /// way a status bar says it rather than as a bare pair of numbers.
     static func position(in text: NSString, at location: Int) -> String {
-        let position = cursorPosition(in: text, at: location)
-        return "Ln \(position.line), Col \(position.column)"
+        write(cursorPosition(in: text, at: location))
+    }
+
+    /// The same, through the line table.
+    static func position(in text: NSString, at location: Int, using index: LineIndex) -> String {
+        write(cursorPosition(in: text, at: location, using: index))
+    }
+
+    private static func write(_ position: (line: Int, column: Int)) -> String {
+        "Ln \(position.line), Col \(position.column)"
     }
 
     /// `"12 pages"` — the middle of the footer for a PDF tab, where there

@@ -189,4 +189,11 @@ final class WindowRegistry {
     func flushAll() {
         for controller in controllers { controller.flushAll() }
     }
+
+    /// Every window's cache writes on disk before the app goes. A big note's
+    /// write is handed to a queue rather than done on the spot, and quitting
+    /// must not outrun it.
+    func drainCacheWrites() {
+        for controller in controllers { controller.drainCacheWrites() }
+    }
 }

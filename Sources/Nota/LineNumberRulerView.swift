@@ -13,6 +13,17 @@ final class LineNumberRulerView: NSRulerView {
     private weak var textView: NSTextView?
     private var fontSize: CGFloat = 13
 
+    /// Where the numbers come from: the front note's line table, handed over
+    /// by the window controller. Every question the gutter asks — how many
+    /// lines there are, which one the caret is on, which one the top of the
+    /// visible band is — is a lookup in it rather than a walk over the text,
+    /// which is what keeps scrolling a 100 MB log from touching 100 MB.
+    ///
+    /// `nil` — no controller, or a ruler standing on its own in a test —
+    /// falls back to the walk, which is fine for the sizes a bare ruler is
+    /// ever put in front of.
+    var lineIndexProvider: (() -> LineIndex?)?
+
     /// The optional hairline down the gutter's inner edge — Settings →
     /// "Gutter separator". Off by default: a bare gutter reads quieter.
     var showsSeparator = false {
@@ -73,15 +84,18 @@ final class LineNumberRulerView: NSRulerView {
     }
 
     private func updateThickness() {
-        let lines = max(1, hardLineCount)
+        let lines = max(1, lineIndexProvider?()?.lineCount ?? hardLineCount)
         let digits = max(Self.minimumDigits, String(lines).count)
         let digitWidth = ("0" as NSString).size(withAttributes: [.font: numberFont]).width
         let thickness = ceil(CGFloat(digits) * digitWidth + Self.horizontalPadding)
         if ruleThickness != thickness { ruleThickness = thickness }
     }
 
+    /// The fallback count, for a ruler with no note behind it. Deliberately
+    /// the plainest thing that works: nothing that matters for speed comes
+    /// through here.
     private var hardLineCount: Int {
-        guard let text = textView?.string as NSString? else { return 1 }
+        guard let text = textView?.textStorage?.mutableString else { return 1 }
         var count = 1
         for index in 0..<text.length where text.character(at: index) == 0x0A { count += 1 }
         return count
@@ -109,10 +123,12 @@ final class LineNumberRulerView: NSRulerView {
 
         guard let textView,
               let layoutManager = textView.layoutManager,
-              let container = textView.textContainer
+              let container = textView.textContainer,
+              // The storage's own live view of its characters. `textView
+              // .string` bridges — a copy of the whole file, on every scroll
+              // frame — and every question asked of it here is about one line.
+              let text = textView.textStorage?.mutableString
         else { return }
-
-        let text = textView.string as NSString
         let origin = textView.textContainerOrigin
         let offset = convert(NSPoint.zero, from: textView).y + origin.y
 
@@ -138,8 +154,11 @@ final class LineNumberRulerView: NSRulerView {
             forGlyphRange: visibleGlyphs, actualGlyphRange: nil
         )
 
-        let currentLine = lineIndex(of: textView.selectedRange().location, in: text)
-        var lineNumber = lineIndex(of: visibleChars.location, in: text)
+        // One lookup each, whatever the file's size: the drawing loop below
+        // already only walks the lines the clip view is showing.
+        let table = lineIndexProvider?()
+        let currentLine = lineIndex(of: textView.selectedRange().location, in: text, using: table)
+        var lineNumber = lineIndex(of: visibleChars.location, in: text, using: table)
         var index = text.lineRange(for: NSRange(location: visibleChars.location, length: 0)).location
 
         while index <= NSMaxRange(visibleChars), index < text.length {
@@ -188,9 +207,11 @@ final class LineNumberRulerView: NSRulerView {
         )
     }
 
-    /// 1-based number of the hard line containing `location`.
-    private func lineIndex(of location: Int, in text: NSString) -> Int {
+    /// 1-based number of the hard line containing `location`, from the note's
+    /// table when there is one and by counting newlines when there is not.
+    private func lineIndex(of location: Int, in text: NSString, using table: LineIndex?) -> Int {
         let clamped = min(max(0, location), text.length)
+        if let table { return table.lineNumber(at: clamped) }
         var count = 1
         for index in 0..<clamped where text.character(at: index) == 0x0A { count += 1 }
         return count

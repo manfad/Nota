@@ -175,6 +175,17 @@ final class MainWindowController: NSWindowController {
     /// The four numbers behind the middle label, kept so a relayout can
     /// re-fit the text without walking the note again.
     private var counts = (words: 0, characters: 0, images: 0, lines: 1)
+    /// The counting job for a big note, and the number that says which one is
+    /// current — an answer from an older job is thrown away rather than shown.
+    private var wordCountWorkItem: DispatchWorkItem?
+    private var wordCountGeneration = 0
+    /// The text a file was just opened from, kept only until the first count
+    /// has taken it.
+    private var openedText: (id: UUID, text: String)?
+    /// Where a big note's cache write goes. Serial on purpose: the writes
+    /// have to land in the order they were asked for, or a pause in the
+    /// typing could leave an older text on disk than the one before it.
+    private let cacheWrites = DispatchQueue(label: "com.nota.cache-write", qos: .utility)
     /// How long the content in the preview column is in its own units, when
     /// it has any — a PDF's pages. `nil` whenever the editor's own words and
     /// characters are the answer, which is what puts them back.
@@ -375,6 +386,10 @@ final class MainWindowController: NSWindowController {
         content.addSubview(scrollView)
 
         let ruler = LineNumberRulerView(scrollView: scrollView, textView: textView)
+        // The gutter numbers from the front note's line table rather than by
+        // counting newlines itself, so scrolling a big file costs the rows on
+        // screen and nothing else.
+        ruler.lineIndexProvider = { [weak self] in self?.currentNote?.lineIndex }
         scrollView.verticalRulerView = ruler
         scrollView.hasVerticalRuler = true
         lineNumberRuler = ruler
@@ -1149,7 +1164,9 @@ final class MainWindowController: NSWindowController {
         updateModeControlOverlays()
     }
 
-    private func updateStatus() {
+    /// `countsDebounced` is the difference between a keystroke and everything
+    /// else: only typing can afford to let a big file's word count arrive late.
+    private func updateStatus(countsDebounced: Bool = false) {
         // A PDF has no words, characters, pictures or lines to speak of, and
         // neither has a picture. How long a document is, is how many pages;
         // how big a picture is, is how many pixels. The content in the column
@@ -1157,19 +1174,82 @@ final class MainWindowController: NSWindowController {
         // own to add, and the counts stand.
         if let status = currentPreviewFooterStatus {
             previewStatus = status
+        } else if let note = currentNote {
+            previewStatus = nil
+            // Lines and pictures are always cheap now: one is the size of the
+            // note's line table, the other a walk over its attribute runs.
+            counts.lines = note.lineIndex.lineCount
+            counts.images = note.imageCount
+            if BigFile.isBig(length: note.storage.length) {
+                // Words and characters are the two that cost the whole file,
+                // so a big one counts them off the main thread and the footer
+                // keeps the last answer until the new one lands.
+                scheduleWordCounts(for: note, debounced: countsDebounced)
+            } else {
+                // An ordinary note counts where it always did, on the spot:
+                // the footer is right the instant a key is pressed, and at
+                // this size that costs nothing worth deferring.
+                let stripped = note.countableText
+                counts.words = TextStats.wordCount(stripped)
+                counts.characters = TextStats.characterCount(stripped)
+            }
         } else {
             previewStatus = nil
-            let plain = currentNote?.text ?? ""
-            let stripped = NoteText.strippingTokens(plain)
-            counts = (
-                words: TextStats.wordCount(stripped),
-                characters: TextStats.characterCount(stripped),
-                images: NoteText.assetIDs(in: plain).count,
-                lines: TextStats.lineCount(currentNote?.storage.string ?? "")
-            )
+            counts = (words: 0, characters: 0, images: 0, lines: 1)
         }
         updateCountsLabel()
         updateCursorPosition()
+    }
+
+    /// Count the words and characters of a big note away from the run loop.
+    ///
+    /// Typing debounces — a burst of keystrokes counts once, about half a
+    /// second after it stops — while opening a file or switching to a tab
+    /// counts straight away, since the footer would otherwise be showing the
+    /// tab you just left. Each job takes a number; only the newest one, and
+    /// only while its note is still the one in front, is allowed to write to
+    /// the footer.
+    private func scheduleWordCounts(for note: Note, debounced: Bool) {
+        wordCountWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.startWordCounts(for: note) }
+        wordCountWorkItem = item
+        if debounced {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+        } else {
+            item.perform()
+        }
+    }
+
+    private func startWordCounts(for note: Note) {
+        wordCountWorkItem = nil
+        wordCountGeneration += 1
+        let generation = wordCountGeneration
+        // What crosses the thread has to be a string of its own. Bridging a
+        // storage's `string` is that snapshot already — it copies on the way
+        // out, which `testSerializedTextIsASnapshot` pins — so nothing here
+        // copies it a second time. Better still is the text a file was just
+        // read from: already a string, and already in hand.
+        let snapshot: String
+        if let opened = openedText, opened.id == note.id {
+            snapshot = opened.text
+            openedText = nil
+        } else {
+            snapshot = note.storage.string
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let stripped = NoteText.strippingTokens(snapshot)
+            let words = TextStats.wordCount(stripped)
+            let characters = TextStats.characterCount(stripped)
+            DispatchQueue.main.async {
+                guard let self, generation == self.wordCountGeneration,
+                      self.currentNote === note
+                else { return }
+                self.counts.words = words
+                self.counts.characters = characters
+                self.updateCountsLabel()
+            }
+        }
     }
 
     /// Writes the longest form of the counts that fits between the two side
@@ -1230,9 +1310,16 @@ final class MainWindowController: NSWindowController {
             cursorLabel.stringValue = status.position ?? ""
             return
         }
-        let text = (currentNote?.storage.string ?? "") as NSString
+        let location = textView.selectedRange().location
+        guard let note = currentNote else {
+            cursorLabel.stringValue = TextStats.position(in: "" as NSString, at: location)
+            return
+        }
+        // Through the line table, and through the storage's own live view of
+        // its characters: the line is a binary search, the column is the
+        // caret's own line, and nothing is copied to find either.
         cursorLabel.stringValue = TextStats.position(
-            in: text, at: textView.selectedRange().location
+            in: note.storage.mutableString, at: location, using: note.lineIndex
         )
     }
 
@@ -1355,7 +1442,12 @@ final class MainWindowController: NSWindowController {
         }
         notes.insert(note, at: min(selectedIndex + 1, notes.count))
         selectedIndex = notes.firstIndex { $0 === note } ?? notes.count - 1
-        if note.writesToCache { store.writeText(note.text, for: note.id) }
+        // The first word count of a big file reads this rather than copying
+        // the text back out of the storage it has just been put into.
+        if note.kind == .text, BigFile.isBig(length: note.storage.length) {
+            openedText = (note.id, text)
+        }
+        writeCache(note)
         installCurrentNote()
         refreshTabs()
         updateStatus()
@@ -1679,7 +1771,7 @@ final class MainWindowController: NSWindowController {
         saveWorkItem = nil
         if let note = currentNote {
             rememberSelection(note)
-            if note.writesToCache { store.writeText(note.text, for: note.id) }
+            writeCache(note)
         }
         writeSessionFile()
     }
@@ -1689,8 +1781,38 @@ final class MainWindowController: NSWindowController {
         saveWorkItem?.cancel()
         saveWorkItem = nil
         currentNote.map(rememberSelection)
-        for note in notes where note.writesToCache { store.writeText(note.text, for: note.id) }
+        for note in notes { writeCache(note) }
         writeSessionFile()
+    }
+
+    /// One tab's text into the cache.
+    ///
+    /// The snapshot is taken here, on the main thread — that copy is what a
+    /// note *is*, and there is no getting round it. Writing it out is another
+    /// matter: a hundred megabytes through the file system is not something
+    /// the run loop can be asked for between keystrokes, so a big note's
+    /// write goes to the cache queue and the pause it would have caused goes
+    /// with it. An ordinary note is written where it always was, on the spot,
+    /// so the cache is already on disk when the next line of a test reads it.
+    ///
+    /// `session.json` stays on the main thread either way: it is small, and
+    /// it is the file that says which of these tabs exists at all.
+    private func writeCache(_ note: Note) {
+        guard note.writesToCache else { return }
+        let text = note.text
+        let id = note.id
+        guard BigFile.isBig(length: note.storage.length) else {
+            return store.writeText(text, for: id)
+        }
+        let store = store
+        cacheWrites.async { store.writeText(text, for: id) }
+    }
+
+    /// Waits for every cache write that has been asked for. The app calls it
+    /// on the way out, where a write still in the air would be a write lost;
+    /// nothing else has to, since the queue drains on its own.
+    func drainCacheWrites() {
+        cacheWrites.sync { }
     }
 
     /// Where the tab is, for the session to bring it back to: the caret in a
@@ -2646,9 +2768,7 @@ extension MainWindowController {
         var resized: [NSRange] = []
         var number = 1
 
-        storage.enumerateAttribute(
-            .attachment, in: NSRange(location: 0, length: storage.length)
-        ) { value, range, _ in
+        storage.forEachAttachmentRun { value, range, _ in
             guard let chip = value as? NotaImageAttachment else { return }
             assetIDs.append(chip.assetID)
             if chip.updateChip(font: font, index: number) { resized.append(range) }
@@ -2696,9 +2816,7 @@ extension MainWindowController {
     private func chipLocations() -> [Int] {
         guard let storage = currentNote?.storage else { return [] }
         var locations: [Int] = []
-        storage.enumerateAttribute(
-            .attachment, in: NSRange(location: 0, length: storage.length)
-        ) { value, range, _ in
+        storage.forEachAttachmentRun { value, range, _ in
             if value is NotaImageAttachment { locations.append(range.location) }
         }
         return locations
@@ -3087,7 +3205,7 @@ extension MainWindowController: NSTextViewDelegate {
             refreshTabs()
         }
         rememberSelection(note)
-        updateStatus()
+        updateStatus(countsDebounced: true)
         // The matches have moved with the edit.
         vimEngine.refreshSearchHighlights()
         scheduleImageRefresh()
