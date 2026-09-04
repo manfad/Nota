@@ -113,9 +113,15 @@ final class HTMLFindSession {
             runSearch()
             return
         }
+        // What the field held when the bar came up. A reader does not wait on
+        // another process before typing, so a selection that comes back after
+        // they have started is a stale answer to a question they have already
+        // answered themselves — and putting it in the field would take their
+        // query away from them mid-word.
+        let opened = bar.query
         askForSelection(in: page) { [weak self] selected in
             guard let self else { return }
-            if let selected, !selected.isEmpty {
+            if let selected, !selected.isEmpty, bar.query == opened {
                 bar.query = selected
                 bar.focusField()
             }
@@ -390,26 +396,48 @@ extension HTMLFindSession {
                 return range;
             }
 
-            function paint() {
+            // The two bands, made once and registered once for the life of
+            // the document.
+            //
+            // Not a fresh `Highlight` set under the same name on every
+            // keystroke. A highlight is a set, and the engine repaints what it
+            // covered when the set itself changes; replacing the registry
+            // entry wholesale asks the engine to notice by another route, and
+            // a query growing a letter at a time left the first letter's bands
+            // on the page. So the objects are stable and only their contents
+            // move.
+            var quietBand = null, currentBand = null;
+
+            function bands() {
                 if (!window.CSS || !CSS.highlights || typeof Highlight === 'undefined') {
-                    return;
+                    return false;
                 }
-                CSS.highlights.delete('nota-find');
-                CSS.highlights.delete('nota-find-current');
-                var quiet = [], current = [];
+                if (!quietBand) {
+                    quietBand = new Highlight();
+                    currentBand = new Highlight();
+                }
+                if (CSS.highlights.get('nota-find') !== quietBand) {
+                    CSS.highlights.set('nota-find', quietBand);
+                }
+                if (CSS.highlights.get('nota-find-current') !== currentBand) {
+                    CSS.highlights.set('nota-find-current', currentBand);
+                }
+                return true;
+            }
+
+            function paint() {
+                if (!bands()) { return; }
+                quietBand.clear();
+                currentBand.clear();
                 for (var i = 0; i < state.ranges.length; i++) {
-                    (i === state.index ? current : quiet).push(state.ranges[i]);
-                }
-                if (quiet.length) { CSS.highlights.set('nota-find', new Highlight(...quiet)); }
-                if (current.length) {
-                    CSS.highlights.set('nota-find-current', new Highlight(...current));
+                    (i === state.index ? currentBand : quietBand).add(state.ranges[i]);
                 }
             }
 
             function unpaint() {
-                if (!window.CSS || !CSS.highlights) { return; }
-                CSS.highlights.delete('nota-find');
-                CSS.highlights.delete('nota-find-current');
+                if (!bands()) { return; }
+                quietBand.clear();
+                currentBand.clear();
             }
 
             // The first match at or below the top of what the reader can see,
@@ -481,8 +509,17 @@ extension HTMLFindSession {
                 return report();
             }
 
+            // `bandsAreStable` is for the tests: whether the two highlights
+            // registered now are the two objects made for this document, which
+            // is the property the bands' repainting rests on.
+            function bandsAreStable() {
+                return !!quietBand
+                    && CSS.highlights.get('nota-find') === quietBand
+                    && CSS.highlights.get('nota-find-current') === currentBand;
+            }
+
             window.\#(namespace) = { search: search, step: step, close: close,
-                                     report: report };
+                                     report: report, bandsAreStable: bandsAreStable };
         """#
     }
 }

@@ -96,6 +96,9 @@ final class HTMLPreviewView: NSView, PreviewContent {
 
     var findBarHeight: CGFloat { findBar.stackHeight }
 
+    /// How many matches the bar is counting, for the tests.
+    var findMatchCount: Int? { findSession.matchCount }
+
     /// Run when the page has answered the find bar — for the tests, since
     /// every one of those answers crosses a process boundary and nothing else
     /// says when one has landed.

@@ -700,13 +700,13 @@ final class HTMLPreviewTests: XCTestCase {
         let bar = try findBar(of: pane)
         try find(.showFindInterface, in: pane)
         try type("alpha", into: bar, of: pane)
-        XCTAssertEqual(try number("CSS.highlights.size", in: pane), 2)
+        XCTAssertEqual(try paintedMatches(in: pane).count, 2)
 
         try find(.hideFindInterface, in: pane)
 
         XCTAssertFalse(bar.isShown)
         XCTAssertFalse(pane.isFindBarVisible)
-        XCTAssertEqual(try number("CSS.highlights.size", in: pane), 0, "the bands are down")
+        XCTAssertEqual(try paintedMatches(in: pane), [], "the bands are down")
         XCTAssertEqual(try string("window.getSelection().toString()", in: pane).lowercased(),
                        "alpha", "and the match the reader was on is theirs")
         let responder = window.firstResponder as? NSView
@@ -735,7 +735,7 @@ final class HTMLPreviewTests: XCTestCase {
 
         try type("zeta", into: bar, of: pane)
         XCTAssertEqual(bar.status, "No matches")
-        XCTAssertEqual(try number("CSS.highlights.size", in: pane), 0)
+        XCTAssertEqual(try paintedMatches(in: pane), [])
     }
 
     /// In split the editor is on screen and has the keyboard, so ⌘F is the
@@ -786,6 +786,173 @@ final class HTMLPreviewTests: XCTestCase {
         XCTAssertTrue(bar.handles(.nextMatch))
     }
 
+    /// Typed a letter at a time, the way a reader types. Every band on the
+    /// page has to be a band on the query as it stands now — the reader
+    /// looking for `file` must not be left with every `f` in the page lit,
+    /// which is what the bar did on the first build of it.
+    @MainActor
+    func testTypingALetterAtATimeLeavesOnlyTheWholeQueryBanded() throws {
+        let (pane, _) = try makePane()
+        try show(
+            makeNote(named: "page.html", text:
+                "<p>first file for four</p><p>from a file, finally</p><p>fifty</p>"),
+            in: pane
+        )
+        let bar = try findBar(of: pane)
+        try find(.showFindInterface, in: pane)
+
+        for query in ["f", "fi", "fil", "file"] {
+            try type(query, into: bar, of: pane)
+            let painted = try paintedMatches(in: pane)
+            XCTAssertEqual(
+                Set(painted.map { $0.lowercased() }), [query],
+                "after typing “\(query)” the page is showing bands on \(Set(painted))"
+            )
+            XCTAssertEqual(
+                painted.count, try XCTUnwrap(pane.findMatchCount),
+                "and there are as many bands as the count in the bar says"
+            )
+        }
+        XCTAssertEqual(bar.status, "1 of 2")
+
+        // And a step does not bring the old ones back either.
+        try find(.nextMatch, in: pane)
+        XCTAssertEqual(bar.status, "2 of 2")
+        let painted = try paintedMatches(in: pane)
+        XCTAssertEqual(Set(painted.map { $0.lowercased() }), ["file"])
+        XCTAssertEqual(painted.count, 2)
+
+        // The bands are the same two objects they were four keystrokes ago,
+        // which is the whole of the fix: a highlight whose contents change
+        // repaints what it used to cover, and one swapped out from under its
+        // own name did not.
+        XCTAssertEqual(
+            try number("window.\(HTMLFindSession.namespace).bandsAreStable() ? 1 : 0",
+                       in: pane),
+            1
+        )
+    }
+
+    /// The same, typed the way a reader types it: the next letter goes in
+    /// before the page has answered for the last one. Every question crosses a
+    /// process boundary, so the replies come back interleaved with the
+    /// keystrokes, and the bands still have to be the query's.
+    @MainActor
+    func testTypingFasterThanThePageAnswersStillLeavesOnlyTheQueryBanded() throws {
+        let controller = try makeReadingController(
+            text: "<p>first file for four</p><p>from a file, finally</p><p>fifty</p>",
+            in: try makeTemporaryDirectory()
+        )
+        let pane = controller.previewPanes.html
+        let bar = try findBar(of: pane)
+        try find(.showFindInterface, in: pane)
+
+        // No waiting between them, which is the whole point.
+        for query in ["f", "fi", "fil", "file"] {
+            bar.query = query
+            bar.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: bar.field)
+            )
+        }
+        try settle(pane, until: { bar.status == "1 of 2" })
+
+        let painted = try paintedMatches(in: pane)
+        XCTAssertEqual(Set(painted.map { $0.lowercased() }), ["file"],
+                       "the page is showing bands on \(Set(painted))")
+        XCTAssertEqual(painted.count, 2)
+    }
+
+    /// And typed through the field editor, which is what a keystroke actually
+    /// goes through — the pill's own `PillFieldEditor` in a real window, one
+    /// letter at a time, nothing waited on.
+    @MainActor
+    func testTypingThroughTheFieldEditorLeavesOnlyTheQueryBanded() throws {
+        let controller = try makeReadingController(
+            text: "<p>first file for four</p><p>from a file, finally</p><p>fifty</p>",
+            in: try makeTemporaryDirectory()
+        )
+        let pane = controller.previewPanes.html
+        let bar = try findBar(of: pane)
+        try find(.showFindInterface, in: pane)
+        XCTAssertTrue(bar.isShown)
+
+        let editor = try XCTUnwrap(bar.field.currentEditor() as? NSTextView,
+                                   "the pill's field has the keyboard after ⌘F")
+        for letter in ["f", "i", "l", "e"] {
+            editor.insertText(letter, replacementRange: editor.selectedRange())
+        }
+        try settle(pane, until: { bar.status == "1 of 2" })
+
+        XCTAssertEqual(bar.query, "file")
+        let painted = try paintedMatches(in: pane)
+        XCTAssertEqual(Set(painted.map { $0.lowercased() }), ["file"],
+                       "the page is showing bands on \(Set(painted))")
+        XCTAssertEqual(painted.count, 2)
+    }
+
+    /// A page with more one-letter hits than the bar will ever band, which is
+    /// what a real file looks like: thousands of `f`s and two `file`s.
+    @MainActor
+    func testAPageWithMoreHitsThanTheCapStillBandsOnlyTheQuery() throws {
+        let (pane, _) = try makePane()
+        var paragraphs = (1 ... 900).map { "<p>far from fifty four, of \($0)</p>" }
+        paragraphs.insert("<p>the file</p>", at: 10)
+        paragraphs.append("<p>another file</p>")
+        try show(makeNote(named: "page.html", text: paragraphs.joined()), in: pane)
+        let bar = try findBar(of: pane)
+        try find(.showFindInterface, in: pane)
+
+        try type("f", into: bar, of: pane)
+        XCTAssertEqual(bar.status, "1 of 2000+", "well past the cap")
+
+        for query in ["fi", "fil", "file"] { try type(query, into: bar, of: pane) }
+
+        XCTAssertEqual(bar.status, "1 of 2")
+        let painted = try paintedMatches(in: pane)
+        XCTAssertEqual(Set(painted.map { $0.lowercased() }), ["file"],
+                       "the page is showing bands on \(Set(painted).sorted().prefix(5))")
+        XCTAssertEqual(painted.count, 2)
+    }
+
+    /// ⌘F and then typing, without a pause between them — which is what a
+    /// reader does, and which the tests above all politely waited out.
+    ///
+    /// ⌘F seeds the query from what is selected on the page, and only the
+    /// page knows that, so the answer comes back a moment later. It must not
+    /// land on top of what has been typed since.
+    @MainActor
+    func testTypingRightAfterCommandFIsNotOverwrittenByTheSeed() throws {
+        let (pane, _) = try makePane()
+        pane.takesKeyboard = true
+        try show(
+            makeNote(named: "page.html", text:
+                "<p>first file for four</p><p>from a file, finally</p><p>fifty</p>"),
+            in: pane
+        )
+        let bar = try findBar(of: pane)
+
+        // A find that has been used and closed, which is how a page comes to
+        // have a selection on it in the first place.
+        try find(.showFindInterface, in: pane)
+        try type("f", into: bar, of: pane)
+        try find(.hideFindInterface, in: pane)
+        XCTAssertEqual(try string("window.getSelection().toString()", in: pane).lowercased(),
+                       "f", "Esc leaves the match selected, as it is meant to")
+
+        // ⌘F again, and straight into typing: no waiting on the page.
+        try page(of: pane).performTextFinderAction(finderItem(.showFindInterface))
+        let editor = try XCTUnwrap(bar.field.currentEditor() as? NSTextView)
+        for letter in ["f", "i", "l", "e"] {
+            editor.insertText(letter, replacementRange: editor.selectedRange())
+        }
+        try settle(pane, until: { bar.query == "file" && bar.status == "1 of 2" })
+
+        XCTAssertEqual(bar.query, "file", "the seed must not land on top of the typing")
+        let painted = try paintedMatches(in: pane)
+        XCTAssertEqual(Set(painted.map { $0.lowercased() }), ["file"],
+                       "the page is showing bands on \(Set(painted))")
+    }
+
     // MARK: - Helpers
 
     /// A file in the folder of examples checked in beside the app — a real
@@ -797,6 +964,42 @@ final class HTMLPreviewTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("Examples/\(name)")
             .standardizedFileURL
+    }
+
+    /// Waits for the page and the pill to agree. Every answer the find bar
+    /// gets is asynchronous, and a burst of keystrokes is a burst of replies.
+    @MainActor
+    private func settle(
+        _ pane: HTMLPreviewView, until ready: @escaping () -> Bool
+    ) throws {
+        let settled = expectation(description: "the page and the pill agree")
+        settled.assertForOverFulfill = false
+        let poll = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            if ready() { settled.fulfill() }
+        }
+        wait(for: [settled], timeout: 5)
+        poll.invalidate()
+    }
+
+    /// What the page is actually showing bands on: every range in either
+    /// highlight, as the text it covers. The count in the pill is one claim
+    /// and the paint on the page is another, and this is the only way to ask
+    /// the second.
+    @MainActor
+    private func paintedMatches(in pane: HTMLPreviewView) throws -> [String] {
+        let script = """
+        (function () {
+            var out = [];
+            ['nota-find', 'nota-find-current'].forEach(function (name) {
+                var highlight = CSS.highlights.get(name);
+                if (!highlight) { return; }
+                for (var range of highlight) { out.push(range.toString()); }
+            });
+            return out;
+        })()
+        """
+        let value = try evaluate(script, in: pane)
+        return try XCTUnwrap(value as? [String])
     }
 
     /// A controller whose one `.html` tab is in reading with its page landed.
