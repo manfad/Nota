@@ -149,9 +149,15 @@ final class PDFPreviewView: NSView, PreviewContent {
     var rememberedPosition: Int? { currentPageIndex }
 
     /// A PDF has no words or characters to count. How long it is, is how many
-    /// pages — and where you are in it is which of them is in front.
+    /// pages — and where you are in it is which of them is in front. A
+    /// document that would not open has no page to be on.
     var footerStatus: PreviewFooterStatus? {
-        PreviewFooterStatus(pageCount: pageCount, currentPage: currentPageIndex)
+        PreviewFooterStatus(
+            summary: TextStats.pageCounts(pageCount),
+            position: pageCount > 0
+                ? TextStats.pagePosition(current: currentPageIndex + 1, total: pageCount)
+                : nil
+        )
     }
 
     /// Puts the keyboard in the document — reading mode's answer to

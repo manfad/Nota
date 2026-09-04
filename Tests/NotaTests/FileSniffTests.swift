@@ -135,7 +135,11 @@ final class FileSniffTests: XCTestCase {
         )
     }
 
-    func testNoteIsOpenableAgreesWithTheDropFilter() throws {
+    /// The drop filter is not `Note.isOpenable`, and a picture is where the
+    /// two part company: it opens in a tab of its own through Open…, the
+    /// Finder and the command line, and it lands in the note as a chip when
+    /// it is dropped into the text. The target decides, not the file.
+    func testAPictureOpensAsATabButIsStillTheStoresWhenDroppedInTheText() throws {
         let directory = try makeTemporaryDirectory()
         let pdf = try makePDF(pages: 1, named: "report", in: directory)
         let config = directory.appendingPathComponent("config")
@@ -145,7 +149,15 @@ final class FileSniffTests: XCTestCase {
 
         XCTAssertTrue(Note.isOpenable(pdf))
         XCTAssertTrue(Note.isOpenable(config))
-        XCTAssertFalse(Note.isOpenable(image))
+        XCTAssertTrue(Note.isOpenable(image))
+
+        let pasteboard = NSPasteboard(name: .init("NotaSniffTests-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        pasteboard.writeObjects([pdf, config, image].map { $0 as NSURL })
+        XCTAssertEqual(
+            NotaTextView.openableFiles(on: pasteboard).map(\.lastPathComponent),
+            ["report", "config"]
+        )
     }
 
     // MARK: - Restoring a session

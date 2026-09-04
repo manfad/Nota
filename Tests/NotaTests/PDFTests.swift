@@ -29,17 +29,22 @@ final class PDFTests: XCTestCase {
         XCTAssertFalse(Note.isPDFFile(URL(fileURLWithPath: "/tmp/pdf")))
     }
 
-    func testWhatOpensInATabIsTextOrAPDFAndNothingElse() throws {
+    /// Text, a document and a picture all open in a tab; a file that is none
+    /// of the three does not.
+    func testWhatOpensInATabIsTextADocumentOrAPicture() throws {
         let directory = try makeTemporaryDirectory()
         let pdf = try makePDF(pages: 1, named: "paper.pdf", in: directory)
         let text = directory.appendingPathComponent("notes.md")
         let image = directory.appendingPathComponent("photo.png")
+        let archive = directory.appendingPathComponent("bundle.zip")
         try Data("# hi".utf8).write(to: text)
-        try Data([0x89, 0x50, 0x4E, 0x47, 0x00]).write(to: image)
+        try Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).write(to: image)
+        try Data([0x50, 0x4B, 0x03, 0x04, 0x00]).write(to: archive)
 
         XCTAssertTrue(Note.isOpenable(pdf))
         XCTAssertTrue(Note.isOpenable(text))
-        XCTAssertFalse(Note.isOpenable(image), "a picture lands in a note, not beside one")
+        XCTAssertTrue(Note.isOpenable(image), "a picture is a tab of its own")
+        XCTAssertFalse(Note.isOpenable(archive))
         // And the PDF is not text: reading it as one is what used to come
         // back as an empty dirty tab.
         XCTAssertFalse(TextFile.isTextFile(at: pdf))
@@ -58,7 +63,8 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(
             NotaTextView.openableFiles(on: pasteboard).map(\.lastPathComponent),
             ["paper.pdf"],
-            "the PDF opens as a tab; the picture is still the asset store's"
+            "dropped into the text the PDF opens as a tab and the picture is "
+                + "still the asset store's, whatever either would do elsewhere"
         )
     }
 

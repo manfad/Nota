@@ -418,6 +418,91 @@ final class HTMLPreviewTests: XCTestCase {
                       "the page is read beside the note, not typed in")
     }
 
+    // MARK: - A drawing is a page too
+
+    /// An `.svg` is text you edit, with the drawing beside it — the same
+    /// arrangement a `.html` has, drawn by the same pane.
+    @MainActor
+    func testADrawingIsReadThroughThePageAndNotAsAPicture() throws {
+        _ = NSApplication.shared
+        let drawing = makeNote(named: "logo.svg", text: "<svg/>")
+        XCTAssertEqual(drawing.previewKind, .svg)
+        XCTAssertEqual(PreviewContentKind(drawing), .html, "the same pane draws both")
+        XCTAssertNil(Note.viewerKind(URL(fileURLWithPath: "/tmp/logo.svg")),
+                     "and never a picture tab, whatever the system files it under")
+
+        let column = PreviewPaneView(zenTopInset: 28)
+        column.bringForward(drawing)
+        XCTAssertEqual(column.panes.kind, .html)
+    }
+
+    /// Handed over as HTML, an `.svg` would be parsed by the HTML rules and
+    /// the root `<svg>` would end up inside a `<body>` the file never had.
+    @MainActor
+    func testADrawingIsLoadedAsADrawingRatherThanAsAPage() throws {
+        let (pane, _) = try makePane()
+        let file = exampleURL("Drawing.svg")
+        try show(Note(fileURL: file, untitledName: nil,
+                      text: try String(contentsOf: file, encoding: .utf8),
+                      attributes: [:], assets: nil), in: pane)
+
+        XCTAssertEqual(try string("document.documentElement.tagName", in: pane), "svg",
+                       "the drawing is the document, not a tag inside a page")
+        XCTAssertEqual(try string("document.contentType", in: pane), "image/svg+xml")
+        XCTAssertEqual(try string("document.querySelector('title').textContent", in: pane),
+                       "SVG in Nota")
+    }
+
+    @MainActor
+    func testEditingADrawingRedrawsIt() throws {
+        let (pane, _) = try makePane()
+        let file = try makeTemporaryDirectory().appendingPathComponent("logo.svg")
+        try Data().write(to: file)
+        let note = Note(
+            fileURL: file, untitledName: nil,
+            text: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\"/>",
+            attributes: [:], assets: nil
+        )
+        try show(note, in: pane)
+        XCTAssertEqual(try string("document.documentElement.getAttribute('width')", in: pane), "40")
+
+        note.storage.replaceCharacters(
+            in: NSRange(location: 0, length: note.storage.length),
+            with: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"90\" height=\"20\"/>"
+        )
+        try show(note, in: pane)
+        XCTAssertEqual(try string("document.documentElement.getAttribute('width')", in: pane), "90")
+        XCTAssertEqual(pane.loadCount, 2)
+    }
+
+    func testTheViewItemIsCalledSVGPreviewOnADrawingTab() throws {
+        XCTAssertEqual(RenderedPreviewKind.previewMenuTitle(.svg), "SVG Preview")
+        XCTAssertEqual(RenderedPreviewKind(fileExtension: "svg"), .svg)
+        XCTAssertEqual(RenderedPreviewKind(fileExtension: "SVG"), .svg)
+    }
+
+    @MainActor
+    func testTheReadingModeSettingCoversDrawingsToo() throws {
+        _ = NSApplication.shared
+        let previous = Preferences.shared.opensMarkdownInReadingMode
+        defer { Preferences.shared.opensMarkdownInReadingMode = previous }
+        Preferences.shared.opensMarkdownInReadingMode = true
+
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeController(showing: "start.html", text: "<p>hi</p>",
+                                            in: directory)
+        let drawing = directory.appendingPathComponent("logo.svg")
+        try "<svg xmlns=\"http://www.w3.org/2000/svg\"/>"
+            .write(to: drawing, atomically: true, encoding: .utf8)
+
+        controller.open(url: drawing)
+        XCTAssertEqual(controller.previewMode, .reading)
+        XCTAssertEqual(controller.currentRenderedPreviewKind, .svg)
+        XCTAssertEqual(controller.previewPanes.kind, .html)
+        XCTAssertEqual(controller.currentTabState.kind, .text,
+                       "it is text in the editor, whatever the drawing beside it looks like")
+    }
+
     // MARK: - The tab around it
 
     @MainActor

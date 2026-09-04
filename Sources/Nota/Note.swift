@@ -51,7 +51,7 @@ enum PreviewMode: String, Codable, CaseIterable {
 /// Markdown or LaTeX into its reading layout, and HTML is already a page, so
 /// WebKit draws it as it stands.
 enum RenderedPreviewKind {
-    case markdown, latex, html
+    case markdown, latex, html, svg
 
     init?(fileExtension: String) {
         if fileExtension.caseInsensitiveCompare("md") == .orderedSame {
@@ -70,6 +70,13 @@ enum RenderedPreviewKind {
             self = .html
             return
         }
+        // A drawing is a document too. An `.svg` is text you edit — a tree of
+        // tags, no different from HTML — so it is a tab with a preview beside
+        // it, not one of the pictures Nota opens as a viewer.
+        if fileExtension.caseInsensitiveCompare("svg") == .orderedSame {
+            self = .svg
+            return
+        }
         return nil
     }
 
@@ -82,16 +89,24 @@ enum RenderedPreviewKind {
         switch kind {
         case .latex: "LaTeX Preview"
         case .html: "HTML Preview"
+        case .svg: "SVG Preview"
         case .markdown, nil: "Markdown Preview"
         }
     }
 }
 
-/// What a tab is holding. Everything Nota edits is text; a PDF is the one
-/// binary it opens at all, and it opens as a viewer — there is no text
-/// storage behind it, nothing to save, and nothing to keep in the cache.
+/// What a tab is holding. Everything Nota edits is text; a PDF and a picture
+/// are the binaries it opens at all, and they open as viewers — there is no
+/// text storage behind either, nothing to save, and nothing to keep in the
+/// cache.
 enum NoteKind {
-    case text, pdf
+    case text, pdf, image
+
+    /// Whether the tab is read rather than edited. Everything that follows
+    /// from that — locked in reading, never dirty, never cached, never
+    /// written, no format of its own — is asked here rather than of each
+    /// kind by name.
+    var isViewer: Bool { self != .text }
 }
 
 /// One tab. Each note owns its own text storage and undo manager, so undo
@@ -108,8 +123,8 @@ final class Note {
     /// Text, or the one binary Nota opens. A tab's kind is settled when it is
     /// made and never changes under it.
     let kind: NoteKind
-    /// True when the cache holds edits that are not in the file yet. A PDF is
-    /// a view of a file rather than a copy of one — there is nothing in it
+    /// True when the cache holds edits that are not in the file yet. A viewer
+    /// is a view of a file rather than a copy of one — there is nothing in it
     /// that is not on disk already — so it is never any of this.
     var isDirty: Bool {
         get { kind == .text && hasUnsavedEdits }
@@ -127,10 +142,11 @@ final class Note {
     /// tab, not per app: ⇧⌘P on a Markdown note must not follow you into the
     /// next ⌘T. The editor until asked for.
     ///
-    /// A PDF is the render and nothing else: it is locked in reading, and
-    /// asking it for another mode is asking for nothing at all.
+    /// A PDF and a picture are the page and nothing else: they are locked in
+    /// reading, and asking either for another mode is asking for nothing at
+    /// all.
     var previewMode: PreviewMode {
-        get { kind == .pdf ? .reading : requestedPreviewMode }
+        get { kind.isViewer ? .reading : requestedPreviewMode }
         set {
             guard kind == .text else { return }
             requestedPreviewMode = newValue
@@ -150,6 +166,8 @@ final class Note {
     /// switch.
     private var loadedPDF: PDFDocument?
     private var hasLoadedPDF = false
+    private var loadedImage: NSImage?
+    private var hasLoadedImage = false
 
     init(id: UUID = UUID(), fileURL: URL?, untitledName: String?, text: String,
          attributes: [NSAttributedString.Key: Any], assets: AssetStore?,
@@ -182,10 +200,10 @@ final class Note {
     var supportsRenderedPreview: Bool { previewKind != nil }
 
     /// Whether the tab has anything at all to put in the preview column: a
-    /// render for a saved `.md` or `.tex`, the page for a `.html`, the
-    /// document for a PDF. A `.txt` and an untitled note have none of them, so
-    /// no mode means anything there.
-    var hasPreviewContent: Bool { kind == .pdf || supportsRenderedPreview }
+    /// render for a saved `.md` or `.tex`, the page for a `.html` or an
+    /// `.svg`, the document for a PDF, the picture for an image. A `.txt` and
+    /// an untitled note have none of them, so no mode means anything there.
+    var hasPreviewContent: Bool { kind.isViewer || supportsRenderedPreview }
 
     /// The same rule, for a file that has no note behind it yet — what the
     /// "open Markdown, LaTeX and HTML files in reading mode" setting asks
@@ -205,33 +223,54 @@ final class Note {
         previewKind(url) != nil
     }
 
-    /// A file Nota opens as a viewer rather than an editor. The spelling
-    /// answers first, since that is all a file that is not there yet has;
-    /// the system's own type is asked after it, so a `.PDF` from a Windows
-    /// machine and a type-only oddity both land the same way.
+    /// What a file opens as when its name is all there is to go on — a file
+    /// that is not there yet, or one whose bytes said nothing. `nil` for
+    /// anything Nota would edit rather than show.
+    static func viewerKind(_ url: URL) -> NoteKind? {
+        if isPDFFile(url) { return .pdf }
+        if isImageFile(url) { return .image }
+        return nil
+    }
+
+    /// A PDF, by name. The spelling answers first, since that is all a file
+    /// that is not there yet has; the system's own type is asked after it, so
+    /// a `.PDF` from a Windows machine and a type-only oddity both land the
+    /// same way.
     static func isPDFFile(_ url: URL) -> Bool {
         if url.pathExtension.caseInsensitiveCompare("pdf") == .orderedSame { return true }
         guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
         return type.conforms(to: .pdf)
     }
 
-    /// Whether a file is one Nota opens in a tab at all — what a drop on the
-    /// window filters on. The bytes decide first: `FileSniff` says PDF or
-    /// text and that is the answer, whatever the file is named — a `report`
-    /// with no extension and a `.pdf` that is really a log both go by their
-    /// content. A handful of types stay refused by name even when their
+    /// A picture Nota opens as a tab, by name.
+    ///
+    /// An `.svg` is not one of them, whatever the system says. Its bytes are
+    /// text, you edit it in the editor like any other markup, and the drawing
+    /// beside it is a preview — the same arrangement a `.html` has. The
+    /// system files it under images all the same, so it is refused here by
+    /// name and by type both.
+    static func isImageFile(_ url: URL) -> Bool {
+        if url.pathExtension.caseInsensitiveCompare("svg") == .orderedSame { return false }
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
+        return type.conforms(to: .image) && !type.conforms(to: .svg)
+    }
+
+    /// Whether a file is one Nota opens in a tab at all. The bytes decide
+    /// first: `FileSniff` says PDF, picture or text and that is the answer,
+    /// whatever the file is named — a `report` with no extension and a `.pdf`
+    /// that is really a log both go by their content. A handful of types stay refused by name even when their
     /// bytes read as plain text, the same way `TextFile.isTextFile` refuses
     /// them — an RTF's own markup is ASCII, but it is not a note. Only when
     /// the bytes cannot say anything — the file is missing, unreadable, or a
     /// real binary — does the old name-based guess take over.
     static func isOpenable(_ url: URL) -> Bool {
         switch FileSniff.classify(at: url) {
-        case .pdf:
+        case .pdf, .image:
             return true
         case .text:
             return !TextFile.isDeliberatelyExcluded(url)
         case .binary, .unreadable:
-            return isPDFFile(url) || TextFile.isTextFile(at: url)
+            return viewerKind(url) != nil || TextFile.isTextFile(at: url)
         }
     }
 
@@ -247,13 +286,26 @@ final class Note {
         return loadedPDF
     }
 
+    /// The picture behind an image tab, read the first time it is asked for
+    /// and held afterwards, the same way the document is. `nil` when the file
+    /// is missing, or is not a picture `NSImage` can draw — which is what the
+    /// pane shows a message for.
+    var image: NSImage? {
+        guard kind == .image else { return nil }
+        if hasLoadedImage { return loadedImage }
+        hasLoadedImage = true
+        loadedImage = fileURL.flatMap { NSImage(contentsOf: $0) }
+        return loadedImage
+    }
+
     /// Whether the editor takes the keyboard for this tab. A scratch tab is
-    /// vim's `'nomodifiable'`; a PDF has no text storage worth typing into.
+    /// vim's `'nomodifiable'`; a viewer has no text storage worth typing
+    /// into.
     var isEditable: Bool { !isScratch && kind == .text }
 
     /// Whether the tab's text belongs in `cache/<id>.txt`. A scratch tab is a
-    /// view of something rather than a note, and a PDF's text is not text at
-    /// all — writing either would be writing an empty file over and over.
+    /// view of something rather than a note, and a viewer's text is not text
+    /// at all — writing either would be writing an empty file over and over.
     var writesToCache: Bool { !isScratch && kind == .text }
 
     /// The note as it is written to the cache and to the user's file: plain
@@ -272,8 +324,8 @@ final class Note {
             selection: selectionLocation,
             // Only a real text file has a shape worth keeping; an untitled
             // note comes back as the default whatever happened in between,
-            // and a PDF has no encoding or line endings to speak of.
-            format: (fileURL == nil || kind == .pdf) ? nil : format,
+            // and a viewer has no encoding or line endings to speak of.
+            format: (fileURL == nil || kind.isViewer) ? nil : format,
             previewMode: previewMode
         )
     }

@@ -254,9 +254,13 @@ enum TextFile {
 enum FileClass {
     /// `%PDF-` at the start of the file, a byte-order mark or not.
     case pdf
-    /// Not a PDF, and `TextFile.decode` can make sense of the bytes.
+    /// One of the picture formats `NSImage` draws, known by the bytes every
+    /// one of them starts with.
+    case image
+    /// Not a PDF or a picture, and `TextFile.decode` can make sense of the
+    /// bytes.
     case text
-    /// Readable, but neither of the above — a real binary.
+    /// Readable, but none of the above — a real binary.
     case binary
     /// Could not be read at all: missing, a directory, or no permission.
     /// Nothing about the file is known, so the caller falls back to its
@@ -268,12 +272,13 @@ enum FileSniff {
     private static let pdfMagic: [UInt8] = Array("%PDF-".utf8)
     private static let utf8BOM: [UInt8] = [0xEF, 0xBB, 0xBF]
 
-    /// Classifies a file by its first 8 KB, in order: the PDF signature,
-    /// then whether `TextFile.decode` reads the bytes as text, and binary
-    /// for everything else that could still be read.
+    /// Classifies a file by its first 8 KB, in order: the PDF signature, the
+    /// picture signatures, then whether `TextFile.decode` reads the bytes as
+    /// text, and binary for everything else that could still be read.
     static func classify(at url: URL) -> FileClass {
         guard let head = TextFile.head(of: url) else { return .unreadable }
         if isPDF(head) { return .pdf }
+        if isImage(head) { return .image }
         if TextFile.decode(head) != nil { return .text }
         return .binary
     }
@@ -285,5 +290,31 @@ enum FileSniff {
         var bytes = head
         if bytes.starts(with: utf8BOM) { bytes = bytes.dropFirst(utf8BOM.count) }
         return bytes.starts(with: pdfMagic)
+    }
+
+    /// What every picture Nota opens starts with. Each of these is long
+    /// enough not to be mistaken for the first line of a file of prose —
+    /// which is why `BM`, all a bitmap has, is not in the list and a `.bmp`
+    /// is known by its name instead.
+    private static let imageMagics: [[UInt8]] = [
+        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],   // PNG
+        [0xFF, 0xD8, 0xFF],                                  // JPEG
+        Array("GIF87a".utf8), Array("GIF89a".utf8),          // GIF
+        [0x49, 0x49, 0x2A, 0x00], [0x4D, 0x4D, 0x00, 0x2A],  // TIFF, either way round
+    ]
+
+    /// The brands of the ISO container HEIC and its relatives use. They sit
+    /// four bytes in, after the box length, rather than at the front.
+    private static let heifBrands = ["heic", "heix", "hevc", "hevx", "mif1", "msf1"]
+
+    private static func isImage(_ head: Data) -> Bool {
+        let bytes = [UInt8](head.prefix(16))
+        if imageMagics.contains(where: bytes.starts(with:)) { return true }
+        // WebP is a RIFF container that says so in its fourth word.
+        if bytes.starts(with: Array("RIFF".utf8)), bytes.count >= 12,
+           Array(bytes[8..<12]) == Array("WEBP".utf8) { return true }
+        // HEIC and friends: `ftyp` and then the brand, both after the length.
+        guard bytes.count >= 12, Array(bytes[4..<8]) == Array("ftyp".utf8) else { return false }
+        return heifBrands.contains(String(decoding: bytes[8..<12], as: UTF8.self))
     }
 }

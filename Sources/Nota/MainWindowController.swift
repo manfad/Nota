@@ -178,7 +178,7 @@ final class MainWindowController: NSWindowController {
     /// How long the content in the preview column is in its own units, when
     /// it has any — a PDF's pages. `nil` whenever the editor's own words and
     /// characters are the answer, which is what puts them back.
-    private var previewPageCount: Int?
+    private var previewStatus: PreviewFooterStatus?
     /// Never shown: a stand-in used to measure a candidate string exactly as
     /// the real label would lay it out.
     private let countsRuler = NSTextField(labelWithString: "")
@@ -987,10 +987,10 @@ final class MainWindowController: NSWindowController {
     private func makeRestoredNote(from tab: SessionTab) -> Note {
         let fileURL = tab.path.map { URL(fileURLWithPath: $0) }
         // Asked before the file is read: `TextFile.read` says no to a binary,
-        // and a PDF read as a note that failed would come back as a dirty tab
-        // of nothing at all.
-        if let fileURL, isPDFAtRestore(fileURL) {
-            return makeRestoredPDFNote(from: tab, fileURL: fileURL)
+        // and a PDF or a picture read as a note that failed would come back
+        // as a dirty tab of nothing at all.
+        if let fileURL, let kind = viewerKindAtRestore(fileURL) {
+            return makeRestoredViewerNote(from: tab, fileURL: fileURL, kind: kind)
         }
         var text = store.readText(for: tab.id) ?? ""
         var isDirty = tab.isDirty
@@ -1024,24 +1024,28 @@ final class MainWindowController: NSWindowController {
         return note
     }
 
-    /// Whether a restored tab's file is a PDF: the bytes decide when the
-    /// file is still there, the same as `open(url:)` — so a session tab
-    /// named `report` that is really a PDF comes back as one. Once it is not
-    /// there to read at all, the name is what is left to go on, which is
-    /// what keeps a missing `.pdf`'s tab a PDF tab rather than an empty,
-    /// dirty text one.
-    private func isPDFAtRestore(_ url: URL) -> Bool {
+    /// Whether a restored tab's file is one Nota views rather than edits,
+    /// and which: the bytes decide when the file is still there, the same as
+    /// `open(url:)` — so a session tab named `report` that is really a PDF
+    /// comes back as one. Once it is not there to read at all, the name is
+    /// what is left to go on, which is what keeps a missing `.pdf`'s tab a
+    /// PDF tab rather than an empty, dirty text one.
+    private func viewerKindAtRestore(_ url: URL) -> NoteKind? {
         switch FileSniff.classify(at: url) {
-        case .pdf: true
-        case .unreadable: Note.isPDFFile(url)
-        case .text, .binary: false
+        case .pdf: NoteKind.pdf
+        case .image: NoteKind.image
+        case .unreadable: Note.viewerKind(url)
+        case .text, .binary: nil
         }
     }
 
-    /// A PDF tab coming back. There is no cache behind it and nothing to be
-    /// dirty about: the file is the whole of it, and a file that has gone
-    /// keeps its tab and says so in the pane. `selection` is the page.
-    private func makeRestoredPDFNote(from tab: SessionTab, fileURL: URL) -> Note {
+    /// A PDF or picture tab coming back. There is no cache behind it and
+    /// nothing to be dirty about: the file is the whole of it, and a file
+    /// that has gone keeps its tab and says so in the pane. `selection` is
+    /// the page, for the one that has pages.
+    private func makeRestoredViewerNote(
+        from tab: SessionTab, fileURL: URL, kind: NoteKind
+    ) -> Note {
         let note = Note(
             id: tab.id,
             fileURL: fileURL,
@@ -1049,7 +1053,7 @@ final class MainWindowController: NSWindowController {
             text: "",
             attributes: defaultAttributes,
             assets: store.assets,
-            kind: .pdf
+            kind: kind
         )
         note.selectionLocation = max(0, tab.selection)
         return note
@@ -1123,14 +1127,15 @@ final class MainWindowController: NSWindowController {
     }
 
     private func updateStatus() {
-        // A PDF has no words, characters, pictures or lines to speak of. How
-        // long it is, is how many pages — and where you are in it is which of
-        // them is in front. The content in the column is what says so; a
-        // render has nothing of its own to add, and the counts stand.
+        // A PDF has no words, characters, pictures or lines to speak of, and
+        // neither has a picture. How long a document is, is how many pages;
+        // how big a picture is, is how many pixels. The content in the column
+        // is what says so, already written out; a render has nothing of its
+        // own to add, and the counts stand.
         if let status = currentPreviewFooterStatus {
-            previewPageCount = status.pageCount
+            previewStatus = status
         } else {
-            previewPageCount = nil
+            previewStatus = nil
             let plain = currentNote?.text ?? ""
             let stripped = NoteText.strippingTokens(plain)
             counts = (
@@ -1148,9 +1153,9 @@ final class MainWindowController: NSWindowController {
     /// regions, so the middle sheds a whole segment — and finally its words —
     /// rather than truncating a phrase mid-way.
     private func updateCountsLabel() {
-        // A PDF's one count has nothing to shed: there is only ever the one
-        // way to write it.
-        let variants = previewPageCount.map { [TextStats.pageCounts($0)] }
+        // A viewer's one count has nothing to shed: there is only ever the
+        // one way to write it.
+        let variants = previewStatus.map { [$0.summary] }
             ?? TextStats.countVariants(
                 words: counts.words, characters: counts.characters,
                 images: counts.images, lines: counts.lines,
@@ -1186,24 +1191,20 @@ final class MainWindowController: NSWindowController {
         return max(0, cursorLabel.frame.minX - 12 - leading)
     }
 
-    /// What the tab in front has to say about its own length and where you
-    /// are in it, when it has anything — a PDF's pages. The note asks, not
-    /// the column: which view is in front settles itself a moment later, and
-    /// the footer must not be a step behind it.
+    /// What the tab in front has to say about its own size and where you are
+    /// in it, when it has anything — a PDF's pages, a picture's pixels. The
+    /// note asks, not the column: which view is in front settles itself a
+    /// moment later, and the footer must not be a step behind it.
     private var currentPreviewFooterStatus: PreviewFooterStatus? {
         currentNote.flatMap { previewColumn.content(for: $0).footerStatus }
     }
 
     /// The caret's 1-based line and column, at the right of the footer.
     private func updateCursorPosition() {
-        if let pages = previewPageCount {
-            // Nothing to be on when there is no document to be in.
-            cursorLabel.stringValue = pages > 0
-                ? TextStats.pagePosition(
-                    current: (currentPreviewFooterStatus?.currentPage ?? 0) + 1,
-                    total: pages
-                )
-                : ""
+        if let status = previewStatus {
+            // Nothing to be on when there is no document to be in, and
+            // nowhere to be at all in a picture.
+            cursorLabel.stringValue = status.position ?? ""
             return
         }
         let text = (currentNote?.storage.string ?? "") as NSString
@@ -1579,19 +1580,22 @@ final class MainWindowController: NSWindowController {
             return
         }
         // The bytes decide what the file is before its name gets a say: a
-        // PDF opens as one and text opens as text, whatever it is called.
+        // PDF opens as one, a picture as one, and text opens as text,
+        // whatever any of them is called.
         switch FileSniff.classify(at: target) {
         case .pdf:
-            openAsPDF(target)
+            addTab(fileURL: target, kind: .pdf)
+        case .image:
+            addTab(fileURL: target, kind: .image)
         case .text:
             openAsText(target)
         case .binary:
-            // Not text, and no `%PDF-` at the front — but a file actually
-            // named for a PDF still gets a tab. PDFKit may yet parse it; if
-            // `PDFDocument` comes back `nil` that is the pane's own missing
-            // message, not this alert.
-            if Note.isPDFFile(target) {
-                openAsPDF(target)
+            // Not text, and none of the signatures — but a file actually
+            // named for a PDF or a picture still gets a tab. PDFKit or
+            // `NSImage` may yet make sense of it; if neither does, that is
+            // the pane's own missing message, not this alert.
+            if let kind = Note.viewerKind(target) {
+                addTab(fileURL: target, kind: kind)
             } else {
                 presentFailure("Couldn’t open “\(target.lastPathComponent)”.",
                                nil, detail: "Nota only opens text files.")
@@ -1601,14 +1605,9 @@ final class MainWindowController: NSWindowController {
             // permission — so the name is all that is left to say what it
             // was going to be.
             presentFailure("Couldn’t open “\(target.lastPathComponent)”.", nil,
-                           detail: Note.isPDFFile(target) ? nil : "Nota only opens text files.")
+                           detail: Note.viewerKind(target) != nil
+                               ? nil : "Nota only opens text files.")
         }
-    }
-
-    /// The one binary Nota opens, and it opens as a viewer: its own tab,
-    /// locked in reading, with PDFKit drawing the pages.
-    private func openAsPDF(_ target: URL) {
-        addTab(fileURL: target, kind: .pdf)
     }
 
     private func openAsText(_ target: URL) {

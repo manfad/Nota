@@ -140,6 +140,26 @@
 - Footer: the middle counts pages (`12 pages`, `1 page`), the right says which one (`Page 3 of 12`), and it is empty
   when there is no document to be in. Everything else in the chrome — the strip, the vim badge, zen — is unchanged.
 
+## Image tabs (decided 2026-09-04)
+- A picture opens in a tab of its own and is looked at there, the way a PDF is read in one: PNG, JPEG, GIF, TIFF,
+  WebP and HEIC, each known by the bytes it starts with, so a screenshot named `report` opens as a picture and a
+  `.png` that is really a log opens as text (see Model). A bitmap is the one exception, known by its name instead:
+  `BM` is two bytes, and two bytes is not enough to tell a picture from the first line of a sentence.
+- Where it lands is the drop target's business, not the file's. Through ⌘O, the Finder, the Dock, the command line,
+  `:e path` and the session it is a tab; dropped into the text of a note it is still what it has always been, a
+  picture imported into that note as a chip (see Images). The same `.png` does both, depending only on where it went.
+- The tab is locked in reading, exactly as a PDF's is: the picture takes the whole column, the editor stays collapsed,
+  there is no mode control in either corner, and ⇧⌘P, ⌥⇧⌘P and both View items are disabled.
+- Drawn by an `NSImageView` inside a scroll view, on the editor's own background, edge to edge. Its own size when the
+  column is big enough to hold it, shrunk to fit when it is not, centred either way, and never blown up past its own
+  pixels — a 16pt icon is a 16pt icon. A GIF animates.
+- Read, never written, the same as a PDF: never dirty, ⌘S and Save As disabled, nothing written to the cache, ⌘W with
+  no prompt. The picture is read once per tab and held, so switching back to it does not read the file again and does
+  not restart a GIF. A file that has gone keeps its tab and shows `Couldn't open "name.png".` in the editor's own font.
+- Footer: the middle is the picture's size in pixels (`1200 × 800`), taken from the file's own representation rather
+  than its points, and the right is empty — there is nowhere in a picture to be.
+- An `.svg` is not one of these. See the HTML preview above.
+
 ## LaTeX preview (decided 2026-09-03)
 - A `.tex` (`.latex`, `.ltx`) file is a tab with a render beside it, the way a `.md` is: the same three modes, the same
   floating mode control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the session.
@@ -188,6 +208,10 @@
 - No block sync: a DOM is not a list of source ranges, and a click in the page is a click in the page (links still
   open). ⌘F over the page is a Todo, the same as a PDF (see Todo 12).
 - Untitled notes and every other extension have no HTML preview. Save As to `.html` is what turns a note into one.
+- An `.svg` is the same arrangement (decided 2026-09-04): text you edit, a drawing beside it, the same pane and the
+  same three modes, and the View item says "SVG Preview". It is handed to WebKit as `image/svg+xml`, so the root
+  `<svg>` is the document rather than a tag inside a page the file never had. It is never one of the picture tabs
+  below — its bytes are text, and the system filing it under images does not make it one.
 - Shipped: `HTMLPreviewView` is the column's third content view. The editor's text is loaded under `nota-file://`, whose
   path is the file's own, and `PageFiles` hands WebKit the bytes for everything the page draws. A `file://` base URL does
   not work: WebKit's page process is given permission to read a folder only by `loadFileURL`, so text loaded against a

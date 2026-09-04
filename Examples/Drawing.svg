@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200" width="320" height="200">
+  <title>SVG in Nota</title>
+
+  <!-- An SVG is text, so it is a tab you edit, with the drawing beside it.
+       Change a number here and the drawing follows about 150 ms later. -->
+  <style>
+    .ground { fill: #1b1b1d; }
+    .bolt   { fill: #d98324; }
+    .label  { fill: #e8e8ea; font: 13px -apple-system, sans-serif; }
+    .quiet  { fill: #96969c; font: 10px ui-monospace, Menlo, monospace; }
+  </style>
+
+  <rect class="ground" x="0" y="0" width="320" height="200" rx="10"/>
+  <path class="bolt" transform="translate(24 60) scale(3.4)"
+        d="M13.5 1.5 4 13.2h6.1L9.4 22.5 20 10.2h-6.6z"/>
+
+  <text class="label" x="130" y="88">Live drawing</text>
+  <text class="quiet" x="130" y="108">⇧⌘P cycles the modes</text>
+  <text class="quiet" x="130" y="124">⌥⇧⌘P goes straight to reading</text>
+</svg>

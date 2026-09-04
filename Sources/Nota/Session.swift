@@ -121,6 +121,14 @@ enum TextStats {
         "\(pages) \(pages == 1 ? "page" : "pages")"
     }
 
+    /// `"1200 × 800"` — the middle of the footer for a picture tab. How big
+    /// it is, is the whole of what there is to say about it, and a picture is
+    /// measured in pixels the way a document is measured in pages. The
+    /// multiplication sign is the real one, not a letter x.
+    static func pixelSize(of size: NSSize) -> String {
+        "\(Int(size.width.rounded())) × \(Int(size.height.rounded()))"
+    }
+
     /// `"Page 3 of 12"` — the right of the footer for a PDF tab, in place of
     /// the caret's line and column. Both numbers are 1-based, the way the
     /// page they name is printed.

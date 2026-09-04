@@ -11,6 +11,11 @@ import WebKit
 /// the only honest preview of it is the page itself. So this is a `WKWebView`
 /// and nothing more — the same argument PDFKit wins for a PDF.
 ///
+/// An `.svg` is the same arrangement: text you edit, a drawing beside it, and
+/// WebKit is what draws it. The only difference is the type it is handed over
+/// as, so that the root `<svg>` is the document rather than a tag inside a
+/// page it never asked for.
+///
 /// It is a view of the note beside it, not of the file on disk: the editor's
 /// text is what is loaded, so unsaved edits are the page. Relative URLs
 /// resolve beside the file, which is why the page is loaded against the
@@ -142,10 +147,11 @@ final class HTMLPreviewView: NSView, PreviewContent {
     /// brings the column back loads on the way in.
     func show(_ note: Note, in context: PreviewContext) {
         guard context.isVisible else { return }
-        let key = LoadKey(noteID: note.id, text: note.text, filePath: note.fileURL?.path)
+        let key = LoadKey(noteID: note.id, text: note.text, filePath: note.fileURL?.path,
+                          isSVG: note.previewKind == .svg)
         guard loadedKey != key else { return }
         loadedKey = key
-        load(key, html: note.text)
+        load(key)
     }
 
     /// Throws the remembered page away, so the next ask loads a fresh one.
@@ -153,14 +159,27 @@ final class HTMLPreviewView: NSView, PreviewContent {
         loadedKey = nil
     }
 
-    private func load(_ key: LoadKey, html: String) {
+    private func load(_ key: LoadKey) {
         generation += 1
         loadCount += 1
         showingNoteID = key.noteID
         shownBaseURL = key.fileURL.flatMap(PageFiles.pageURL)
         // Against the file's own path rather than its folder's, so `style.css`
         // beside it resolves and an in-page `#` is the same document.
-        makeWebView().loadHTMLString(html, baseURL: shownBaseURL)
+        //
+        // A drawing is handed over as what it is. Loaded as HTML, an `.svg`
+        // would be parsed by the HTML rules — the root `<svg>` becomes an
+        // element inside a `<body>` the file never had — and half of what the
+        // file says would be read as something else. Given its own type, the
+        // drawing is the document.
+        let page = makeWebView()
+        guard key.isSVG else {
+            page.loadHTMLString(key.text, baseURL: shownBaseURL)
+            return
+        }
+        page.load(Data(key.text.utf8), mimeType: "image/svg+xml",
+                  characterEncodingName: "utf-8",
+                  baseURL: shownBaseURL ?? URL(fileURLWithPath: "/"))
     }
 
     /// What the page on screen was made from. The file's path is in it
@@ -170,6 +189,9 @@ final class HTMLPreviewView: NSView, PreviewContent {
         let noteID: UUID
         let text: String
         let filePath: String?
+        /// Whether the text is a drawing rather than a page — which changes
+        /// the type it is handed over as, and so what it parses into.
+        let isSVG: Bool
 
         /// The file the page is read against — its base URL, and the folder
         /// everything relative in it resolves from.

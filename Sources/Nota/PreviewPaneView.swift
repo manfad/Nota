@@ -24,6 +24,7 @@ final class PreviewPaneView: NSView {
         let latex: LaTeXPreviewView
         let html: HTMLPreviewView
         let pdf: PDFPreviewView
+        let image: ImagePreviewView
         let kind: PreviewContentKind
         var showsPDF: Bool { kind == .pdf }
     }
@@ -32,6 +33,7 @@ final class PreviewPaneView: NSView {
     private let latexContent = LaTeXPreviewView()
     private let htmlContent = HTMLPreviewView()
     private let pdfContent = PDFPreviewView()
+    private let imageContent = ImagePreviewView()
     private var currentKind: PreviewContentKind = .markdown
 
     /// The content on screen.
@@ -183,6 +185,7 @@ final class PreviewPaneView: NSView {
         case .latex: latexContent
         case .html: htmlContent
         case .pdf: pdfContent
+        case .image: imageContent
         }
     }
 
@@ -250,6 +253,6 @@ final class PreviewPaneView: NSView {
 
     var panes: Panes {
         Panes(markdown: markdownContent, latex: latexContent, html: htmlContent,
-              pdf: pdfContent, kind: currentKind)
+              pdf: pdfContent, image: imageContent, kind: currentKind)
     }
 }

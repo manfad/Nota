@@ -2,22 +2,26 @@ import AppKit
 
 /// Which of the preview column's content views a note is read through. The
 /// tab's own kind settles it and nothing else does: a render for text — the
-/// Markdown one or the LaTeX one, by what the file is spelled — the page
-/// itself for HTML, and the document for the one binary. A picture will add a
-/// case here, and this is the only place in the app that has to be told.
+/// Markdown one or the LaTeX one, by what the file is spelled — WebKit's page
+/// for HTML and for the drawing an SVG is, and the document or the picture
+/// for the two binaries. This is the only place in the app that has to be
+/// told.
 enum PreviewContentKind: Hashable {
-    case markdown, latex, html, pdf
+    case markdown, latex, html, pdf, image
 
     /// Every kind there is, in the order the column keeps them.
-    static let all: [PreviewContentKind] = [.markdown, .latex, .html, .pdf]
+    static let all: [PreviewContentKind] = [.markdown, .latex, .html, .pdf, .image]
 
     init(_ note: Note) {
-        if note.kind == .pdf {
-            self = .pdf
-        } else {
+        switch note.kind {
+        case .pdf: self = .pdf
+        case .image: self = .image
+        case .text:
             switch note.previewKind {
             case .latex: self = .latex
-            case .html: self = .html
+            // An SVG is a page WebKit draws, the same as an HTML file, and
+            // the same pane draws both.
+            case .html, .svg: self = .html
             case .markdown, nil: self = .markdown
             }
         }
@@ -25,14 +29,21 @@ enum PreviewContentKind: Hashable {
 }
 
 /// What the footer says about content the editor's own counts cannot speak
-/// for. A PDF is measured in pages rather than words, and where you are in it
-/// is which of them is in front. A Markdown render is a view of the note's own
-/// text, so it says nothing here and the words and characters stand.
+/// for. A PDF is measured in pages rather than words and a picture in pixels,
+/// and neither has a caret to report a line and column for. A Markdown render
+/// is a view of the note's own text, so it says nothing here and the words and
+/// characters stand.
+///
+/// Both halves are already written out, because only the content knows how it
+/// is counted: `"12 pages"` and `"1200 × 800"` are not the same measurement
+/// with a different unit.
 struct PreviewFooterStatus {
-    /// How long the content is, in whatever it is counted in.
-    let pageCount: Int
-    /// Where the reader is in it, counted from zero.
-    let currentPage: Int
+    /// What the middle of the footer says in place of the word counts.
+    let summary: String
+    /// What the right says in place of the caret's line and column, when the
+    /// content has somewhere to be at all. A picture is one page: there is
+    /// nowhere in it to be.
+    let position: String?
 }
 
 /// What the window hands a content view along with the note: the editor's own
