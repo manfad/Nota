@@ -44,11 +44,14 @@ enum PreviewMode: String, Codable, CaseIterable {
     }
 }
 
-/// Which of Nota's two renders a file gets, decided by how it is spelled and
-/// by nothing else. The grammars are different; everything around them — the
-/// three modes, the mode control, block sync, the find bar — is the same.
+/// Which preview a file gets beside its source, decided by how it is spelled
+/// and by nothing else. Everything around them — the three modes, the mode
+/// control, ⇧⌘P, the View items, the mode kept per tab — is the same for all
+/// three. What differs is what does the drawing: Nota's own renderer reads
+/// Markdown or LaTeX into its reading layout, and HTML is already a page, so
+/// WebKit draws it as it stands.
 enum RenderedPreviewKind {
-    case markdown, latex
+    case markdown, latex, html
 
     init?(fileExtension: String) {
         if fileExtension.caseInsensitiveCompare("md") == .orderedSame {
@@ -60,7 +63,27 @@ enum RenderedPreviewKind {
             self = .latex
             return
         }
+        // The page, not its parts: a `.css` or a `.js` beside it is source
+        // with nothing to preview.
+        for spelling in ["html", "htm"]
+        where fileExtension.caseInsensitiveCompare(spelling) == .orderedSame {
+            self = .html
+            return
+        }
         return nil
+    }
+
+    /// What the View menu's item calls itself on a tab of this kind. The item
+    /// is named for what is in front: a `.tex` tab is not offered a Markdown
+    /// preview, it is offered its own, and a `.html` tab is offered its page.
+    /// A tab with no preview at all keeps the plain name, since the item is
+    /// disabled there and only ever read greyed out.
+    static func previewMenuTitle(_ kind: RenderedPreviewKind?) -> String {
+        switch kind {
+        case .latex: "LaTeX Preview"
+        case .html: "HTML Preview"
+        case .markdown, nil: "Markdown Preview"
+        }
     }
 }
 
@@ -148,23 +171,25 @@ final class Note {
         return untitledName ?? UntitledNaming.base
     }
 
-    /// Which render this tab has, if it has one at all. Only a saved file
-    /// spelled one of the two ways does. Nota still edits any text file, but
+    /// Which preview this tab has, if it has one at all. Only a saved file
+    /// spelled one of the three ways does. Nota still edits any text file, but
     /// every other format keeps the full workspace for source.
     var previewKind: RenderedPreviewKind? {
         fileURL.flatMap(Note.previewKind)
     }
 
-    /// Whether the tab has a render beside its source.
+    /// Whether the tab has a preview beside its source.
     var supportsRenderedPreview: Bool { previewKind != nil }
 
     /// Whether the tab has anything at all to put in the preview column: a
-    /// render for a saved `.md` or `.tex`, the document for a PDF. A `.txt`
-    /// and an untitled note have neither, so no mode means anything there.
+    /// render for a saved `.md` or `.tex`, the page for a `.html`, the
+    /// document for a PDF. A `.txt` and an untitled note have none of them, so
+    /// no mode means anything there.
     var hasPreviewContent: Bool { kind == .pdf || supportsRenderedPreview }
 
     /// The same rule, for a file that has no note behind it yet — what the
-    /// "open Markdown and LaTeX files in reading mode" setting asks about.
+    /// "open Markdown, LaTeX and HTML files in reading mode" setting asks
+    /// about.
     ///
     /// This is the one question in Nota that stays by extension on purpose:
     /// what a file *is* — text, PDF, binary — comes from its bytes, but what

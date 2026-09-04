@@ -205,8 +205,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let mode = activeController?.previewMode ?? .off
         if menuItem.action == #selector(toggleMarkdownPreview(_:)) {
             menuItem.state = mode == .off ? .off : .on
-            menuItem.title = activeController?.currentRenderedPreviewKind == .latex
-                ? "LaTeX Preview" : "Markdown Preview"
+            menuItem.title = RenderedPreviewKind.previewMenuTitle(
+                activeController?.currentRenderedPreviewKind
+            )
             return activeController?.canShowRenderedPreview ?? false
         }
         if menuItem.action == #selector(toggleReadingMode(_:)) {

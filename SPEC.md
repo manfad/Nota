@@ -188,6 +188,12 @@
 - No block sync: a DOM is not a list of source ranges, and a click in the page is a click in the page (links still
   open). ⌘F over the page is a Todo, the same as a PDF (see Todo 12).
 - Untitled notes and every other extension have no HTML preview. Save As to `.html` is what turns a note into one.
+- Shipped: `HTMLPreviewView` is the column's third content view. The editor's text is loaded under `nota-file://`, whose
+  path is the file's own, and `PageFiles` hands WebKit the bytes for everything the page draws. A `file://` base URL does
+  not work: WebKit's page process is given permission to read a folder only by `loadFileURL`, so text loaded against a
+  file URL renders with every stylesheet and picture beside it silently missing. A link the reader clicks becomes a
+  `file://` URL again on its way to the browser. The page reports its own scroll on each frame, so a reload puts the
+  reader back where they were.
 
 ## Workspace (decided 2026-09-03, refactor before the LaTeX preview)
 - The window controller has exactly one editor pane and one preview pane and talks to nothing inside them by name. The

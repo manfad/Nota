@@ -2,20 +2,24 @@ import AppKit
 
 /// Which of the preview column's content views a note is read through. The
 /// tab's own kind settles it and nothing else does: a render for text — the
-/// Markdown one or the LaTeX one, by what the file is spelled — and the
-/// document for the one binary. A picture will add a case here, and this is
-/// the only place in the app that has to be told.
+/// Markdown one or the LaTeX one, by what the file is spelled — the page
+/// itself for HTML, and the document for the one binary. A picture will add a
+/// case here, and this is the only place in the app that has to be told.
 enum PreviewContentKind: Hashable {
-    case markdown, latex, pdf
+    case markdown, latex, html, pdf
 
     /// Every kind there is, in the order the column keeps them.
-    static let all: [PreviewContentKind] = [.markdown, .latex, .pdf]
+    static let all: [PreviewContentKind] = [.markdown, .latex, .html, .pdf]
 
     init(_ note: Note) {
         if note.kind == .pdf {
             self = .pdf
         } else {
-            self = note.previewKind == .latex ? .latex : .markdown
+            switch note.previewKind {
+            case .latex: self = .latex
+            case .html: self = .html
+            case .markdown, nil: self = .markdown
+            }
         }
     }
 }
@@ -42,7 +46,7 @@ struct PreviewContext {
 }
 
 /// One thing the preview column can hold: the Markdown render, the LaTeX
-/// render, a PDF, and in time a picture.
+/// render, an HTML page, a PDF, and in time a picture.
 ///
 /// The window controller has one editor pane and one preview pane. It asks
 /// the pane for the content the tab in front needs and says everything else

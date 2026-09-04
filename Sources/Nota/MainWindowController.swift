@@ -2087,8 +2087,8 @@ extension MainWindowController {
     /// no other way to tell a 0.2s slide from a snap.
     var isSlidingPreviewMode: Bool { previewModeIsSliding }
 
-    /// Whether the front tab has a render at all. Only a saved `.md` or
-    /// `.tex` file does; every other note keeps the whole window for its
+    /// Whether the front tab has a preview at all. Only a saved `.md`, `.tex`
+    /// or `.html` file does; every other note keeps the whole window for its
     /// source.
     var canShowRenderedPreview: Bool { currentNote?.supportsRenderedPreview ?? false }
 

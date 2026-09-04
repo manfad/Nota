@@ -28,7 +28,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let sidebarSidePopUp = NSPopUpButton()
     private let plainTextImageStylePopUp = NSPopUpButton()
     private let readingModeCheckbox = NSButton(
-        checkboxWithTitle: "Open Markdown and LaTeX files in reading mode", target: nil, action: nil
+        checkboxWithTitle: "Open Markdown, LaTeX and HTML files in reading mode",
+        target: nil, action: nil
     )
     private let vimModeCheckbox = NSButton(checkboxWithTitle: "Vim mode", target: nil, action: nil)
     private let footerCheckboxes: [(TextStats.Segment, NSButton)] = [

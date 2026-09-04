@@ -1,0 +1,64 @@
+/* The page's own stylesheet, beside the page. Nota loads it from here, which
+   is the whole point of the file: a preview that did not would be showing you
+   a different page from the one a browser will. */
+
+:root {
+    color-scheme: light dark;
+    --ink: #1c1c1e;
+    --paper: #fdfdfb;
+    --quiet: #6b6b70;
+    --bolt: #d98324;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --ink: #e8e8ea;
+        --paper: #1b1b1d;
+        --quiet: #96969c;
+    }
+}
+
+body {
+    margin: 0 auto;
+    max-width: 34rem;
+    padding: 3rem 1.5rem 6rem;
+    background: var(--paper);
+    color: var(--ink);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
+
+h1 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.25rem;
+    font-size: 1.9rem;
+    letter-spacing: -0.02em;
+}
+
+h1 img { width: 1.1em; height: 1.1em; }
+
+h2 {
+    margin: 2.5rem 0 0.5rem;
+    font-size: 1.15rem;
+    color: var(--bolt);
+}
+
+p.standfirst { margin-top: 0; color: var(--quiet); }
+
+a { color: var(--bolt); }
+
+code {
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--quiet) 18%, transparent);
+    font: 0.88em ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid color-mix(in srgb, var(--quiet) 30%, transparent);
+    color: var(--quiet);
+    font-size: 0.85rem;
+}

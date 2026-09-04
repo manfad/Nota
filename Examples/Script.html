@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Script in Nota</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0;
+    padding: 2rem;
+    font: 16px/1.5 -apple-system, "Helvetica Neue", sans-serif;
+    background: #0f1117;
+    color: #e6e6e6;
+  }
+  h1 { margin: 0 0 .25rem; font-size: 2rem; }
+  h1 span { color: #ffd23f; }
+  .muted { color: #8b90a0; }
+  .card {
+    margin-top: 1.5rem;
+    padding: 1rem 1.25rem;
+    border: 1px solid #262a36;
+    border-radius: 10px;
+    background: #161923;
+  }
+  button {
+    font: inherit;
+    padding: .4rem .9rem;
+    border: 1px solid #3a3f52;
+    border-radius: 6px;
+    background: #1f2330;
+    color: #e6e6e6;
+    cursor: pointer;
+  }
+  button:hover { border-color: #ffd23f; }
+  #count { font-variant-numeric: tabular-nums; color: #ffd23f; }
+  #bar {
+    height: 6px;
+    margin-top: .75rem;
+    border-radius: 3px;
+    background: #262a36;
+    overflow: hidden;
+  }
+  #bar div {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, #ffd23f, #ff7a1a);
+    transition: width .3s ease;
+  }
+  code { color: #ffd23f; }
+</style>
+</head>
+<body>
+
+<h1><span>⚡</span> Script in Nota</h1>
+<p class="muted">Everything on this page is inside the file: the styles above, the script below, nothing beside it.</p>
+
+<div class="card">
+  <p>Loaded at <strong id="when">…</strong>, and it is <strong id="now">…</strong> right now.</p>
+  <p>
+    <button id="more">Click me</button>
+    &nbsp; clicked <strong id="count">0</strong> times
+  </p>
+  <div id="bar"><div></div></div>
+</div>
+
+<div class="card">
+  <p>Edit the <code>&lt;style&gt;</code> block in the editor: change <code>#ffd23f</code> to another colour and the page follows about 150 ms after you stop typing.</p>
+  <p>Edit the <code>&lt;script&gt;</code> too. Each reload runs it again from the top, so the counter starts over while the scroll stays where it was.</p>
+</div>
+
+<script>
+  const stamp = () => new Date().toLocaleTimeString();
+  document.getElementById('when').textContent = stamp();
+  setInterval(() => { document.getElementById('now').textContent = stamp(); }, 1000);
+
+  let count = 0;
+  const label = document.getElementById('count');
+  const fill = document.querySelector('#bar div');
+  document.getElementById('more').addEventListener('click', () => {
+    count += 1;
+    label.textContent = count;
+    fill.style.width = Math.min(count * 10, 100) + '%';
+  });
+</script>
+
+</body>
+</html>
