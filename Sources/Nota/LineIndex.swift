@@ -17,11 +17,28 @@ import Foundation
 /// has its carriage returns sitting at the ends of the lines, and a lone CR
 /// is not a line break at all.
 struct LineIndex: Equatable {
-    /// The offset of the first character of each line, ascending.
-    private(set) var starts: [Int]
+    /// The line starts — but only up to `pivot`. From there on each one is
+    /// stored short by `shift`, the move the last edit made and never paid
+    /// for. See `apply`: paying it costs a pass over every line below the
+    /// edit, and a typist who stays on one line would pay it again for every
+    /// character. Nothing outside this file sees the arrangement; `start`
+    /// hands out the real number.
+    private var table: [Int]
+    private var pivot: Int
+    private var shift: Int
+
     /// The length of the text the table was built from, in UTF-16 units —
     /// kept so a line can name its own range without asking the text again.
     private(set) var length: Int
+
+    /// The offset of the first character of each line, ascending, with the
+    /// shift paid off — what the table means, for whoever wants the lot.
+    var starts: [Int] {
+        guard shift != 0 else { return table }
+        var all = table
+        for index in pivot..<all.count { all[index] += shift }
+        return all
+    }
 
     /// How much text is pulled out of the string at a time while scanning.
     /// Big enough that `getCharacters` is called a handful of times per
@@ -30,17 +47,33 @@ struct LineIndex: Equatable {
 
     /// An empty text: one line, starting at 0.
     init() {
-        starts = [0]
+        table = [0]
+        pivot = 1
+        shift = 0
         length = 0
     }
 
     init(_ text: NSString) {
-        starts = [0]
+        table = [0]
+        pivot = 0
+        shift = 0
         length = text.length
-        starts.reserveCapacity(1 + length / 40)
+        table.reserveCapacity(1 + length / 40)
         Self.appendLineStarts(
-            of: text, in: NSRange(location: 0, length: length), into: &starts
+            of: text, in: NSRange(location: 0, length: length), into: &table
         )
+        pivot = table.count
+    }
+
+    /// Two tables are the same when they say the same thing, whatever either
+    /// is still carrying.
+    static func == (lhs: LineIndex, rhs: LineIndex) -> Bool {
+        lhs.length == rhs.length && lhs.starts == rhs.starts
+    }
+
+    /// Where a line really starts, shift and all.
+    private func start(_ index: Int) -> Int {
+        index < pivot ? table[index] : table[index] + shift
     }
 
     /// Every start a newline in `range` gives rise to, appended in order.
@@ -78,7 +111,7 @@ struct LineIndex: Equatable {
     }
 
     /// Hard lines, counting the empty one after a trailing newline.
-    var lineCount: Int { starts.count }
+    var lineCount: Int { table.count }
 
     /// The 1-based line holding `location`. Out-of-range locations are
     /// clamped, so a caret that has run past the end still names the last
@@ -87,26 +120,26 @@ struct LineIndex: Equatable {
         guard location > 0 else { return 1 }
         // The last line whose start is at or before `location`.
         var low = 0
-        var high = starts.count - 1
+        var high = table.count - 1
         while low < high {
             let middle = (low + high + 1) / 2
-            if starts[middle] <= location { low = middle } else { high = middle - 1 }
+            if start(middle) <= location { low = middle } else { high = middle - 1 }
         }
         return low + 1
     }
 
     /// Where a 1-based line begins.
     func lineStart(ofLine line: Int) -> Int {
-        starts[max(0, min(line - 1, starts.count - 1))]
+        start(max(0, min(line - 1, table.count - 1)))
     }
 
     /// A 1-based line's characters, including its trailing newline — the same
     /// span `NSString.lineRange(for:)` returns.
     func range(ofLine line: Int) -> NSRange {
-        let index = max(0, min(line - 1, starts.count - 1))
-        let start = starts[index]
-        let end = index + 1 < starts.count ? starts[index + 1] : length
-        return NSRange(location: start, length: max(0, end - start))
+        let index = max(0, min(line - 1, table.count - 1))
+        let from = start(index)
+        let to = index + 1 < table.count ? start(index + 1) : length
+        return NSRange(location: from, length: max(0, to - from))
     }
 
     // MARK: Keeping up with edits
@@ -119,6 +152,12 @@ struct LineIndex: Equatable {
     /// slides by `changeInLength`, and only the starts the edit itself covers
     /// have to be worked out again — so typing into the middle of a 200k-line
     /// CSV costs the line it was typed on, not the file.
+    ///
+    /// The sliding is the part that would still have cost the file, half of
+    /// it per keystroke. So it is not done: the move is remembered as a shift
+    /// owed by everything below the edit, and the next edit in the same place
+    /// — the next character typed — simply adds to it. Only an edit somewhere
+    /// else has to settle up first, once.
     mutating func apply(editedRange: NSRange, changeInLength delta: Int, in text: NSString) {
         let oldLength = editedRange.length - delta
         let oldEnd = editedRange.location + max(0, oldLength)
@@ -132,23 +171,34 @@ struct LineIndex: Equatable {
         var replacements: [Int] = []
         Self.appendLineStarts(of: text, in: editedRange, into: &replacements)
 
-        // Slide the tail before the splice, so the whole thing is one pass
-        // over the array rather than one per line.
-        if delta != 0 {
-            for index in last..<starts.count { starts[index] += delta }
-        }
-        starts.replaceSubrange(first..<last, with: replacements)
+        // The shift on hand is owed from `pivot` down. It can take this edit's
+        // move as well only if it is owed from exactly where this edit ends;
+        // anywhere else and it has to be paid off first.
+        if pivot != last { settleShift() }
+        table.replaceSubrange(first..<last, with: replacements)
+        pivot = first + replacements.count
+        shift += delta
         length += delta
+    }
+
+    /// Pay the shift into the table, so every start in it stands on its own
+    /// again.
+    private mutating func settleShift() {
+        if shift != 0 {
+            for index in pivot..<table.count { table[index] += shift }
+            shift = 0
+        }
+        pivot = table.count
     }
 
     /// The index of the first start strictly past `location`, or the end of
     /// the table when there is none.
     private func firstStart(after location: Int) -> Int {
         var low = 0
-        var high = starts.count
+        var high = table.count
         while low < high {
             let middle = (low + high) / 2
-            if starts[middle] <= location { low = middle + 1 } else { high = middle }
+            if start(middle) <= location { low = middle + 1 } else { high = middle }
         }
         return low
     }

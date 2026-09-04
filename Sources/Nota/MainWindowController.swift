@@ -182,6 +182,10 @@ final class MainWindowController: NSWindowController {
     /// The text a file was just opened from, kept only until the first count
     /// has taken it.
     private var openedText: (id: UUID, text: String)?
+    /// Where a big note's cache write goes. Serial on purpose: the writes
+    /// have to land in the order they were asked for, or a pause in the
+    /// typing could leave an older text on disk than the one before it.
+    private let cacheWrites = DispatchQueue(label: "com.nota.cache-write", qos: .utility)
     /// How long the content in the preview column is in its own units, when
     /// it has any — a PDF's pages. `nil` whenever the editor's own words and
     /// characters are the answer, which is what puts them back.
@@ -247,6 +251,12 @@ final class MainWindowController: NSWindowController {
         // swaps documents, and that lives on NSLayoutManager.
         let storage = NSTextStorage()
         let layoutManager = NSLayoutManager()
+        // A 100 MB log has millions of glyphs a screen will never show. Without
+        // this, `usedRect(for:)` — which sizing the text view and scrolling
+        // both lean on — lays out the whole document just to answer; with it,
+        // the height past what has been laid out is an estimate that firms up
+        // as scrolling brings more of the document into view.
+        layoutManager.allowsNonContiguousLayout = true
         let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
         storage.addLayoutManager(layoutManager)
@@ -754,6 +764,10 @@ final class MainWindowController: NSWindowController {
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
+        // The real answer is per tab — a `.log` gets no dictionary, a big note
+        // gets no dictionary regardless of its extension — and is set again in
+        // `installCurrentNote` once there is a note to ask. This default is
+        // only what a brand-new, empty text view starts out with.
         textView.isContinuousSpellCheckingEnabled = true
         textView.isGrammarCheckingEnabled = false
         textView.drawsBackground = true
@@ -914,7 +928,15 @@ final class MainWindowController: NSWindowController {
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude
         )
-        textView.layoutManager?.ensureLayout(for: container)
+        // `sizeToFit` asks the layout manager for the container's used rect,
+        // which — with `allowsNonContiguousLayout` — is happy to answer with
+        // an estimate for whatever is not laid out yet. Forcing full layout
+        // first, the way this used to, defeated that: a container switch or a
+        // word-wrap toggle on a big note would lay out the whole thing right
+        // here. Laying out only what is on screen is enough to make the used
+        // rect (and so the frame `sizeToFit` computes) correct for the part
+        // that matters; the rest firms up as the reader scrolls into it.
+        textView.layoutManager?.ensureLayout(forBoundingRect: scrollView.contentView.bounds, in: container)
         textView.sizeToFit()
         lineNumberRuler?.refresh()
     }
@@ -1102,6 +1124,11 @@ final class MainWindowController: NSWindowController {
         // keyboard does not. A PDF has no text behind it to type into either.
         textView.isEditable = note.isEditable
         vimEngine.isModifiable = note.isEditable
+        // A PDF or a picture has no dictionary to run either way; the policy
+        // itself already says no for anything that is not prose (by
+        // extension) and for anything past `BigFile.threshold`.
+        textView.isContinuousSpellCheckingEnabled =
+            SpellCheckPolicy.shouldCheck(url: note.fileURL, length: note.storage.length)
         // Temporary attributes belong to the layout manager, not the note, so
         // the highlights are laid on again for whatever is now in it.
         vimEngine.refreshSearchHighlights()
@@ -1197,16 +1224,17 @@ final class MainWindowController: NSWindowController {
         wordCountWorkItem = nil
         wordCountGeneration += 1
         let generation = wordCountGeneration
-        // A storage's own `string` is a live proxy onto it, and a proxy must
-        // not cross a thread. The text a file was just read from is already a
-        // string of its own, which saves copying a hundred megabytes back out
-        // of the storage a moment after it went in.
+        // What crosses the thread has to be a string of its own. Bridging a
+        // storage's `string` is that snapshot already — it copies on the way
+        // out, which `testSerializedTextIsASnapshot` pins — so nothing here
+        // copies it a second time. Better still is the text a file was just
+        // read from: already a string, and already in hand.
         let snapshot: String
         if let opened = openedText, opened.id == note.id {
             snapshot = opened.text
             openedText = nil
         } else {
-            snapshot = NSString(string: note.storage.string) as String
+            snapshot = note.storage.string
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -1287,11 +1315,11 @@ final class MainWindowController: NSWindowController {
             cursorLabel.stringValue = TextStats.position(in: "" as NSString, at: location)
             return
         }
-        // Through the line table: the line is a binary search and the column
-        // is the caret's own line, rather than a walk from the top of the file
-        // on every arrow key.
+        // Through the line table, and through the storage's own live view of
+        // its characters: the line is a binary search, the column is the
+        // caret's own line, and nothing is copied to find either.
         cursorLabel.stringValue = TextStats.position(
-            in: note.storage.string as NSString, at: location, using: note.lineIndex
+            in: note.storage.mutableString, at: location, using: note.lineIndex
         )
     }
 
@@ -1419,7 +1447,7 @@ final class MainWindowController: NSWindowController {
         if note.kind == .text, BigFile.isBig(length: note.storage.length) {
             openedText = (note.id, text)
         }
-        if note.writesToCache { store.writeText(note.text, for: note.id) }
+        writeCache(note)
         installCurrentNote()
         refreshTabs()
         updateStatus()
@@ -1616,10 +1644,14 @@ final class MainWindowController: NSWindowController {
         note.isDirty = false
         preferences.lastSaveDirectory = destination.deletingLastPathComponent()
         refreshTabs()
-        // Save As can change whether this tab is Markdown at all.
+        // Save As can change whether this tab is Markdown at all, and it can
+        // change whether it is prose — an untitled note is prose until it is
+        // given a name, and `Untitled` saved as `notes.log` is not.
         if note === currentNote {
             applyPreviewMode()
             updateModeControlOverlays()
+            textView.isContinuousSpellCheckingEnabled =
+                SpellCheckPolicy.shouldCheck(url: note.fileURL, length: note.storage.length)
         }
         flushAll()
         return true
@@ -1721,12 +1753,16 @@ final class MainWindowController: NSWindowController {
 
     // MARK: - Persistence
 
-    /// Debounced: fires ~300 ms after the last edit.
+    /// Debounced: fires ~300 ms after the last edit — 2 s for a big note,
+    /// since `flush` serializes and writes the whole thing to the cache, and
+    /// that must not land in the middle of the next keystroke.
     private func scheduleSave() {
         saveWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in self?.flush() }
         saveWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+        let isBig = currentNote.map { BigFile.isBig(length: $0.storage.length) } ?? false
+        let delay = isBig ? 2.0 : 0.3
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     /// Writes the visible tab's text plus `session.json`.
@@ -1735,7 +1771,7 @@ final class MainWindowController: NSWindowController {
         saveWorkItem = nil
         if let note = currentNote {
             rememberSelection(note)
-            if note.writesToCache { store.writeText(note.text, for: note.id) }
+            writeCache(note)
         }
         writeSessionFile()
     }
@@ -1745,8 +1781,38 @@ final class MainWindowController: NSWindowController {
         saveWorkItem?.cancel()
         saveWorkItem = nil
         currentNote.map(rememberSelection)
-        for note in notes where note.writesToCache { store.writeText(note.text, for: note.id) }
+        for note in notes { writeCache(note) }
         writeSessionFile()
+    }
+
+    /// One tab's text into the cache.
+    ///
+    /// The snapshot is taken here, on the main thread — that copy is what a
+    /// note *is*, and there is no getting round it. Writing it out is another
+    /// matter: a hundred megabytes through the file system is not something
+    /// the run loop can be asked for between keystrokes, so a big note's
+    /// write goes to the cache queue and the pause it would have caused goes
+    /// with it. An ordinary note is written where it always was, on the spot,
+    /// so the cache is already on disk when the next line of a test reads it.
+    ///
+    /// `session.json` stays on the main thread either way: it is small, and
+    /// it is the file that says which of these tabs exists at all.
+    private func writeCache(_ note: Note) {
+        guard note.writesToCache else { return }
+        let text = note.text
+        let id = note.id
+        guard BigFile.isBig(length: note.storage.length) else {
+            return store.writeText(text, for: id)
+        }
+        let store = store
+        cacheWrites.async { store.writeText(text, for: id) }
+    }
+
+    /// Waits for every cache write that has been asked for. The app calls it
+    /// on the way out, where a write still in the air would be a write lost;
+    /// nothing else has to, since the queue drains on its own.
+    func drainCacheWrites() {
+        cacheWrites.sync { }
     }
 
     /// Where the tab is, for the session to bring it back to: the caret in a
@@ -2649,14 +2715,19 @@ extension MainWindowController {
     /// Where a piece of the note sits in the editor's document.
     private func editorRect(for range: NSRange) -> NSRect? {
         guard let layoutManager = textView.layoutManager,
-              let container = textView.textContainer,
+              textView.textContainer != nil,
               let length = currentNote?.storage.length, length > 0
         else { return nil }
-        // Nothing below the last laid-out line has a rectangle yet, and a
-        // jump is usually to somewhere that has never been on screen.
-        layoutManager.ensureLayout(for: container)
+        // A jump is usually to somewhere that has never been on screen, so it
+        // has no rectangle yet — but only its own neighbourhood needs laying
+        // out to find one; a 100 MB note must not pay for the rest of itself
+        // just to answer where one line sits.
         let character = min(max(0, range.location), length - 1)
-        let glyph = layoutManager.glyphIndexForCharacter(at: character)
+        let characterRange = NSRange(location: character, length: 1)
+        layoutManager.ensureLayout(forCharacterRange: characterRange)
+        let glyph = layoutManager.glyphRange(
+            forCharacterRange: characterRange, actualCharacterRange: nil
+        ).location
         var rect = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
         rect.origin.y += textView.textContainerOrigin.y
         rect.origin.x += textView.textContainerOrigin.x

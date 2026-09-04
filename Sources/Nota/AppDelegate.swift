@@ -99,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         windows.flushAll()
+        windows.drainCacheWrites()
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

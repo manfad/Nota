@@ -188,12 +188,13 @@ final class Note {
         self.untitledName = untitledName
         self.format = format
         self.kind = kind
-        let rendered = NoteText.render(text, attributes: attributes, assets: assets)
-        self.storage = NSTextStorage(attributedString: rendered)
-        // Taken from the rendered string rather than from the storage: it is
-        // a plain immutable `NSString`, so the scan reads straight out of it
-        // instead of through the storage's live proxy.
-        self.lineIndex = LineIndex(rendered.string as NSString)
+        self.storage = NSTextStorage(
+            attributedString: NoteText.render(text, attributes: attributes, assets: assets)
+        )
+        // Read through `mutableString`, the storage's own live view of its
+        // characters. Bridging `storage.string` would copy the file — two
+        // hundred megabytes for a hundred-megabyte log — to scan it once.
+        self.lineIndex = LineIndex(storage.mutableString)
         observeEdits()
     }
 
@@ -213,10 +214,12 @@ final class Note {
                   let storage = notification.object as? NSTextStorage,
                   storage.editedMask.contains(.editedCharacters)
             else { return }
+            // The proxy again, and it matters most here: this runs on every
+            // character typed, and only the edited range is read out of it.
             self.lineIndex.apply(
                 editedRange: storage.editedRange,
                 changeInLength: storage.changeInLength,
-                in: storage.string as NSString
+                in: storage.mutableString
             )
         }
     }

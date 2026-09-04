@@ -95,7 +95,7 @@ final class LineNumberRulerView: NSRulerView {
     /// the plainest thing that works: nothing that matters for speed comes
     /// through here.
     private var hardLineCount: Int {
-        guard let text = textView?.string as NSString? else { return 1 }
+        guard let text = textView?.textStorage?.mutableString else { return 1 }
         var count = 1
         for index in 0..<text.length where text.character(at: index) == 0x0A { count += 1 }
         return count
@@ -123,10 +123,12 @@ final class LineNumberRulerView: NSRulerView {
 
         guard let textView,
               let layoutManager = textView.layoutManager,
-              let container = textView.textContainer
+              let container = textView.textContainer,
+              // The storage's own live view of its characters. `textView
+              // .string` bridges — a copy of the whole file, on every scroll
+              // frame — and every question asked of it here is about one line.
+              let text = textView.textStorage?.mutableString
         else { return }
-
-        let text = textView.string as NSString
         let origin = textView.textContainerOrigin
         let offset = convert(NSPoint.zero, from: textView).y + origin.y
 

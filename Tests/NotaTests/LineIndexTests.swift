@@ -113,6 +113,47 @@ final class LineIndexTests: XCTestCase {
         }
     }
 
+    /// Typing: one character after another in the same place, which is the
+    /// case the table keeps a shift on hand for. Nothing is settled between
+    /// keystrokes, so this is the path a rebuild has to agree with most.
+    func testTypingInOnePlaceAgreesWithARebuild() {
+        let storage = NSTextStorage(attributedString: NSAttributedString(
+            string: String(repeating: "a line of text\n", count: 200)
+        ))
+        var index = LineIndex(storage.mutableString)
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification,
+            object: storage, queue: nil
+        ) { notification in
+            guard let edited = notification.object as? NSTextStorage,
+                  edited.editedMask.contains(.editedCharacters)
+            else { return }
+            index.apply(
+                editedRange: edited.editedRange,
+                changeInLength: edited.changeInLength,
+                in: edited.mutableString
+            )
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        // Type a line in the middle, newline and all, then take half of it
+        // back out the way backspace does.
+        var caret = storage.length / 2
+        for character in "hello\nthere\n" {
+            storage.replaceCharacters(
+                in: NSRange(location: caret, length: 0), with: String(character)
+            )
+            caret += 1
+            XCTAssertEqual(index, LineIndex(storage.mutableString))
+        }
+        for _ in 0..<6 {
+            storage.replaceCharacters(in: NSRange(location: caret - 1, length: 1), with: "")
+            caret -= 1
+            XCTAssertEqual(index, LineIndex(storage.mutableString))
+        }
+        XCTAssertEqual(index.lineCount, TextStats.lineCount(storage.string))
+    }
+
     /// A few hundred random edits through a real text storage, checked against
     /// a rebuild after every one — the same three facts the note listens for,
     /// arriving the same way.
