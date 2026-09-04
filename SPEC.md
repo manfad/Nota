@@ -157,7 +157,10 @@
 - The tab is locked in reading: the document takes the whole column, the editor stays collapsed, and there is no mode
   control in either corner. ⇧⌘P, ⌥⇧⌘P and both View items do nothing there and are disabled — a PDF has no Markdown
   render to have a mode about.
-- Drawn by PDFKit (`PDFView`, auto-scaled, single page continuous, page breaks shown) on the same background the
+- A page fits the column's width but is never drawn past actual size (done 2026-09-04): `autoScales` is off and the
+  scale is `min(scaleFactorForSizeToFit, 1)`, refitted when the column changes size, so a portrait page in a wide
+  window is paper rather than 36pt type — a wider page still shrinks to fit, since that cap is one-sided.
+- Drawn by PDFKit (`PDFView`, single page continuous, page breaks shown) on the same background the
   editor and the render use, so the column does not change colour between a Markdown tab and a PDF one. No WebView
   and no dependency: PDFKit ships with macOS. The pages are pinned edge to edge rather than inset — `PDFView` scales
   and centres each page in the room it has, so an inset would shrink the paper rather than give the text a margin.

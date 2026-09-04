@@ -433,6 +433,47 @@ final class PDFTests: XCTestCase {
         XCTAssertTrue(bar.handles(.nextMatch))
     }
 
+    // MARK: - How big the page is drawn
+
+    /// A page smaller than the column is drawn at actual size, not blown up
+    /// to fill it. `autoScales` would have made this one 3×.
+    @MainActor
+    func testANarrowPageInAWideWindowIsDrawnAtActualSize() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makeTextPDF(pages: ["alpha beta"], named: "narrow.pdf",
+                                             in: try makeTemporaryDirectory(),
+                                             size: NSSize(width: 300, height: 400)))
+        let pane = controller.previewPanes.pdf
+        try XCTUnwrap(controller.window).layoutIfNeeded()
+
+        XCTAssertGreaterThan(pane.bounds.width, 600, "the column is much wider than the page")
+        XCTAssertGreaterThan(pane.scaleFactorToFit, 1.5,
+                             "autoScales would have drawn this page half again past actual size")
+        XCTAssertEqual(pane.scaleFactor, 1, accuracy: 0.001,
+                       "paper has a size of its own; past 100% it is being magnified")
+    }
+
+    /// A page wider than the column still shrinks to fit it — the cap is
+    /// one-sided, since a page that will not fit has to give way.
+    @MainActor
+    func testAWidePageInANarrowWindowIsShrunkToFit() throws {
+        let controller = try makeKeyController()
+        let window = try XCTUnwrap(controller.window)
+        window.setContentSize(NSSize(width: 700, height: 560))
+        window.layoutIfNeeded()
+        controller.open(url: try makeTextPDF(pages: ["alpha beta"], named: "wide.pdf",
+                                             in: try makeTemporaryDirectory(),
+                                             size: NSSize(width: 2400, height: 1200)))
+        window.layoutIfNeeded()
+        let pane = controller.previewPanes.pdf
+
+        XCTAssertLessThan(pane.bounds.width, 2400)
+        XCTAssertLessThan(pane.scaleFactor, 1, "it has to give way to fit")
+        XCTAssertGreaterThan(pane.scaleFactor, 0, "and it is still drawn")
+        XCTAssertLessThanOrEqual(2400 * pane.scaleFactor, pane.bounds.width + 1,
+                                 "the whole width of the page is in the column")
+    }
+
     // MARK: - Helpers
 
     @MainActor
@@ -550,9 +591,12 @@ final class PDFTests: XCTestCase {
     /// A real PDF with real extractable text, drawn rather than checked in:
     /// each string is laid into a page of a `CGPDFContext` with Core Text, so
     /// PDFKit reads back words rather than the blank paper `makePDF` writes.
-    private func makeTextPDF(pages: [String], named name: String, in directory: URL) throws -> URL {
+    private func makeTextPDF(
+        pages: [String], named name: String, in directory: URL,
+        size: NSSize = NSSize(width: 300, height: 400)
+    ) throws -> URL {
         let url = directory.appendingPathComponent(name)
-        var box = CGRect(x: 0, y: 0, width: 300, height: 400)
+        var box = CGRect(origin: .zero, size: size)
         let context = try XCTUnwrap(
             CGContext(url as CFURL, mediaBox: &box, nil), "the fixture has to be a real PDF"
         )

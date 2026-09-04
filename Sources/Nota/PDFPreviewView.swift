@@ -57,7 +57,11 @@ final class PDFPreviewView: NSView, PreviewContent {
         // second margin outside the page's own, with the paper shrinking to
         // pay for it.
         pdfView.translatesAutoresizingMaskIntoConstraints = false
-        pdfView.autoScales = true
+        // Not `autoScales`: that fits the page to the column whatever the
+        // column's width is, so a portrait page in a wide window is drawn
+        // half again past actual size and the type is enormous. The fit is
+        // done here instead, capped at 1.0 — see `fitPage`.
+        pdfView.autoScales = false
         pdfView.displayMode = .singlePageContinuous
         pdfView.displaysPageBreaks = true
         pdfView.backgroundColor = .textBackgroundColor
@@ -142,6 +146,10 @@ final class PDFPreviewView: NSView, PreviewContent {
             // being taken out, so the search goes with it.
             findSession.close()
             pdfView.document = document
+            // A fresh document is a fresh page size: the fit the last one
+            // was drawn at says nothing about this one.
+            fittedSize = .zero
+            fitPage()
         }
         pdfView.isHidden = document == nil
         missingLabel.isHidden = document != nil
@@ -152,6 +160,50 @@ final class PDFPreviewView: NSView, PreviewContent {
 
     /// How many pages there are, and none at all when there is no document.
     var pageCount: Int { pdfView.document?.pageCount ?? 0 }
+
+    // MARK: - How big the page is drawn
+
+    /// The column's size the page was last fitted to. A fit is worth doing
+    /// again when the column changes size and at no other time — in
+    /// particular not on every layout pass, which would undo a zoom the
+    /// reader asked for between two of them.
+    private var fittedSize = NSSize.zero
+
+    /// Fits the page to the column's width, but never draws it larger than
+    /// actual size.
+    ///
+    /// `autoScales` would fill the column with one page whatever that costs:
+    /// a 300pt-wide page in a 900pt column is drawn at 3×, which is a page of
+    /// 36pt type. Paper has a size of its own, and past 100% a PDF is being
+    /// magnified rather than read. Below it there is no choice — a page wider
+    /// than the column has to shrink or be cut off — so the cap is one-sided.
+    private func fitPage(force: Bool = false) {
+        guard pdfView.document != nil else { return }
+        let size = pdfView.bounds.size
+        guard size.width > 1, size.height > 1 else { return }
+        guard force || size != fittedSize else { return }
+        fittedSize = size
+        let fit = pdfView.scaleFactorForSizeToFit
+        guard fit > 0 else { return }
+        let scale = min(fit, 1)
+        // PDFView clamps what it is handed, and its floor is well above the
+        // scale a page much wider than the column needs.
+        if scale < pdfView.minScaleFactor { pdfView.minScaleFactor = scale }
+        pdfView.scaleFactor = scale
+    }
+
+    /// The column changed size, so the page is fitted to it again. A zoom the
+    /// reader asked for lives until then, which is as long as the width it
+    /// was asked at does.
+    override func layout() {
+        super.layout()
+        fitPage()
+    }
+
+    /// What the page is drawn at, and what `autoScales` would have drawn it
+    /// at — for the tests, which have to be able to say the cap did something.
+    var scaleFactor: CGFloat { pdfView.scaleFactor }
+    var scaleFactorToFit: CGFloat { pdfView.scaleFactorForSizeToFit }
 
     /// The page in front, counted from zero — what the footer says and what
     /// the session keeps. Setting it goes to that page; a page number past
