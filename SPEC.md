@@ -11,6 +11,9 @@
   except PDF, the one binary Nota opens, and it opens it as a viewer (see PDF).
 - Editing a named file only updates the cache; disk changes on ⌘S only. A named file keeps its extension, encoding
   (UTF-8 / UTF-16 / Latin-1 / Windows-1252 detected on open) and line endings (LF / CRLF) on save.
+- The footer shows a text note's own shape at the right of the counts, `UTF-8 · LF` (done 2026-09-04, see Todo 2):
+  clicking either half pops a menu to convert it, which marks the tab dirty for the next ⌘S. Empty over a PDF or a
+  picture, which has neither.
 - What a file *is* is read from its bytes first, not its name: `%PDF-` magic makes it a PDF, and otherwise whether
   it decodes as text makes it a note, whatever it is called — a `report` or `config` with no extension opens
   correctly, and a PDF named `notes` opens as a PDF. A file's name is only consulted when its bytes cannot say
@@ -380,8 +383,16 @@
 1. **External changes to an open file.** A named tab watches its file (DispatchSource on the fd); when it changes on disk
    and the tab is clean, reload silently; when dirty, mark the tab and offer Reload / Keep mine on the next focus
    (Notepad++ "file has been modified" without the modal storm). Missing file → the existing dirty behaviour.
-2. **Encoding and line endings in the status bar.** `UTF-8 · LF` at the right of the counts; click either for a menu that
-   converts (UTF-8 / UTF-16 / Latin-1 / Windows-1252; LF / CRLF). Conversion marks the tab dirty; ⌘S writes the new shape.
+2. **Encoding and line endings in the status bar (done 2026-09-04).** `UTF-8 · LF` at the right of the counts; click
+   either half for a menu that converts (UTF-8 / UTF-16 / Latin-1 / Windows-1252; LF / CRLF), the current one ticked.
+   Two clickable `NSTextField`s in the footer's own secondary-label look, read straight off `note.format` and rebuilt
+   whenever the front tab changes; picking another shape sets `note.format`, marks the tab dirty, and ⌘S writes the
+   new shape — `write(note:to:)` already read `note.format`, so nothing there had to change. UTF-16 is one menu item
+   for either byte order; converting to it gives the file a BOM (the only way `TextFile.decode` would ever recognise
+   it again), converting away from it drops one, consistent with what detection would produce for that shape. A
+   conversion the text cannot survive (`TextFile.canRepresent`, an emoji into Latin-1) is refused: the menu item is
+   disabled rather than offered, with a tool tip saying why, and the old encoding stands. Empty over a PDF or a
+   picture, which has no format of its own.
 3. **Go to line (done 2026-09-04).** ⌘L opens a pill in the find bar's own corner — the same `PillView` chrome, one
    row — taking `N` or `N:M` and moving the caret as you type, off the note's `LineIndex` rather than a scan. See the
    Search section above for what it does; `:N` still does it in vim, untouched.

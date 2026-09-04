@@ -7,6 +7,9 @@ enum LineEnding: String, Codable {
     case lf, crlf
 
     var characters: String { self == .crlf ? "\r\n" : "\n" }
+
+    /// What the footer's menu, and the footer itself, calls it.
+    var displayName: String { self == .crlf ? "CRLF" : "LF" }
 }
 
 /// Everything about a file that has to survive a round trip through the
@@ -19,6 +22,24 @@ struct TextFileFormat: Equatable {
 
     /// What a note that has never been a file is written in.
     static let `default` = TextFileFormat(encoding: .utf8, hadBOM: false, lineEnding: .lf)
+
+    /// The four encodings the footer's menu offers, in Todo 2's own order.
+    static let selectableEncodings: [String.Encoding] = [
+        .utf8, .utf16LittleEndian, .isoLatin1, .windowsCP1252,
+    ]
+
+    /// What the footer, and the menu that converts it, calls an encoding.
+    /// UTF-16 is offered as one item regardless of which byte order the file
+    /// is actually in, so both directions answer the same name here.
+    static func displayName(for encoding: String.Encoding) -> String {
+        switch encoding {
+        case .utf8: return "UTF-8"
+        case .utf16LittleEndian, .utf16BigEndian, .utf16: return "UTF-16"
+        case .isoLatin1: return "Latin-1"
+        case .windowsCP1252: return "Windows-1252"
+        default: return "Unknown"
+        }
+    }
 }
 
 extension TextFileFormat: Codable {
@@ -160,6 +181,14 @@ enum TextFile {
         widened.encoding = .utf8
         widened.hadBOM = false
         return (Data(broken.utf8), widened)
+    }
+
+    /// Whether `text` survives a trip through `encoding` unchanged — an `é`
+    /// in Windows-1252 does, an emoji does not. What the footer's menu asks
+    /// before it lets a conversion be picked, and `encode` itself never has
+    /// to widen from a shape the menu already refused.
+    static func canRepresent(_ text: String, in encoding: String.Encoding) -> Bool {
+        text.data(using: encoding) != nil
     }
 
     private static func byteOrderMark(for format: TextFileFormat) -> Data {

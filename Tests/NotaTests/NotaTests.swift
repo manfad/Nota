@@ -1392,6 +1392,100 @@ final class NotaTests: XCTestCase {
         XCTAssertFalse(footer.cursor.isHidden)
     }
 
+    // MARK: - Encoding and line endings in the footer (Todo 2)
+
+    /// A file's own shape, read straight back off the tab that opened it:
+    /// `Windows-1252 · CRLF` for a file that was that all along.
+    @MainActor
+    func testTheFooterShowsAFilesEncodingAndLineEndings() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeFooterFormatController(in: directory)
+        let url = directory.appendingPathComponent("windows.txt")
+        // "café\r\nbar" in Windows-1252: 0xE9 is é there.
+        try Data([0x63, 0x61, 0x66, 0xE9, 0x0D, 0x0A, 0x62, 0x61, 0x72]).write(to: url)
+
+        controller.open(url: url)
+
+        XCTAssertEqual(controller.footerRegions.encoding.stringValue, "Windows-1252 ·")
+        XCTAssertEqual(controller.footerRegions.lineEnding.stringValue, "CRLF")
+    }
+
+    /// Picking another shape from either menu converts the note, marks the
+    /// tab dirty, and ⌘S writes the bytes back in the new shape rather than
+    /// the one the file was opened in.
+    @MainActor
+    func testConvertingEncodingAndLineEndingMarksDirtyAndSavesTheNewShape() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeFooterFormatController(in: directory)
+        let url = directory.appendingPathComponent("windows.txt")
+        try Data([0x63, 0x61, 0x66, 0xE9, 0x0D, 0x0A, 0x62, 0x61, 0x72]).write(to: url)
+        controller.open(url: url)
+        XCTAssertFalse(controller.currentTabState.isDirty)
+
+        // The current one is ticked before anything is touched.
+        let encodingMenu = try XCTUnwrap(controller.encodingMenu())
+        let current = try XCTUnwrap(encodingMenu.items.first { $0.title == "Windows-1252" })
+        XCTAssertEqual(current.state, .on)
+
+        controller.convertEncoding(to: .utf8)
+        XCTAssertTrue(controller.currentTabState.isDirty)
+        XCTAssertEqual(controller.openNotes.last?.format.encoding, .utf8)
+        XCTAssertEqual(controller.footerRegions.encoding.stringValue, "UTF-8 ·")
+
+        controller.convertLineEnding(to: .lf)
+        XCTAssertEqual(controller.openNotes.last?.format.lineEnding, .lf)
+        XCTAssertEqual(controller.footerRegions.lineEnding.stringValue, "LF")
+
+        controller.saveCurrent(forcePanel: false)
+        XCTAssertFalse(controller.currentTabState.isDirty, "the save just made caught up with it")
+        let written = try Data(contentsOf: url)
+        XCTAssertEqual(written, Data("café\nbar".utf8))
+    }
+
+    /// Picking the note's own shape again — or the same encoding under
+    /// another name, UTF-16 while it is already UTF-16 the other way round —
+    /// is a no-op, not a dirtying no-change.
+    @MainActor
+    func testPickingTheSameShapeAgainDoesNothing() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeFooterFormatController(in: directory)
+        let url = directory.appendingPathComponent("big-endian.txt")
+        try (Data([0xFE, 0xFF]) + "hi".data(using: .utf16BigEndian)!).write(to: url)
+        controller.open(url: url)
+
+        controller.convertEncoding(to: .utf16LittleEndian)
+        XCTAssertEqual(controller.openNotes.last?.format.encoding, .utf16BigEndian,
+                       "UTF-16 is one menu item either way round")
+        XCTAssertFalse(controller.currentTabState.isDirty)
+
+        controller.convertLineEnding(to: .lf)
+        XCTAssertFalse(controller.currentTabState.isDirty, "the file had no CRLF to begin with")
+    }
+
+    /// An encoding the note's text cannot survive — an emoji into Latin-1 —
+    /// keeps the old encoding and is not even offered.
+    @MainActor
+    func testAnEncodingTheTextCannotHoldIsRefusedAndTheMenuItemIsDisabled() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeFooterFormatController(in: directory)
+        controller.newTab()
+        let window = try XCTUnwrap(controller.window)
+        let content = try XCTUnwrap(window.contentView)
+        let textView = try XCTUnwrap(descendant(of: content, ofType: NotaTextView.self))
+        textView.string = "rocket 🚀"
+
+        let menu = try XCTUnwrap(controller.encodingMenu())
+        let latin1 = try XCTUnwrap(menu.items.first { $0.title == "Latin-1" })
+        XCTAssertFalse(latin1.isEnabled, "an emoji cannot survive Latin-1")
+        XCTAssertNotNil(latin1.toolTip, "the quiet way of saying why")
+        let utf16 = try XCTUnwrap(menu.items.first { $0.title == "UTF-16" })
+        XCTAssertTrue(utf16.isEnabled, "UTF-16 holds anything Unicode does")
+
+        controller.convertEncoding(to: .isoLatin1)
+        XCTAssertEqual(controller.openNotes.last?.format.encoding, .utf8, "refused, not widened")
+        XCTAssertFalse(controller.currentTabState.isDirty, "nothing changed, so nothing to save")
+    }
+
     // MARK: - The command pane
 
     @MainActor
@@ -3314,6 +3408,16 @@ final class NotaTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         temporaryDirectories.append(directory)
         return directory
+    }
+
+    @MainActor
+    private func makeFooterFormatController(in directory: URL) throws -> MainWindowController {
+        _ = NSApplication.shared
+        let controller = MainWindowController(store: SessionStore(directory: directory))
+        let window = try XCTUnwrap(controller.window)
+        window.setContentSize(NSSize(width: 1000, height: 560))
+        window.layoutIfNeeded()
+        return controller
     }
 }
 

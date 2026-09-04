@@ -172,6 +172,35 @@ final class TextFileTests: XCTestCase {
         XCTAssertNil(TextFile.read(at: directory.appendingPathComponent("nope.txt")))
     }
 
+    // MARK: - The footer's menu (Todo 2)
+
+    func testTheFooterCallsEachEncodingWhatTodo2CallsIt() {
+        XCTAssertEqual(TextFileFormat.displayName(for: .utf8), "UTF-8")
+        XCTAssertEqual(TextFileFormat.displayName(for: .utf16LittleEndian), "UTF-16")
+        XCTAssertEqual(TextFileFormat.displayName(for: .utf16BigEndian), "UTF-16",
+                       "one menu item for either byte order")
+        XCTAssertEqual(TextFileFormat.displayName(for: .isoLatin1), "Latin-1")
+        XCTAssertEqual(TextFileFormat.displayName(for: .windowsCP1252), "Windows-1252")
+        XCTAssertEqual(TextFileFormat.selectableEncodings.map(TextFileFormat.displayName),
+                       ["UTF-8", "UTF-16", "Latin-1", "Windows-1252"])
+    }
+
+    func testCanRepresentRefusesWhatAnEncodingCannotHold() {
+        // An é is Latin-1 and Windows-1252 both; an emoji is neither.
+        XCTAssertTrue(TextFile.canRepresent("café", in: .isoLatin1))
+        XCTAssertTrue(TextFile.canRepresent("café", in: .windowsCP1252))
+        XCTAssertFalse(TextFile.canRepresent("rocket 🚀", in: .isoLatin1))
+        XCTAssertFalse(TextFile.canRepresent("rocket 🚀", in: .windowsCP1252))
+        // UTF-8 and UTF-16 hold anything Unicode does.
+        XCTAssertTrue(TextFile.canRepresent("rocket 🚀", in: .utf8))
+        XCTAssertTrue(TextFile.canRepresent("rocket 🚀", in: .utf16LittleEndian))
+    }
+
+    func testLineEndingDisplayNames() {
+        XCTAssertEqual(LineEnding.lf.displayName, "LF")
+        XCTAssertEqual(LineEnding.crlf.displayName, "CRLF")
+    }
+
     // MARK: - What counts as text
 
     func testTypesTheSystemKnowsAnswerForThemselves() throws {
