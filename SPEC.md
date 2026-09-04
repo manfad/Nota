@@ -11,6 +11,26 @@
   except PDF, the one binary Nota opens, and it opens it as a viewer (see PDF).
 - Editing a named file only updates the cache; disk changes on ⌘S only. A named file keeps its extension, encoding
   (UTF-8 / UTF-16 / Latin-1 / Windows-1252 detected on open) and line endings (LF / CRLF) on save.
+- **A named tab watches its file** (done 2026-09-04). Each note owns a `FileWatcher`: a `DispatchSource` on the file's
+  own descriptor *and* one on the folder holding it. Most editors save by writing a temporary file and renaming it
+  over the original, which leaves the first descriptor open on an inode nobody can reach again, so the file's watch is
+  opened afresh by name on every `.rename` / `.delete`, and the folder — where a rename into place shows up — is what
+  finds a file that is briefly not there. What counts as a change is the file's size and modification date together
+  (`FileStamp`), asked on the watcher's own queue as a filter and again on the main thread as the answer, so Nota's own
+  ⌘S — which records the stamp it has just made — never reloads itself, and a neighbouring file moving in the same
+  folder costs nothing.
+- A **clean** tab reloads silently: the file's text, the caret's offset and the scroll position kept as near as the new
+  text allows, `TextFileFormat` re-detected (a file rewritten as CRLF saves back as CRLF), and the undo history
+  dropped, since it is a list of ranges into text that is no longer there. A PDF and a picture reload the same way,
+  silently, since neither is ever dirty. A **dirty** tab reloads nothing: its tab wears a hairline ring round the
+  unsaved dot — the dot still says "unsaved", the ring says the file has moved as well — and the editor column's
+  bottom-trailing corner, the one ⌘F and ⌘L do not use, carries a `Pill.swift` bar: a `clock.arrow.circlepath` glyph,
+  `Changed on disk`, and the two quiet words `Reload` and `Keep mine`. Reload takes the file's text and clears dirty;
+  Keep mine dismisses, keeps the ring, and the next ⌘S writes over the file. The offer stands on the tab until it is
+  answered rather than being spent by being shown, so switching away and back still asks and a window coming forward
+  finds it already up; only a further change on disk raises it again. One offer per change, and never a modal. A file
+  that has gone is not a change at all — the missing-file behaviour below is untouched — and with more than one window
+  open only the window actually holding the tab reacts.
 - What a file *is* is read from its bytes first, not its name: `%PDF-` magic makes it a PDF, and otherwise whether
   it decodes as text makes it a note, whatever it is called — a `report` or `config` with no extension opens
   correctly, and a PDF named `notes` opens as a PDF. A file's name is only consulted when its bytes cannot say
@@ -377,9 +397,11 @@
   render's is frozen, or slide a snapshot of the editor and re-wrap once on landing.
 
 ## Todo (in rough priority)
-1. **External changes to an open file.** A named tab watches its file (DispatchSource on the fd); when it changes on disk
-   and the tab is clean, reload silently; when dirty, mark the tab and offer Reload / Keep mine on the next focus
-   (Notepad++ "file has been modified" without the modal storm). Missing file → the existing dirty behaviour.
+1. **External changes to an open file (done 2026-09-04).** A named tab watches its file — a `DispatchSource` on the
+   file's descriptor and one on its folder, so a temp-file-and-rename save is caught as well as a write in place.
+   Clean reloads silently, dirty is marked with a ring round its unsaved dot and offered Reload / Keep mine in a pill
+   in the editor column's bottom-trailing corner (Notepad++ "file has been modified" without the modal storm).
+   Missing file → the existing dirty behaviour. See the Model section for the whole of it.
 2. **Encoding and line endings in the status bar.** `UTF-8 · LF` at the right of the counts; click either for a menu that
    converts (UTF-8 / UTF-16 / Latin-1 / Windows-1252; LF / CRLF). Conversion marks the tab dirty; ⌘S writes the new shape.
 3. **Go to line (done 2026-09-04).** ⌘L opens a pill in the find bar's own corner — the same `PillView` chrome, one

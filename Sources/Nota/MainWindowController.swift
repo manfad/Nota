@@ -89,6 +89,13 @@ final class MainWindowController: NSWindowController {
         editor.isFieldEditor = true
         return editor
     }()
+    /// The offer a dirty tab whose file has changed under it gets: Reload, or
+    /// Keep mine. It stands in the editor column's bottom-trailing corner, so
+    /// it never has to argue with ⌘F and ⌘L for the other one.
+    private let externalChangePill = ExternalChangePill()
+    /// Fired once a watched file's change has been dealt with — reloaded, or
+    /// marked and offered. The tests wait on it; nothing in the app sets it.
+    var onExternalChangeForTesting: (() -> Void)?
     private var lineNumberRuler: LineNumberRulerView?
     private let tabBar = TabBarView()
     private lazy var imageSidebar = ImageSidebarView(topInset: 8)
@@ -579,6 +586,7 @@ final class MainWindowController: NSWindowController {
 
         installModeOverlay(editorModeOverlay, over: content)
         installFindBar(over: content)
+        installExternalChangePill(over: content)
         applyEditorInsets()
     }
 
@@ -622,6 +630,25 @@ final class MainWindowController: NSWindowController {
         goToLinePill.float(
             in: container, under: scrollView.topAnchor,
             gap: ModeControlOverlay.controlTopInset,
+            trailingInset: ModeControlOverlay.controlInset
+        )
+    }
+
+    /// The reload offer, in the editor column's other corner. Its bottom is
+    /// measured from the scroll view rather than the column, so it rides with
+    /// the text the way the find bar does.
+    private func installExternalChangePill(over container: NSView) {
+        externalChangePill.onReload = { [weak self] in self?.reloadFrontNoteFromDisk() }
+        externalChangePill.onKeepMine = { [weak self] in
+            // The buffer stands. The tab keeps its ring — the file really has
+            // moved — and the next ⌘S writes over it. The offer has been
+            // answered, so it does not come round again until the file does.
+            self?.currentNote?.externalChangeOffer = false
+            self?.externalChangePill.setShown(false)
+        }
+        externalChangePill.floatBottom(
+            in: container, above: scrollView.bottomAnchor,
+            gap: ModeControlOverlay.controlInset,
             trailingInset: ModeControlOverlay.controlInset
         )
     }
@@ -1084,6 +1111,7 @@ final class MainWindowController: NSWindowController {
     /// bring their text, their undo history and their cache files with them.
     private func adopt(_ adopted: [Note]) {
         notes = adopted
+        for note in notes { watchFile(of: note) }
         selectedIndex = 0
         finishRestore()
     }
@@ -1132,6 +1160,7 @@ final class MainWindowController: NSWindowController {
             format: format
         )
         note.isDirty = isDirty
+        watchFile(of: note)
         note.selectionLocation = max(0, min(tab.selection, note.storage.length))
         // A session written before the mode was per-tab says nothing, and
         // those tabs come back in the editor.
@@ -1171,6 +1200,7 @@ final class MainWindowController: NSWindowController {
             kind: kind
         )
         note.selectionLocation = max(0, tab.selection)
+        watchFile(of: note)
         return note
     }
 
@@ -1181,7 +1211,7 @@ final class MainWindowController: NSWindowController {
     }
 
     private func makeUntitledNote() -> Note {
-        Note(
+        let note = Note(
             id: UUID(),
             fileURL: nil,
             untitledName: UntitledNaming.nextName(existing: notes.map(\.title)),
@@ -1189,6 +1219,10 @@ final class MainWindowController: NSWindowController {
             attributes: defaultAttributes,
             assets: store.assets
         )
+        // Nothing to watch yet — but ⌘S will give it a file, and the watch
+        // starts itself then.
+        watchFile(of: note)
+        return note
     }
 
     // MARK: - Tabs
@@ -1204,6 +1238,8 @@ final class MainWindowController: NSWindowController {
         // line number belonged to that note's table just as much.
         findSession.close()
         goToLineSession.hide(restoring: false)
+        // The offer belongs to the tab being left, not to the corner.
+        externalChangePill.setShown(false, animated: false)
         textView.breakUndoCoalescing()
         // Whatever is selected belongs to the tab being left — a ⌘F match,
         // say — and it is a range into storage that is about to be swapped
@@ -1250,13 +1286,19 @@ final class MainWindowController: NSWindowController {
         updateModeControlOverlays()
         focusForPreviewMode()
         refreshPreviewContent()
+        // A tab coming to the front is a tab getting focus: if it was marked
+        // while it was behind, this is when it says so.
+        showExternalChangeOfferIfOwed()
     }
 
     /// Also re-asks whether the tab in front is Markdown: ⌘S is where an
     /// untitled note gets a name, and a `.txt` has no mode control.
     private func refreshTabs() {
         tabBar.setItems(
-            notes.map { TabBarItem(title: $0.title, isDirty: $0.isDirty) },
+            notes.map {
+                TabBarItem(title: $0.title, isDirty: $0.isDirty,
+                           hasExternalChange: $0.isDirty && $0.hasExternalChange)
+            },
             selectedIndex: selectedIndex
         )
         updateModeControlOverlays()
@@ -1535,6 +1577,7 @@ final class MainWindowController: NSWindowController {
             note = Note(id: UUID(), fileURL: fileURL, untitledName: nil,
                         text: text, attributes: defaultAttributes, assets: store.assets,
                         format: format, kind: kind)
+            watchFile(of: note)
         } else {
             note = makeUntitledNote()
         }
@@ -1626,6 +1669,9 @@ final class MainWindowController: NSWindowController {
     func attach(_ note: Note, at index: Int? = nil, select: Bool = true) {
         let target = min(max(index ?? notes.count, 0), notes.count)
         let hadNotes = !notes.isEmpty
+        // The note has come from another window, whose controller it was
+        // still reporting its file's changes to. From here it is this one's.
+        watchFile(of: note)
         notes.insert(note, at: target)
         // Two windows can each hold an `Untitled`; the one moving in takes
         // the next free name rather than doubling up in one strip.
@@ -1667,6 +1713,7 @@ final class MainWindowController: NSWindowController {
         }
 
         let wasSelected = index == selectedIndex
+        note.stopWatching()
         store.deleteText(for: note.id)
         notes.remove(at: index)
 
@@ -1740,6 +1787,14 @@ final class MainWindowController: NSWindowController {
         note.format = encoded.format
         note.fileURL = destination
         note.isDirty = false
+        // The file is now exactly what the tab holds, whoever else had
+        // written it: the offer and its ring go, and the stamp Nota has just
+        // made is recorded so the event this write sets off finds nothing
+        // moved and reloads nothing.
+        note.hasExternalChange = false
+        note.externalChangeOffer = false
+        note.recordDiskStamp()
+        if note === currentNote { externalChangePill.setShown(false) }
         preferences.lastSaveDirectory = destination.deletingLastPathComponent()
         refreshTabs()
         // Save As can change whether this tab is Markdown at all, and it can
@@ -1848,6 +1903,147 @@ final class MainWindowController: NSWindowController {
         alert.informativeText = detail ?? error?.localizedDescription ?? ""
         alert.runModal()
     }
+
+    // MARK: - External changes
+
+    /// Every note this window holds watches its own file; this is what the
+    /// window does about it. Set wherever a note arrives — opened, restored,
+    /// or moved in from another window — which is how, with several windows
+    /// open, only the one actually holding the tab reacts.
+    private func watchFile(of note: Note) {
+        note.onFileChanged = { [weak self, weak note] in
+            guard let self, let note else { return }
+            self.fileDidChangeOnDisk(note)
+        }
+    }
+
+    /// A watched file really has changed — the note's stamp said so before
+    /// this was called, which is what keeps Nota's own ⌘S from reloading
+    /// itself. What happens next is the tab's own business.
+    ///
+    /// A viewer and a clean note take the new bytes without a word: there is
+    /// nothing in either that is not on disk already. A note with edits of
+    /// its own is marked instead, and offered the choice the next time it is
+    /// what the reader is looking at.
+    private func fileDidChangeOnDisk(_ note: Note) {
+        defer { onExternalChangeForTesting?() }
+        guard notes.contains(where: { $0 === note }) else { return }
+        guard note.kind == .text else {
+            reloadViewer(note)
+            return
+        }
+        guard note.isDirty else {
+            reloadFromDisk(note)
+            return
+        }
+        note.hasExternalChange = true
+        note.externalChangeOffer = true
+        refreshTabs()
+        showExternalChangeOfferIfOwed()
+    }
+
+    /// A PDF or a picture whose file has been written again. It is never
+    /// dirty and there is nothing to ask about: the parsed document goes, and
+    /// the column reads the file afresh.
+    private func reloadViewer(_ note: Note) {
+        note.discardLoadedContent()
+        guard note === currentNote else { return }
+        previewColumn.content(for: note).invalidateRender()
+        refreshPreviewContent()
+        updateStatus()
+    }
+
+    /// The file's text, put into the tab in place of what was there, with the
+    /// caret and the scroll position kept as near as the new text allows —
+    /// the caret's offset clamped to the shorter of the two texts, and the
+    /// scroll held at the same point down the document unless the file has
+    /// grown shorter than that. The format is re-read as well: a file
+    /// rewritten as CRLF, or in another encoding, is saved back the way it is
+    /// now rather than the way it was opened.
+    ///
+    /// The undo history goes. It is a list of ranges into text that is no
+    /// longer there, and undoing over a reload would be undoing into another
+    /// file.
+    @discardableResult
+    private func reloadFromDisk(_ note: Note) -> Bool {
+        guard note.kind == .text, let url = note.fileURL,
+              let opened = TextFile.read(at: url) else { return false }
+        let isFront = note === currentNote
+        let caret = isFront ? textView.selectedRange().location : note.selectionLocation
+        let scrollOrigin = isFront ? scrollView.contentView.bounds.origin : .zero
+
+        if isFront { isSwappingNote = true }
+        note.storage.setAttributedString(
+            NoteText.render(opened.text, attributes: defaultAttributes, assets: store.assets)
+        )
+        note.format = opened.format
+        note.isDirty = false
+        note.hasExternalChange = false
+        note.externalChangeOffer = false
+        note.recordDiskStamp()
+        note.undoManager.removeAllActions()
+        note.selectionLocation = min(max(0, caret), note.storage.length)
+
+        if isFront {
+            textView.setSelectedRange(
+                NSRange(location: note.selectionLocation, length: 0)
+            )
+            isSwappingNote = false
+            externalChangePill.setShown(false)
+            restoreScroll(to: scrollOrigin)
+            lineNumberRuler?.refresh()
+            vimEngine.refreshSearchHighlights()
+            previewColumn.content(for: note).invalidateBlocks()
+            refreshPreviewContent()
+            updateStatus()
+            updateCursorPosition()
+            refreshImages(force: true)
+        }
+        writeCache(note)
+        refreshTabs()
+        flush()
+        return true
+    }
+
+    /// Puts the editor back where it was looking. The document may be shorter
+    /// than it was, so the offset is clamped to whatever room is left.
+    private func restoreScroll(to origin: NSPoint) {
+        guard let documentView = scrollView.documentView else { return }
+        let lowest = max(0, documentView.frame.height - scrollView.contentSize.height)
+        scrollView.contentView.scroll(
+            to: NSPoint(x: origin.x, y: min(max(0, origin.y), lowest))
+        )
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    /// Reload, pressed. The tab in front takes the file's text and stops
+    /// being dirty.
+    private func reloadFrontNoteFromDisk() {
+        externalChangePill.setShown(false)
+        guard let note = currentNote else { return }
+        reloadFromDisk(note)
+    }
+
+    /// The offer a marked tab is owed, put up whenever that tab is the one in
+    /// front of this window — which is what "the next time it gets focus"
+    /// comes to: a tab behind shows it when it is chosen, and a tab in front
+    /// of a window that is behind has it up already, waiting, for the moment
+    /// the window is looked at.
+    ///
+    /// The debt is not put down by showing it. It is put down by answering it
+    /// — Reload, Keep mine, a save, a reload — so a tab switched away from
+    /// and back to still asks, and only that. A further change on disk sets
+    /// the same flag again and changes nothing else, which is what keeps a
+    /// file being written every second from becoming a storm.
+    private func showExternalChangeOfferIfOwed() {
+        guard let note = currentNote, note.kind == .text,
+              note.isDirty, note.externalChangeOffer
+        else { return }
+        externalChangePill.setShown(true)
+    }
+
+    /// The offer, for the tests: whether it is up, and the two words to press.
+    var externalChangeOffer: ExternalChangePill { externalChangePill }
 
     // MARK: - Persistence
 

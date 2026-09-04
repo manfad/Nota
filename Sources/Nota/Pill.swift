@@ -100,6 +100,20 @@ class PillView: NSView {
         onVisibilityChange?(shown)
     }
 
+    /// The other corner: a pill that stands at the *bottom* of a column
+    /// rather than the top. Nothing stacks under it, so there is only ever
+    /// the one — the top-trailing corner is where the stack lives.
+    func floatBottom(in container: NSView, above bottom: NSLayoutYAxisAnchor,
+                     gap: CGFloat, trailingInset: CGFloat) {
+        container.addSubview(self)
+        NSLayoutConstraint.activate([
+            bottomAnchor.constraint(equalTo: bottom, constant: -gap),
+            trailingAnchor.constraint(
+                equalTo: container.trailingAnchor, constant: -trailingInset
+            ),
+        ])
+    }
+
     /// A pill that is away answers no clicks, whatever its layer is still
     /// fading through.
     override func hitTest(_ point: NSPoint) -> NSView? {

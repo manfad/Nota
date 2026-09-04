@@ -103,6 +103,13 @@ final class ImagePreviewView: NSView, PreviewContent {
         layoutImage()
     }
 
+    /// The file behind the picture has changed under the tab, so the picture
+    /// on screen is of a file that no longer exists in that shape. Forgetting
+    /// which path is showing is what makes the next `show` read it again.
+    func invalidateRender() {
+        shownPath = nil
+    }
+
     private func show(_ image: NSImage?, missingName: String?) {
         imageView.image = image
         scrollView.isHidden = image == nil
