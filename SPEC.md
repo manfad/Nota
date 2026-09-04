@@ -420,8 +420,10 @@
     does not lose the note: File › Bookmarks lists them and ⌘P's switcher offers them under the open tabs, and choosing
     one reopens the file where it was. Bookmarking an untitled note asks it to be saved first. A bookmark whose file has
     gone stays in the list greyed out until removed.
-14. **Copying maths out of the render.** A selection over a formula copies U+FFFC today; the plain-text flavour
-    should be the formula's `plainText` (`x²+α`), which the layout already keeps for accessibility.
+14. **Copying maths out of the render (done 2026-09-04).** `PreviewTextView.writeSelection` overrides the `.string`
+    flavour: `forEachAttachmentRun` walks the selection and swaps each `MathAttachment` for its formula's `plainText`,
+    leaving every other character — and the rich flavours, which already carry the formula as a real image — as they
+    were.
 15. **Tab strip, Chromium style (after the LaTeX preview; design agreed 2026-09-03 with a second reviewer).** Every
     tab shows a leading icon: the SF Symbol `text.page` for every kind today (done), per-kind artwork later. Then, in
     this order:
