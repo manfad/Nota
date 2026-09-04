@@ -3,6 +3,10 @@ import AppKit
 struct TabBarItem {
     var title: String
     var isDirty: Bool
+    /// The file behind this tab has changed on disk while the tab had edits
+    /// of its own. Drawn as a hairline ring round the unsaved dot — the dot
+    /// still says "unsaved", the ring says "and the file has moved".
+    var hasExternalChange: Bool = false
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -228,6 +232,12 @@ final class TabBarView: NSView {
 
     /// Test hook: the titles in their current display order.
     internal var titlesForTesting: [String] { items.map(\.title) }
+
+    /// What each tab is saying about itself, for the tests: unsaved edits,
+    /// and whether the file behind it has changed on disk under them.
+    internal var marksForTesting: [(isDirty: Bool, hasExternalChange: Bool)] {
+        items.map { ($0.isDirty, $0.hasExternalChange) }
+    }
 
     /// Test hook: whether the tab at `index` shows the leading file icon
     /// (the same placeholder symbol for every kind, until per-type artwork
@@ -960,6 +970,7 @@ private final class TabItemView: NSView {
 
     private var title = ""
     private var isDirty = false
+    private var hasExternalChange = false
     private var isSelected = false
     private var isHovered = false
     private var isHoveringClose = false
@@ -1016,6 +1027,8 @@ private final class TabItemView: NSView {
     func configure(_ item: TabBarItem, isSelected: Bool) {
         title = item.title
         isDirty = item.isDirty
+        hasExternalChange = item.hasExternalChange
+        dotView.showsRing = item.hasExternalChange
         self.isSelected = isSelected
         toolTip = item.title
         updateSlot(animated: false)
@@ -1255,13 +1268,22 @@ private final class TabItemView: NSView {
         // corner of the icon.
         if isCompact, isDirty {
             let diameter = Self.compactDotDiameter
-            NSColor.tertiaryLabelColor.setFill()
-            NSBezierPath(ovalIn: NSRect(
+            let dot = NSRect(
                 x: iconRect.maxX - diameter + 1,
                 y: iconRect.minY - 1,
                 width: diameter,
                 height: diameter
-            )).fill()
+            )
+            NSColor.tertiaryLabelColor.setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            // The file has moved under the edits: the same ring the roomy
+            // slot draws, round the smaller dot.
+            if hasExternalChange {
+                let ring = NSBezierPath(ovalIn: dot.insetBy(dx: -2, dy: -2))
+                ring.lineWidth = 1
+                NSColor.tertiaryLabelColor.setStroke()
+                ring.stroke()
+            }
         }
     }
 
@@ -1327,6 +1349,18 @@ private final class TabIconView: NSImageView {
 /// The unsaved-changes dot. Transparent to the mouse, so clicking it selects
 /// the tab rather than doing nothing.
 private final class DirtyDotView: NSView {
+    /// The file behind this tab has changed on disk under the unsaved edits:
+    /// a hairline ring round the dot. Distinct from the dot on its own at a
+    /// glance, and quiet enough to belong in a strip that has no colour in it
+    /// — the dot still says "unsaved", and the ring says the file has moved
+    /// as well.
+    var showsRing = false {
+        didSet {
+            guard showsRing != oldValue else { return }
+            needsDisplay = true
+        }
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1339,6 +1373,18 @@ private final class DirtyDotView: NSView {
         )
         NSColor.tertiaryLabelColor.setFill()
         NSBezierPath(ovalIn: rect).fill()
+
+        guard showsRing else { return }
+        let ringDiameter: CGFloat = 12
+        let ring = NSBezierPath(ovalIn: NSRect(
+            x: (bounds.width - ringDiameter) / 2,
+            y: (bounds.height - ringDiameter) / 2,
+            width: ringDiameter,
+            height: ringDiameter
+        ).insetBy(dx: 0.5, dy: 0.5))
+        ring.lineWidth = 1
+        NSColor.tertiaryLabelColor.setStroke()
+        ring.stroke()
     }
 }
 

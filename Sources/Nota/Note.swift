@@ -115,8 +115,14 @@ enum NoteKind {
 final class Note {
     let id: UUID
     /// The user's real file. `nil` until the note has been saved once.
+    /// Being given one — by an open, or by Save As — is what starts the note
+    /// watching it.
     var fileURL: URL? {
-        didSet { if fileURL != nil { untitledName = nil } }
+        didSet {
+            if fileURL != nil { untitledName = nil }
+            guard fileURL != oldValue else { return }
+            startWatching()
+        }
     }
     /// Display name while the note has no file (`Untitled`, `Untitled 2`, …).
     var untitledName: String?
@@ -131,6 +137,19 @@ final class Note {
         set { hasUnsavedEdits = newValue }
     }
     private var hasUnsavedEdits = false
+    /// The file has changed on disk under a tab that has edits of its own.
+    /// The strip draws a hairline ring round the unsaved dot for it, and it
+    /// stays until the tab is either saved over the file or reloaded from it
+    /// — "Keep mine" puts the offer down, not the fact.
+    var hasExternalChange = false
+    /// An offer this tab is owed: a change has been marked, and the bar with
+    /// Reload and Keep mine on it stands in the editor column whenever this
+    /// tab is the one in front. Answering it — either word, a save, a reload
+    /// — is what puts it down; showing it is not, so a tab switched away from
+    /// and back to still asks. One offer per change either way: a further
+    /// change sets the same flag and nothing more.
+    var externalChangeOffer = false
+
     /// A `:help`, `:reg` or `:marks` tab: read-only, and never written to the
     /// cache or brought back on relaunch. It is a view of something, not a
     /// note, so nothing about it is worth keeping.
@@ -185,6 +204,18 @@ final class Note {
     private var loadedImage: NSImage?
     private var hasLoadedImage = false
 
+    /// The watch on `fileURL`, while there is a file to watch.
+    private var watcher: FileWatcher?
+    /// What the file looked like the last time Nota read or wrote it. The
+    /// watch is compared against this: a stamp that has not moved is Nota's
+    /// own save coming back round, or a neighbour in the same folder, and
+    /// neither is a change to this note.
+    private(set) var diskStamp: FileStamp?
+    /// Run on the main queue when the file behind this note really has
+    /// changed. The window holding the tab sets it — which is how, with more
+    /// than one window open, only that window reacts.
+    var onFileChanged: (() -> Void)?
+
     init(id: UUID = UUID(), fileURL: URL?, untitledName: String?, text: String,
          attributes: [NSAttributedString.Key: Any], assets: AssetStore?,
          format: TextFileFormat = .default, kind: NoteKind = .text) {
@@ -201,10 +232,77 @@ final class Note {
         // hundred megabytes for a hundred-megabyte log — to scan it once.
         self.lineIndex = LineIndex(storage.mutableString)
         observeEdits()
+        startWatching()
     }
 
     deinit {
         if let editObserver { NotificationCenter.default.removeObserver(editObserver) }
+        watcher?.stop()
+    }
+
+    // MARK: - The file underneath
+
+    /// Starts watching this note's file, and remembers the shape it is in as
+    /// of now. Called when the note is made, and again whenever it is given
+    /// another file — which is what Save As is.
+    ///
+    /// A file that is not there is not watched at all: SPEC keeps a missing
+    /// file's tab exactly as it is, so there is nothing for a watch to say —
+    /// and a tab whose file goes while it is open keeps the watch it already
+    /// has, which is what hears the file being written again.
+    ///
+    /// A viewer is watched like anything else. A PDF or a picture is never
+    /// dirty, so a change to it is simply the new file, shown.
+    func startWatching() {
+        watcher?.stop()
+        watcher = nil
+        guard let fileURL, FileManager.default.fileExists(atPath: fileURL.path) else {
+            diskStamp = nil
+            return
+        }
+        diskStamp = FileStamp.of(fileURL)
+        watcher = FileWatcher(url: fileURL) { [weak self] in
+            self?.fileMayHaveChanged()
+        }
+    }
+
+    /// Puts the watch down. A tab that has closed has no file to follow.
+    func stopWatching() {
+        watcher?.stop()
+        watcher = nil
+    }
+
+    /// The stamp Nota's own write has just made. Recorded straight after a
+    /// save, on the main thread, so the event that save sets off arrives to
+    /// find the file exactly as this note last knew it.
+    func recordDiskStamp() {
+        diskStamp = fileURL.flatMap(FileStamp.of)
+        watcher?.settle()
+    }
+
+    /// Something happened to the file. Whether it was a change is the stamp's
+    /// answer — the size and the modification date together, which is enough
+    /// to tell somebody else's write from Nota's own without reading the file
+    /// again.
+    ///
+    /// A file that has gone is not a change: SPEC leaves a missing file's tab
+    /// dirty or clean exactly as it was. A write still in progress may be
+    /// caught halfway, and is put right by the event its last bytes send.
+    private func fileMayHaveChanged() {
+        guard let fileURL, let stamp = FileStamp.of(fileURL), stamp != diskStamp else { return }
+        diskStamp = stamp
+        onFileChanged?()
+    }
+
+    /// Throws away the parsed document or picture, so the next look at this
+    /// tab reads the file afresh. What an external change means for a viewer:
+    /// there is nothing in it that was not on disk already, so the new file
+    /// simply takes the old one's place.
+    func discardLoadedContent() {
+        loadedPDF = nil
+        hasLoadedPDF = false
+        loadedImage = nil
+        hasLoadedImage = false
     }
 
     /// Fold every character edit into the line table as the storage makes it.
