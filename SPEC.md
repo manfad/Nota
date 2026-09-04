@@ -321,6 +321,8 @@
 
 ## Tabs
 - One width for every tab, `clamp((viewport − plus − gaps) / n, 40, 180)`, shrinking as tabs are added; the strip never scrolls. The selected tab is raised to 60pt so its ✕ fits and the others shrink evenly to pay for it. Titles clip with a fade rather than an ellipsis; under 60pt the trailing slot goes and the unsaved dot rides on the icon. A separator hairline shows only between two plain tabs. The + rides after the last tab and pins at the trailing edge once the strip is full; it opens a new tab (same as ⌘T). ⌘P fuzzy tab switcher by title.
+- `@` as the switcher's first character (Todo 9, done 2026-09-04) swaps the list for the front `.md` tab's headings, indented by level, and the rest of the query fuzzy-filters those instead; `MarkdownHeadings` reads them straight from the note's own text — ATX and setext, fences skipped the way `MarkdownSourceMap` skips them — off the main thread once a note is past `BigFile.threshold`. A tab that is not `.md` answers with a quiet "No headings" row.
+- Choosing a heading puts the caret at its line start and scrolls it into view; in split or reading the render is walked to that block too, by hand through the `highlightBlock(containingSource:)` a caret move already drives.
 - The selected tab is always fully in view: at 40pt the strip stops shrinking and becomes a sliding window over the tabs, anchored on the selected one. Closing with the ✕ freezes the widths until the pointer leaves the strip, so a run of closes keeps each next ✕ under it; ⌘W does not freeze.
 - Tabs reorder by drag: the dragged tab rides the pointer and its neighbours slide into the gap; the order is the session's order.
 - Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab.
@@ -405,7 +407,7 @@
    as before. `NoteText` skips its regex when the text has no `](nota://` in it and `serialize` hands the string back
    when nothing is attached. A big note's cache write is debounced 2 s and done off the main thread.
    The storage's `string` bridges to Swift by copying: hot paths read `mutableString` instead.
-9. **Headings outline.** `@` in the ⌘P switcher lists the front `.md` tab's headings; choosing one puts the caret there
+9. **Headings outline (done 2026-09-04).** `@` in the ⌘P switcher lists the front `.md` tab's headings; choosing one puts the caret there
    and, in split/reading, scrolls the render to the block.
 10. **Ship it.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on another Mac
     without the Gatekeeper dance; `Nota.app.zip` as the release artifact next to the tag.

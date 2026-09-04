@@ -2,14 +2,28 @@ import AppKit
 
 protocol TabPickerPanelDelegate: AnyObject {
     func tabPicker(_ picker: TabPickerPanel, didChoose tabIndex: Int)
+    func tabPicker(_ picker: TabPickerPanel, didChooseHeading heading: MarkdownHeadings.Heading)
 }
 
 /// ⌘P: a small centred panel in the shape of Xcode's Open Quickly — a search
 /// field over a list, fuzzy-matched on tab title.
+///
+/// `@` as the first character (Todo 9) swaps the list for the front `.md`
+/// tab's headings, the rest of the query fuzzy-filtering those instead of the
+/// tabs; deleting it back out returns to the tab list.
 final class TabPickerPanel: NSObject {
     private static let panelWidth: CGFloat = 420
     private static let rowHeight: CGFloat = 26
     private static let maximumVisibleRows = 10
+    /// A heading is nudged in this far per level below the first — plain
+    /// leading spaces in the row's own string, so the bolding of matched
+    /// characters (indices into the heading's own text) needs only an offset.
+    private static let headingIndentUnit = "  "
+
+    private enum Mode {
+        case tabs
+        case headings
+    }
 
     weak var delegate: TabPickerPanelDelegate?
 
@@ -20,7 +34,41 @@ final class TabPickerPanel: NSObject {
     private var titles: [String] = []
     private var ranked: [(index: Int, result: FuzzyMatch.Result)] = []
 
+    private var mode: Mode = .tabs
+    /// Supplies the front tab's headings — `nil` immediately for a tab that
+    /// is not `.md`, otherwise called once per `show()` and cached; a big
+    /// note answers on a background queue, so the completion may land later.
+    private var loadHeadings: ((@escaping ([MarkdownHeadings.Heading]) -> Void) -> Void)?
+    private var headings: [MarkdownHeadings.Heading]?
+    private var isLoadingHeadings = false
+    private var headingsGeneration = 0
+    private var rankedHeadings: [(index: Int, result: FuzzyMatch.Result)] = []
+
     var isVisible: Bool { panel.isVisible }
+
+    /// The rows on screen right now, top to bottom — for the tests.
+    var visibleRowTexts: [String] {
+        switch mode {
+        case .tabs:
+            return ranked.map { titles[$0.index] }
+        case .headings:
+            guard let headings else { return [] }
+            return rankedHeadings.map { headings[$0.index].text }
+        }
+    }
+
+    /// Whether `@` has switched the list to headings — for the tests.
+    var isShowingHeadings: Bool { mode == .headings }
+
+    /// The query as the field reads it — for the tests, which have no window
+    /// server to type a keystroke into.
+    var query: String {
+        get { searchField.stringValue }
+        set {
+            searchField.stringValue = newValue
+            reload()
+        }
+    }
 
     override init() {
         panel = NSPanel(
@@ -97,8 +145,17 @@ final class TabPickerPanel: NSObject {
 
     // MARK: - Showing
 
-    func show(titles: [String], selectedIndex: Int, over window: NSWindow) {
+    func show(
+        titles: [String], selectedIndex: Int,
+        loadHeadings: @escaping (@escaping ([MarkdownHeadings.Heading]) -> Void) -> Void,
+        over window: NSWindow
+    ) {
         self.titles = titles
+        self.loadHeadings = loadHeadings
+        headings = nil
+        isLoadingHeadings = false
+        headingsGeneration += 1
+        mode = .tabs
         searchField.stringValue = ""
         reload(preferring: selectedIndex)
 
@@ -119,13 +176,42 @@ final class TabPickerPanel: NSObject {
         panel.orderOut(nil)
     }
 
+    /// As if Return had been pressed on the row that is selected right now —
+    /// for the tests, which have no window server to send a keystroke to.
+    func chooseSelection() { commit() }
+
+    private var activeRowCount: Int {
+        switch mode {
+        case .tabs: return ranked.count
+        case .headings: return rankedHeadings.count
+        }
+    }
+
     private var panelHeight: CGFloat {
-        let rows = max(1, min(ranked.isEmpty ? 1 : ranked.count, Self.maximumVisibleRows))
+        let rows = max(1, min(max(activeRowCount, 1), Self.maximumVisibleRows))
         return CGFloat(rows) * Self.rowHeight + 52
     }
 
     private func reload(preferring selectedIndex: Int = -1) {
         let query = searchField.stringValue
+        if query.hasPrefix("@") {
+            mode = .headings
+            reloadHeadings(query: String(query.dropFirst()))
+        } else {
+            mode = .tabs
+            reloadTabs(query: query)
+        }
+        tableView.reloadData()
+
+        let row = mode == .tabs ? (ranked.firstIndex { $0.index == selectedIndex } ?? 0) : 0
+        if activeRowCount > 0 {
+            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            tableView.scrollRowToVisible(row)
+        }
+        panel.setContentSize(NSSize(width: Self.panelWidth, height: panelHeight))
+    }
+
+    private func reloadTabs(query: String) {
         if query.trimmingCharacters(in: .whitespaces).isEmpty {
             ranked = titles.indices.map {
                 (index: $0, result: FuzzyMatch.Result(score: 0, matchedIndices: []))
@@ -133,30 +219,57 @@ final class TabPickerPanel: NSObject {
         } else {
             ranked = FuzzyMatch.rank(query: query, titles: titles)
         }
-        tableView.reloadData()
+    }
 
-        let row = ranked.firstIndex { $0.index == selectedIndex } ?? 0
-        if !ranked.isEmpty {
-            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            tableView.scrollRowToVisible(row)
+    /// The headings are asked for once, the first time `@` is typed, and kept
+    /// for as long as the panel is showing them; every keystroke after that
+    /// just re-filters what is already in hand.
+    private func reloadHeadings(query: String) {
+        guard let headings else {
+            rankedHeadings = []
+            guard !isLoadingHeadings else { return }
+            isLoadingHeadings = true
+            let generation = headingsGeneration
+            loadHeadings? { [weak self] result in
+                guard let self, generation == self.headingsGeneration else { return }
+                self.headings = result
+                self.isLoadingHeadings = false
+                self.reload()
+            }
+            return
         }
-        panel.setContentSize(NSSize(width: Self.panelWidth, height: panelHeight))
+        let stripped = query.trimmingCharacters(in: .whitespaces)
+        if stripped.isEmpty {
+            rankedHeadings = headings.indices.map {
+                (index: $0, result: FuzzyMatch.Result(score: 0, matchedIndices: []))
+            }
+        } else {
+            rankedHeadings = FuzzyMatch.rank(query: stripped, titles: headings.map(\.text))
+        }
     }
 
     private func moveSelection(by delta: Int) {
-        guard !ranked.isEmpty else { return }
+        guard activeRowCount > 0 else { return }
         let current = max(0, tableView.selectedRow)
-        let next = max(0, min(ranked.count - 1, current + delta))
+        let next = max(0, min(activeRowCount - 1, current + delta))
         tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         tableView.scrollRowToVisible(next)
     }
 
     private func commit() {
         let row = tableView.selectedRow
-        guard ranked.indices.contains(row) else { return }
-        let tabIndex = ranked[row].index
-        hide()
-        delegate?.tabPicker(self, didChoose: tabIndex)
+        switch mode {
+        case .tabs:
+            guard ranked.indices.contains(row) else { return }
+            let tabIndex = ranked[row].index
+            hide()
+            delegate?.tabPicker(self, didChoose: tabIndex)
+        case .headings:
+            guard rankedHeadings.indices.contains(row), let headings else { return }
+            let heading = headings[rankedHeadings[row].index]
+            hide()
+            delegate?.tabPicker(self, didChooseHeading: heading)
+        }
     }
 
     @objc private func rowClicked() { commit() }
@@ -195,11 +308,11 @@ extension TabPickerPanel: NSTextFieldDelegate {
 
 extension TabPickerPanel: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int {
-        ranked.isEmpty ? 1 : ranked.count
+        activeRowCount == 0 ? 1 : activeRowCount
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
-        !ranked.isEmpty
+        activeRowCount > 0
     }
 
     func tableView(
@@ -223,9 +336,9 @@ extension TabPickerPanel: NSTableViewDataSource, NSTableViewDelegate {
                 return view
             }()
 
-        guard !ranked.isEmpty else {
+        guard activeRowCount > 0 else {
             cell.textField?.attributedStringValue = NSAttributedString(
-                string: "No tabs",
+                string: mode == .headings ? "No headings" : "No tabs",
                 attributes: [
                     .font: NSFont.systemFont(ofSize: 13),
                     .foregroundColor: NSColor.secondaryLabelColor,
@@ -234,23 +347,43 @@ extension TabPickerPanel: NSTableViewDataSource, NSTableViewDelegate {
             return cell
         }
 
-        let entry = ranked[row]
-        let title = titles[entry.index]
+        switch mode {
+        case .tabs:
+            let entry = ranked[row]
+            cell.textField?.attributedStringValue = attributedRow(
+                titles[entry.index], matched: entry.result.matchedIndices, indent: ""
+            )
+        case .headings:
+            guard let headings, rankedHeadings.indices.contains(row) else { return cell }
+            let entry = rankedHeadings[row]
+            let heading = headings[entry.index]
+            let indent = String(
+                repeating: Self.headingIndentUnit, count: max(0, heading.level - 1)
+            )
+            cell.textField?.attributedStringValue = attributedRow(
+                heading.text, matched: entry.result.matchedIndices, indent: indent
+            )
+        }
+        return cell
+    }
+
+    /// `indent` is plain leading spaces in the row's own string, so the
+    /// bolding below only has to shift the query's matched indices — which
+    /// are into the row's *text*, indent aside — along by its length.
+    private func attributedRow(_ text: String, matched: [Int], indent: String) -> NSAttributedString {
         let attributed = NSMutableAttributedString(
-            string: title,
+            string: indent + text,
             attributes: [
                 .font: NSFont.systemFont(ofSize: 13),
                 .foregroundColor: NSColor.labelColor,
             ]
         )
-        // Bold the characters the query actually matched.
-        for index in entry.result.matchedIndices where index < title.count {
+        for index in matched where index < text.count {
             attributed.addAttribute(
                 .font, value: NSFont.boldSystemFont(ofSize: 13),
-                range: NSRange(location: index, length: 1)
+                range: NSRange(location: index + indent.count, length: 1)
             )
         }
-        cell.textField?.attributedStringValue = attributed
-        return cell
+        return attributed
     }
 }
