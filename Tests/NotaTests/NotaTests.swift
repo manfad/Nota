@@ -2290,6 +2290,161 @@ final class NotaTests: XCTestCase {
         XCTAssertNil(harness.recorder.moved, "nothing was reordered")
     }
 
+    // MARK: - Tearing a tab out of the strip
+
+    /// Chromium's rule: the tab follows the pointer along the strip, and
+    /// once the pointer is far enough out of it the tab stops being this
+    /// window's altogether. The strip says so once and then only carries the
+    /// rest of the gesture — including the release — to its delegate.
+    @MainActor
+    func testDraggingWellBelowTheStripTearsTheTabOff() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 700, height: TabBarView.height))
+        let tabs = (0..<3).map { TabBarItem(title: "Note \($0)", isDirty: false) }
+        bar.setItems(tabs, selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+        let recorder = TearOffRecorder()
+        bar.delegate = recorder
+        let width = try XCTUnwrap(bar.tabFramesForTesting.first).width
+
+        bar.beginDragForTesting(index: 1)
+        bar.updateDragForTesting(pointerX: 250, pointerY: -39, screenPoint: NSPoint(x: 300, y: 900))
+        XCTAssertNil(recorder.tornOff, "just under the strip is still a reorder")
+        XCTAssertNotNil(bar.draggedTabXForTesting)
+
+        bar.updateDragForTesting(pointerX: 250, pointerY: -41, screenPoint: NSPoint(x: 300, y: 890))
+        let torn = try XCTUnwrap(recorder.tornOff)
+        XCTAssertEqual(torn.index, 1, "the tab that was being dragged, not the one under the pointer")
+        XCTAssertEqual(torn.grabOffset.x, width / 2, accuracy: 0.5,
+                       "the drag began at the tab's centre, and the grab point rides with it")
+        XCTAssertEqual(torn.screenPoint, NSPoint(x: 300, y: 890))
+        XCTAssertNil(bar.draggedTabXForTesting, "the strip has stopped reordering")
+        XCTAssertTrue(bar.isTornOffForTesting)
+
+        bar.updateDragForTesting(pointerX: 250, pointerY: -60, screenPoint: NSPoint(x: 310, y: 870))
+        XCTAssertEqual(recorder.tearOffCount, 1, "a tab is torn off once, not on every drag")
+        XCTAssertEqual(recorder.dragMoves, [NSPoint(x: 310, y: 870)])
+
+        // Coming back over the strip does not put the tab back — the window
+        // simply follows the pointer, which is what Chromium does too.
+        bar.updateDragForTesting(pointerX: 250, pointerY: 17, screenPoint: NSPoint(x: 320, y: 880))
+        XCTAssertTrue(bar.isTornOffForTesting)
+        XCTAssertEqual(recorder.dragMoves.count, 2)
+
+        bar.endDragForTesting(committed: true, at: NSPoint(x: 320, y: 880))
+        XCTAssertEqual(recorder.ended?.committed, true)
+        XCTAssertEqual(recorder.ended?.screenPoint, NSPoint(x: 320, y: 880))
+        XCTAssertFalse(bar.isTornOffForTesting, "the gesture is over")
+    }
+
+    /// Esc mid-tear-off reaches the delegate as a drag that was not
+    /// committed, so the window it made can put the tab back.
+    @MainActor
+    func testEscapeAfterATearOffEndsTheDragUncommitted() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 700, height: TabBarView.height))
+        bar.setItems((0..<2).map { TabBarItem(title: "Note \($0)", isDirty: false) }, selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+        let recorder = TearOffRecorder()
+        bar.delegate = recorder
+
+        bar.beginDragForTesting(index: 0)
+        bar.updateDragForTesting(pointerX: 100, pointerY: TabBarView.height + 41,
+                                 screenPoint: NSPoint(x: 200, y: 950))
+        XCTAssertEqual(recorder.tornOff?.index, 0, "above the strip tears off just as below does")
+
+        bar.endDragForTesting(committed: false, at: NSPoint(x: 200, y: 950))
+        XCTAssertEqual(recorder.ended?.committed, false)
+        XCTAssertFalse(bar.isTornOffForTesting)
+    }
+
+    /// Sideways out of the window counts as leaving too: a tab dragged past
+    /// either edge is on its way to a window of its own, not to the far end
+    /// of a strip it has already run out of.
+    @MainActor
+    func testDraggingOffTheSideOfTheWindowTearsTheTabOff() throws {
+        _ = NSApplication.shared
+        let frame = NSRect(x: 0, y: 0, width: 600, height: TabBarView.height)
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        let bar = TabBarView(frame: frame)
+        window.contentView = bar
+        bar.setItems((0..<3).map { TabBarItem(title: "Note \($0)", isDirty: false) }, selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+        let recorder = TearOffRecorder()
+        bar.delegate = recorder
+
+        bar.beginDragForTesting(index: 2)
+        bar.updateDragForTesting(pointerX: 620, pointerY: TabBarView.height / 2,
+                                 screenPoint: NSPoint(x: 620, y: 400))
+        XCTAssertEqual(recorder.tornOff?.index, 2)
+    }
+
+    /// The insertion caret the strip under a torn-off tab shows: the visible
+    /// tabs' midpoints are the boundaries, and nil takes it away again.
+    @MainActor
+    func testTheDropCaretFollowsTheTabMidpointsAndClears() throws {
+        _ = NSApplication.shared
+        let bar = TabBarView(frame: NSRect(x: 0, y: 0, width: 700, height: TabBarView.height))
+        bar.setItems((0..<3).map { TabBarItem(title: "Note \($0)", isDirty: false) }, selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+        let frames = bar.tabFramesForTesting
+
+        XCTAssertEqual(bar.dropSlot(at: NSPoint(x: frames[0].midX - 1, y: 17)), 0)
+        XCTAssertEqual(bar.dropSlot(at: NSPoint(x: frames[0].midX + 1, y: 17)), 1)
+        XCTAssertEqual(bar.dropSlot(at: NSPoint(x: frames[2].maxX, y: 17)), 3)
+
+        bar.showDropCaret(at: 1)
+        XCTAssertEqual(bar.dropCaretSlotForTesting, 1)
+        bar.showDropCaret(at: nil)
+        XCTAssertNil(bar.dropCaretSlotForTesting)
+    }
+
+    /// The tab a window's *last* tab is dragged out of loses its view the
+    /// moment the delegate takes the note away — the strip rebuilds with
+    /// nothing in it. The gesture has to carry on regardless: the tracking
+    /// loop is on that view, and it still owes the delegate every move and
+    /// the release. Driven through the real event queue, tab view and all.
+    @MainActor
+    func testTheGestureSurvivesTheTabLeavingTheStrip() throws {
+        _ = NSApplication.shared
+        let frame = NSRect(x: 0, y: 0, width: 600, height: TabBarView.height)
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        let bar = TabBarView(frame: frame)
+        window.contentView = bar
+        bar.setItems([TabBarItem(title: "Only", isDirty: false)], selectedIndex: 0)
+        bar.layoutSubtreeIfNeeded()
+
+        // What the window controller does with the note: it takes it, and
+        // the strip is left with no tabs at all.
+        let recorder = TearOffRecorder()
+        recorder.onTearOff = { MainActor.assumeIsolated { bar.setItems([], selectedIndex: 0) } }
+        bar.delegate = recorder
+
+        let down = NSPoint(x: 100, y: TabBarView.height / 2)
+        let tab = try XCTUnwrap(bar.hitTest(down))
+        func event(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: bar.convert(point, to: nil), modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1
+            ))
+        }
+
+        NSApp.postEvent(try event(.leftMouseDragged, at: NSPoint(x: 100, y: -60)), atStart: false)
+        NSApp.postEvent(try event(.leftMouseDragged, at: NSPoint(x: 140, y: -90)), atStart: false)
+        NSApp.postEvent(try event(.leftMouseUp, at: NSPoint(x: 140, y: -90)), atStart: false)
+        tab.mouseDown(with: try event(.leftMouseDown, at: down))
+
+        XCTAssertEqual(recorder.tearOffCount, 1)
+        XCTAssertEqual(bar.titlesForTesting, [], "the strip really did give the tab up")
+        XCTAssertEqual(recorder.dragMoves.count, 1,
+                       "the drag after the tab left the strip still reached the delegate")
+        XCTAssertEqual(recorder.ended?.committed, true, "and so did the release")
+    }
+
     // MARK: - Carried over from Jot
 
     /// Notes written before the rename hold `jot://` tokens. They still find
@@ -2625,5 +2780,34 @@ private final class TabDragLoopHarness {
             characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
             isARepeat: false, keyCode: 53
         ))
+    }
+}
+
+/// Records the three calls a tear-off makes on the strip's delegate. Every
+/// other delegate method is the protocol's own no-op.
+private final class TearOffRecorder: TabBarViewDelegate {
+    var tornOff: (index: Int, grabOffset: NSPoint, screenPoint: NSPoint)?
+    var tearOffCount = 0
+    /// What a real delegate does on a tear-off: take the note away, which
+    /// can leave the strip with no tab views at all.
+    var onTearOff: (() -> Void)?
+    var dragMoves: [NSPoint] = []
+    var ended: (committed: Bool, screenPoint: NSPoint)?
+
+    func tabBar(_ bar: TabBarView, didSelect index: Int) {}
+    func tabBar(_ bar: TabBarView, didRequestCloseAt index: Int) {}
+    func tabBarDidRequestNewTab(_ bar: TabBarView) {}
+    func tabBar(_ bar: TabBarView, didMove index: Int, to newIndex: Int) {}
+
+    func tabBar(_ bar: TabBarView, tearOff index: Int, grabOffset: NSPoint, screenPoint: NSPoint) {
+        tornOff = (index, grabOffset, screenPoint)
+        tearOffCount += 1
+        onTearOff?()
+    }
+    func tabBarDragMoved(_ bar: TabBarView, to screenPoint: NSPoint) {
+        dragMoves.append(screenPoint)
+    }
+    func tabBarDragEnded(_ bar: TabBarView, committed: Bool, at screenPoint: NSPoint) {
+        ended = (committed, screenPoint)
     }
 }

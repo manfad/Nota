@@ -2,24 +2,29 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store: SessionStore
-    private var windowController: MainWindowController?
+    /// Every open window. The app itself keeps no single one: menu actions
+    /// and the summon key all mean whichever window is in front.
+    private let windows: WindowRegistry
     private let hotKey = GlobalHotKey()
+
+    /// The window every action means — nil only before the first one exists.
+    private var activeController: MainWindowController? { windows.activeController }
 
     /// The settings are carried over from the app's old bundle identifier
     /// before anything can read one, and the session store then carries over
     /// the old support directory as it resolves it.
     override init() {
         Preferences.migrateFromJotIfNeeded()
-        store = SessionStore()
+        let store = SessionStore()
+        self.store = store
+        self.windows = WindowRegistry(store: store)
         super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
-        let controller = MainWindowController(store: store)
-        windowController = controller
-        controller.showWindow(nil)
-        controller.focusEditor()
+        restoreWindows()
+        showWindow()
         NSApp.activate(ignoringOtherApps: true)
 
         registerHotKey()
@@ -27,6 +32,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self, selector: #selector(preferencesChanged),
             name: Preferences.didChange, object: nil
         )
+    }
+
+    /// One window per window in the session file, in the order it holds
+    /// them — one empty window when there is no session yet. Nothing is
+    /// saved while they are being built: each window flushes as it restores,
+    /// and the file being read is still the only copy of the rest.
+    private func restoreWindows() {
+        let state = store.load()
+        if let size = state?.fontSize { Preferences.shared.fontSize = CGFloat(size) }
+        windows.isRestoring = true
+        for sessionWindow in state?.windows ?? [] {
+            windows.restoreWindow(sessionWindow)
+        }
+        windows.isRestoring = false
+        if windows.controllers.isEmpty { windows.newWindow() }
+        // Only now that every window is open is a cache file with no tab
+        // behind it really rubbish.
+        windows.pruneCache()
+        windows.saveSession()
     }
 
     @objc private func preferencesChanged() {
@@ -48,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Frontmost and visible: get out of the way. Otherwise: come forward.
     private func toggleSummon() {
-        let window = windowController?.window
+        let window = activeController?.window
         let isFrontmost = NSApp.isActive && (window?.isVisible ?? false)
 
         if isFrontmost {
@@ -74,32 +98,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        windowController?.flushAll()
+        windows.flushAll()
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         showWindow()
-        for url in urls { windowController?.open(url: url) }
+        for url in urls { activeController?.open(url: url) }
     }
 
-    private func showWindow() {
-        windowController?.showWindow(nil)
-        windowController?.focusEditor()
+    /// Brings the window in front forward, opening one if the app has none
+    /// — every action that needs a window goes through here first.
+    @discardableResult
+    private func showWindow() -> MainWindowController {
+        let controller = windows.activeController ?? windows.newWindow()
+        controller.showWindow(nil)
+        controller.focusEditor()
+        return controller
+    }
+
+    /// A second window, cascaded off the one in front, with one untitled tab.
+    @discardableResult
+    func newWindow(with note: Note? = nil, frame: NSRect? = nil) -> MainWindowController {
+        let controller = note.map { windows.newWindow(with: $0, frame: frame) }
+            ?? windows.newWindow(frame: frame)
+        controller.showWindow(nil)
+        controller.focusEditor()
+        return controller
+    }
+
+    func removeWindow(_ controller: MainWindowController) {
+        windows.removeWindow(controller)
     }
 
     // MARK: - Actions
 
     @objc private func newTab(_ sender: Any?) {
         showWindow()
-        windowController?.newTab()
+        activeController?.newTab()
     }
 
     /// ⌘N: bring the window back if it is hidden, otherwise act like ⌘T.
     @objc private func newWindowOrTab(_ sender: Any?) {
-        if windowController?.window?.isVisible == true {
-            windowController?.newTab()
+        if activeController?.window?.isVisible == true {
+            activeController?.newTab()
         }
         showWindow()
+    }
+
+    /// ⇧⌘N: a window of its own, with one untitled tab.
+    @objc private func newWindowItem(_ sender: Any?) {
+        newWindow()
     }
 
     /// ⌘W closes whichever window is in front — the Settings window when it
@@ -109,7 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             key.close()
             return
         }
-        windowController?.closeCurrentTab()
+        activeController?.closeCurrentTab()
     }
 
     @objc private func openSettings(_ sender: Any?) {
@@ -117,102 +165,100 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func searchAllNotes(_ sender: Any?) {
-        windowController?.beginSearchAllNotes()
+        activeController?.beginSearchAllNotes()
     }
 
     @objc private func showTabPicker(_ sender: Any?) {
-        windowController?.showTabPicker()
+        activeController?.showTabPicker()
     }
 
     @objc private func toggleImageSidebar(_ sender: Any?) {
-        windowController?.toggleImageSidebar()
+        activeController?.toggleImageSidebar()
     }
 
     @objc private func toggleZenMode(_ sender: Any?) {
-        windowController?.toggleZenMode()
+        activeController?.toggleZenMode()
     }
 
     @objc private func toggleMarkdownPreview(_ sender: Any?) {
-        windowController?.toggleMarkdownPreview()
+        activeController?.toggleMarkdownPreview()
     }
 
     @objc private func toggleReadingMode(_ sender: Any?) {
-        windowController?.toggleReadingMode()
+        activeController?.toggleReadingMode()
     }
 
     /// The sidebar item is a verb, so its title flips with the state.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleImageSidebar(_:)) {
-            let showing = windowController?.isImageSidebarVisible ?? false
+            let showing = activeController?.isImageSidebarVisible ?? false
             menuItem.title = showing ? "Hide Images" : "Show Images"
         }
         if menuItem.action == #selector(toggleZenMode(_:)) {
-            let zen = windowController?.isZenMode ?? false
+            let zen = activeController?.isZenMode ?? false
             menuItem.title = zen ? "Exit Zen Mode" : "Zen Mode"
         }
         // The preview is a place, not a verb: the titles stay put and the
         // checkmarks say which mode the tab in front is in. ⇧⌘P cycles
         // through both places, so its mark is on in either of them. Neither
         // item is offered on a tab that has no render to show.
-        let mode = windowController?.previewMode ?? .off
+        let mode = activeController?.previewMode ?? .off
         if menuItem.action == #selector(toggleMarkdownPreview(_:)) {
             menuItem.state = mode == .off ? .off : .on
-            // The item is named for the grammar in front: a `.tex` tab is not
-            // offered a Markdown preview, it is offered its own.
-            menuItem.title = windowController?.currentRenderedPreviewKind == .latex
+            menuItem.title = activeController?.currentRenderedPreviewKind == .latex
                 ? "LaTeX Preview" : "Markdown Preview"
-            return windowController?.canShowRenderedPreview ?? false
+            return activeController?.canShowRenderedPreview ?? false
         }
         if menuItem.action == #selector(toggleReadingMode(_:)) {
             menuItem.state = mode == .reading ? .on : .off
-            return windowController?.canShowRenderedPreview ?? false
+            return activeController?.canShowRenderedPreview ?? false
         }
         // A PDF tab is a view of a file Nota never writes to, so there is
         // nothing for either save item to do there.
         if menuItem.action == #selector(saveNote(_:))
             || menuItem.action == #selector(saveNoteAs(_:)) {
-            return windowController?.currentTabIsSavable ?? true
+            return activeController?.currentTabIsSavable ?? true
         }
         return true
     }
 
     @objc private func saveNote(_ sender: Any?) {
-        windowController?.saveCurrent(forcePanel: false)
+        activeController?.saveCurrent(forcePanel: false)
     }
 
     @objc private func saveNoteAs(_ sender: Any?) {
-        windowController?.saveCurrent(forcePanel: true)
+        activeController?.saveCurrent(forcePanel: true)
     }
 
     @objc private func openNote(_ sender: Any?) {
         showWindow()
-        windowController?.openFiles()
+        activeController?.openFiles()
     }
 
     @objc private func selectTab(_ sender: NSMenuItem) {
-        windowController?.selectTab(at: sender.tag)
+        activeController?.selectTab(at: sender.tag)
     }
 
     @objc private func selectNextTab(_ sender: Any?) {
-        windowController?.selectNextTab()
+        activeController?.selectNextTab()
     }
 
     @objc private func selectPreviousTab(_ sender: Any?) {
-        windowController?.selectPreviousTab()
+        activeController?.selectPreviousTab()
     }
 
     @objc private func increaseFontSize(_ sender: Any?) {
-        guard let controller = windowController else { return }
+        guard let controller = activeController else { return }
         controller.setFontSize(controller.currentFontSize + 1)
     }
 
     @objc private func decreaseFontSize(_ sender: Any?) {
-        guard let controller = windowController else { return }
+        guard let controller = activeController else { return }
         controller.setFontSize(controller.currentFontSize - 1)
     }
 
     @objc private func resetFontSize(_ sender: Any?) {
-        windowController?.setFontSize(13)
+        activeController?.setFontSize(13)
     }
 
     // MARK: - Menu
@@ -258,7 +304,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         submenu("File", in: mainMenu, [
             item("New Tab", #selector(newTab(_:)), key: "t", target: self),
-            item("New Window", #selector(newWindowOrTab(_:)), key: "n", target: self),
+            // ⌘N is Nota's older new-tab key, and also what brings a hidden
+            // window back; ⇧⌘N is the window itself.
+            item("New Tab", #selector(newWindowOrTab(_:)), key: "n", target: self),
+            item("New Window", #selector(newWindowItem(_:)), key: "n",
+                 modifiers: [.command, .shift], target: self),
             item("Open…", #selector(openNote(_:)), key: "o", target: self),
             .separator(),
             item("Close Tab", #selector(closeTab(_:)), key: "w", target: self),

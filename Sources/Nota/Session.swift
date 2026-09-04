@@ -233,12 +233,100 @@ extension SessionTab {
     }
 }
 
-struct SessionState: Codable, Equatable {
+/// A window's frame, as four plain numbers so the session file stays
+/// readable JSON. `nil` for a window that has never been placed — and for
+/// every window in a file written before Nota had more than one.
+struct SessionFrame: Codable, Equatable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+
+    init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+
+    init(_ rect: CGRect) {
+        self.init(x: Double(rect.origin.x), y: Double(rect.origin.y),
+                  width: Double(rect.width), height: Double(rect.height))
+    }
+
+    var rect: CGRect {
+        CGRect(x: x, y: y, width: width, height: height)
+    }
+}
+
+/// One window of the session: the tabs in its strip, which of them was in
+/// front, and where the window sat.
+struct SessionWindow: Codable, Equatable {
     var tabs: [SessionTab]
     var selectedTabID: UUID?
+    var frame: SessionFrame?
+
+    init(tabs: [SessionTab], selectedTabID: UUID? = nil, frame: SessionFrame? = nil) {
+        self.tabs = tabs
+        self.selectedTabID = selectedTabID
+        self.frame = frame
+    }
+}
+
+struct SessionState: Codable, Equatable {
+    /// One entry per open window, in the order they were opened.
+    var windows: [SessionWindow]
     var fontSize: Double
 
+    /// The first window's tabs and selection. The file used to be this flat
+    /// pair and nothing else; both are still written beside `windows` for a
+    /// release, so a build from before multi-window opens the session it
+    /// finds rather than starting empty.
+    var tabs: [SessionTab] { windows.first?.tabs ?? [] }
+    var selectedTabID: UUID? { windows.first?.selectedTabID }
+
+    init(windows: [SessionWindow], fontSize: Double) {
+        self.windows = windows
+        self.fontSize = fontSize
+    }
+
+    /// One window's worth — what a lone window, and every test that does not
+    /// care about more than one, writes.
+    init(tabs: [SessionTab], selectedTabID: UUID?, fontSize: Double) {
+        self.init(
+            windows: [SessionWindow(tabs: tabs, selectedTabID: selectedTabID)],
+            fontSize: fontSize
+        )
+    }
+
     static let empty = SessionState(tabs: [], selectedTabID: nil, fontSize: 13)
+
+    private enum CodingKeys: String, CodingKey {
+        case windows, tabs, selectedTabID, fontSize
+    }
+
+    /// A file with no `windows` key was written before Nota had more than
+    /// one window: its flat tab list is that single window.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fontSize = try container.decode(Double.self, forKey: .fontSize)
+        if let windows = try container.decodeIfPresent([SessionWindow].self, forKey: .windows) {
+            self.windows = windows
+        } else {
+            self.windows = [SessionWindow(
+                tabs: try container.decodeIfPresent([SessionTab].self, forKey: .tabs) ?? [],
+                selectedTabID: try container.decodeIfPresent(UUID.self, forKey: .selectedTabID)
+            )]
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(windows, forKey: .windows)
+        try container.encode(fontSize, forKey: .fontSize)
+        try container.encode(tabs, forKey: .tabs)
+        try container.encodeIfPresent(selectedTabID, forKey: .selectedTabID)
+    }
 }
 
 // MARK: - Session store

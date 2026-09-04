@@ -14,10 +14,16 @@
 - What a file *is* is read from its bytes first, not its name: `%PDF-` magic makes it a PDF, and otherwise whether
   it decodes as text makes it a note, whatever it is called — a `report` or `config` with no extension opens
   correctly, and a PDF named `notes` opens as a PDF. A file's name is only consulted when its bytes cannot say
-  (missing, unreadable, or a real binary). What a file is *rendered as* (Markdown vs. LaTeX) is the one exception —
-  that stays by extension, since it is the author's own word for it (see Markdown preview).
+  (missing, unreadable, or a real binary). What a file is *rendered as* (Markdown vs. LaTeX vs. HTML) is the one
+  exception — that stays by extension, since it is the author's own word for it (see Markdown preview).
 - ⌘S default for a new note: `.md`, opens in the last-used folder; any extension typed in the panel is kept.
-- Window close = hide (app stays alive). Quit never prompts; everything restores.
+- Multi-window: ⇧⌘N opens another window, ⌘N and ⌘T stay new tabs, and every menu action means the window in front.
+  `session.json` keeps `windows: [{tabs, selectedTabID, frame}]` — one entry per window, in order, each with its own
+  frame; a file written before that (a flat tab list) comes back as one window, and the first window is still mirrored
+  flat for a release so an older build opens the session it finds.
+- Closing the last window = hide (app stays alive). Closing any other window really closes it, and its tabs go to the
+  end of the window that was in front before it, so nothing is lost and nothing is asked. Quit never prompts;
+  everything restores.
 - Search: ⌘F native find bar (in note); ⇧⌘F across all open tabs. In vim mode `/` `?` are vim's own search, typed in the
   command pane (see Vim mode); `n` `N` `*` `#` repeat it; `:noh` clears highlights. ⌘F stays native in every mode.
   Find bar field shows no focus ring.
@@ -36,8 +42,9 @@
   back out to the editor. The View menu keeps "Markdown Preview" (checkmarked in split and reading) and adds
   "Reading Mode" (checkmarked in reading). Both checkmarks are the front tab's.
 - Rendered files only: a note whose file is spelled `.md`, saved — or `.tex` (`.latex`, `.ltx`), which gets the LaTeX
-  render below instead, and everything else here unchanged. Every other tab — an untitled note, a `.txt`, anything not
-  yet saved — has no render, no mode control, and both View items are disabled there, so ⇧⌘P and ⌥⇧⌘P do nothing.
+  render below instead, or `.html` (`.htm`), which gets the HTML preview, and everything else here unchanged. Every
+  other tab — an untitled note, a `.txt`, a `.css`, anything not yet saved — has no render, no mode control, and both
+  View items are disabled there, so ⇧⌘P and ⌥⇧⌘P do nothing.
 - Split: a read-only rendered pane beside the editor (trailing side, resizable, 50% default, min 240pt); the image sidebar
   stays outermost. Reading: the editor collapses and the render takes its column. Either way the window keeps its frame —
   the panes share the room out between them. A mode you ask for slides across in 0.2s (Reduce Motion snaps; a tab switch
@@ -70,8 +77,8 @@
 - Per tab, not per app: ⇧⌘P sets the mode of the tab in front only, and switching tabs lays out for the tab you land on —
   a new ⌘T tab and a freshly opened file start in the editor. The mode rides in `session.json`, so each tab comes back the
   way it was left (a session written when the pane was a yes/no comes back split where it was open).
-- Settings "Open Markdown and LaTeX files in reading mode" (default off): opening a `.md` or `.tex` file opens that tab
-  in reading. Session restore ignores it — the tab's saved mode wins.
+- Settings "Open Markdown, LaTeX and HTML files in reading mode" (default off): opening a `.md`, `.tex` or `.html`
+  file opens that tab in reading. Session restore ignores it — the tab's saved mode wins.
 - Native: Foundation's Markdown parser (`AttributedString(markdown:)`, full interpretation) + Nota's own block styling.
   No WebView, no dependencies, no theming. Same font family/size as the editor; headings scale from it (H1 ×1.6 … H6 ×1.0,
   semibold); lists indented with `•` / `1.`; block quotes with a leading hairline bar in secondaryLabelColor; code spans
@@ -136,7 +143,7 @@
 ## LaTeX preview (decided 2026-09-03)
 - A `.tex` (`.latex`, `.ltx`) file is a tab with a render beside it, the way a `.md` is: the same three modes, the same
   floating mode control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the session.
-  The setting is "Open Markdown and LaTeX files in reading mode".
+  The setting is "Open Markdown, LaTeX and HTML files in reading mode".
 - Native, no dependency, no WebView: Nota's own parser of a LaTeX subset into attributed text, the equations drawn by the
   maths engine the Markdown render already uses. Not TeX's pixels — Nota's reading layout of the document.
 - Article level: `\maketitle` from `\title` `\author` `\date`, `abstract`, numbered `\section` `\subsection`
@@ -165,13 +172,31 @@
 - Export as PDF… on a `.tex` tab is a Todo (see Todo 6).
 - Out for now: `\input` `\include`, theorem environments, `\newcommand` expansion, bibliographies from `.bib`.
 
+## HTML preview (decided 2026-09-03)
+- A `.html` (`.htm`) file is a tab with a preview beside it, the way a `.md` is: the same three modes, the same
+  floating mode control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the session.
+  The View item is named "HTML Preview" on that tab. The setting is "Open Markdown, LaTeX and HTML files in reading mode".
+- Drawn by WebKit (`WKWebView`): HTML is the one place a WebView is the native answer, the way PDFKit is for a PDF.
+  The page is the page — CSS, the document's own type, scripts, images and stylesheets beside the file — not Nota's
+  reading layout of it. No dependency; WebKit ships with macOS. A `.css` or a `.js` is still source and has no preview.
+- The pane is edge to edge, like a PDF: HTML lays out to the viewport it is given, so an inset would be a second
+  margin the page has to pay for. The column's background is the editor's until the page paints over it.
+- Live: the editor's text is what is shown, ~150 ms after typing stops, so unsaved edits are the page; the pane keeps
+  its scroll. Relative URLs resolve beside the file. A link that leaves the page — http(s), another file — opens in
+  the browser; an in-page `#` stays. The keyboard belongs to the page in reading mode, and to the editor in the other
+  two: a click in split must not steal the caret.
+- No block sync: a DOM is not a list of source ranges, and a click in the page is a click in the page (links still
+  open). ⌘F over the page is a Todo, the same as a PDF (see Todo 12).
+- Untitled notes and every other extension have no HTML preview. Save As to `.html` is what turns a note into one.
+
 ## Workspace (decided 2026-09-03, refactor before the LaTeX preview)
 - The window controller has exactly one editor pane and one preview pane and talks to nothing inside them by name. The
   preview pane is a host holding one content view at a time; every content view — the Markdown render, the PDF view, the
-  LaTeX render, later an image view — adopts one `PreviewContent` protocol (show a note, focus, takes keyboard, find bar
-  visibility, freeze/thaw width, highlight and clear a block, block-click and status callbacks), and the host swaps them by
-  the note's kind. Mode and divider logic stay where they are for now; moving them into a workspace controller of their
-  own is a later step. Pure refactor: no behaviour changes, the existing preview and PDF tests pin it.
+  LaTeX render, the HTML page, later an image view — adopts one `PreviewContent` protocol (show a note, focus, takes
+  keyboard, find bar visibility, freeze/thaw width, highlight and clear a block, block-click and status callbacks), and
+  the host swaps them by the note's kind. Mode and divider logic stay where they are for now; moving them into a
+  workspace controller of their own is a later step. Pure refactor: no behaviour changes, the existing preview and PDF
+  tests pin it.
 
 ## Zen mode
 - ⌥⌘Z toggles: tab strip, traffic lights, status bar, line-number gutter, image sidebar and the Markdown mode controls all
@@ -205,6 +230,11 @@
 - The selected tab is always fully in view: at 40pt the strip stops shrinking and becomes a sliding window over the tabs, anchored on the selected one. Closing with the ✕ freezes the widths until the pointer leaves the strip, so a run of closes keeps each next ✕ under it; ⌘W does not freeze.
 - Tabs reorder by drag: the dragged tab rides the pointer and its neighbours slide into the gap; the order is the session's order.
 - Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab.
+- A tab can move to another window: the note keeps its id, text, unsaved edits, caret and undo history, its cached
+  text is never deleted on the way, and the window it left selects the neighbour (or keeps one untitled tab if it was
+  the last). Dragging a tab out of the strip is that same move by hand: 40pt clear of the strip the tab becomes a
+  window of its own that follows the pointer, another window's strip shows a caret where it would land, mouse-up
+  docks it there or leaves the new window standing, and Esc puts it back.
 
 ## Summon
 - Global hotkey, default ⌥Space, toggles show/hide. Configurable in Settings (key recorder). No menu-bar item.
@@ -303,7 +333,7 @@
     - **B. The + follows the tabs (done 2026-09-03).** `plusX = min(lastVisibleTab.maxX + 4, bounds.width − 24)`: it
       rides after the last tab and pins at the trailing edge once the strip is full. The ⇧⌘F field already narrows the
       bar's bounds, and nothing subtracts it twice.
-    - **D. Tear-off (multi-window).** Not `NSWindow.performDrag(with:)` (a modal window move: no further mouse events, so
+    - **D. Tear-off (multi-window, done 2026-09-03).** Not `NSWindow.performDrag(with:)` (a modal window move: no further mouse events, so
       no drop target can highlight) and not `NSDraggingSession` (wrong look). Chromium-on-Mac's way: the same
       `NSApp.nextEvent` loop watches y; past ~40pt out of the strip it spawns a `MainWindowController`, moves the note
       across (no save prompt), and places the frame so the tab stays under the pointer (the traffic lights inset the
@@ -312,9 +342,27 @@
       `AppDelegate` keeps a window list instead of one controller, summon and `application(_:open:)` target the key
       window, `setFrameAutosaveName` goes per-window. `session.json` gains `windows: [{tabs, selectedIndex, frame}]`,
       with today's flat tab list decoded as one window. ⌘N stays "new tab"; ⌘⇧N is a new window.
-    D next; it moves the tracking loop from the tab view to the strip and onto `NSApp.nextEvent` first.
+      Phase 1 (shell) done 2026-09-03: `WindowRegistry` holds the window list and says which is active (key, else last
+      key, else first); `SessionState.windows` with a per-window frame and the flat mirror; `MainWindowController` is
+      handed its `SessionWindow` and writes through an injected session writer, so one prune covers every window;
+      `detachNote(at:keepingOneTab:)` / `attach(_:at:select:)` move a note between windows with no mouse and no prompt.
+      Window close decided: the last window hides as it always did, and any other closes for real with its tabs handed
+      to the most recently active other window rather than prompting or being lost.
+      Phase 2 (the gesture) done 2026-09-03. The tracking loop stayed on `TabItemView` and moved to `NSApp.nextEvent`,
+      which is what keeps the drags and the mouse-up coming once the new window is key and once the tab's own view has
+      left the strip; past 40pt above or below the strip — or off either side of the window — `TabBarView` gives up its
+      reorder and only forwards `tearOff` / `tabBarDragMoved` / `tabBarDragEnded` to its delegate.
+      `MainWindowController` detaches the note, asks the registry for a window its own size placed so the tab is under
+      the pointer, moves it with `setFrameOrigin` on every drag, and hit-tests `windowNumber(at:)` for another Nota
+      strip, which draws a 2pt `controlAccentColor` caret in the gap the tab would drop into.
+      A user can now drag a tab out into a window of its own, drop it on any Nota window's strip to move it there,
+      and press Esc mid-drag to put the tab back in the slot it came from and take the extra window away; a window
+      that gave up its last tab hides for the length of the gesture and is gone by the end of it.
+      Two departures from Chromium: coming back over the strip the tab left does not re-dock it (the window simply
+      follows the pointer, and only a release over a strip docks), and a window closing with tabs in it hands them to
+      the most recently active window instead of closing them.
 16. **Big files, in full** (after the tab strip; see 8). Also: spell checking off for anything that is not prose (by
     extension) and for any file past a size, and `allowsNonContiguousLayout` so word wrap lays out only what is on screen.
 
 Order from here: v0.4 (tab drag, PDF tabs, maths in Markdown) → workspace refactor → LaTeX preview (v0.5, done) →
-tab strip → big files.
+HTML preview → tab strip → big files.

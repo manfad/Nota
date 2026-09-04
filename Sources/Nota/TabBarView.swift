@@ -10,6 +10,26 @@ protocol TabBarViewDelegate: AnyObject {
     func tabBar(_ bar: TabBarView, didRequestCloseAt index: Int)
     func tabBarDidRequestNewTab(_ bar: TabBarView)
     func tabBar(_ bar: TabBarView, didMove index: Int, to newIndex: Int)
+
+    /// The dragged tab has left the strip far enough to stop being part of
+    /// this window: the strip has given up its own reorder, and the tab
+    /// belongs to a window of its own from here. `grabOffset` is where
+    /// inside the tab the pointer took hold of it, so the tab can be placed
+    /// under the pointer in the window it lands in.
+    func tabBar(_ bar: TabBarView, tearOff index: Int, grabOffset: NSPoint, screenPoint: NSPoint)
+    /// Every drag after a tear-off. The strip has nothing left to move; it
+    /// only keeps the gesture flowing to whoever owns the torn tab.
+    func tabBarDragMoved(_ bar: TabBarView, to screenPoint: NSPoint)
+    /// The release (`committed`) or Esc (`false`) that ends a torn-off drag.
+    func tabBarDragEnded(_ bar: TabBarView, committed: Bool, at screenPoint: NSPoint)
+}
+
+/// Tear-off is the only part of the strip a delegate may ignore — a test
+/// recorder that only cares about selection still compiles.
+extension TabBarViewDelegate {
+    func tabBar(_ bar: TabBarView, tearOff index: Int, grabOffset: NSPoint, screenPoint: NSPoint) {}
+    func tabBarDragMoved(_ bar: TabBarView, to screenPoint: NSPoint) {}
+    func tabBarDragEnded(_ bar: TabBarView, committed: Bool, at screenPoint: NSPoint) {}
 }
 
 /// The strip of tabs that sits in the title bar next to the traffic lights.
@@ -43,6 +63,11 @@ final class TabBarView: NSView {
     private static let dragSlotHysteresis: CGFloat = 4
     private static let dragRevealEdge: CGFloat = 24
     private static let dragRevealInterval: TimeInterval = 0.25
+    /// How far out of the strip the pointer goes before the tab stops being
+    /// this window's — Chromium's `kTearawayDistance` in spirit.
+    private static let tearOffDistance: CGFloat = 40
+    /// The insertion caret a strip shows while a torn-off tab hovers it.
+    private static let dropCaretWidth: CGFloat = 2
 
     /// The hairline drawn in the gap between two plain tabs.
     private static let separatorHeight: CGFloat = 12
@@ -96,11 +121,21 @@ final class TabBarView: NSView {
         let startPointerX: CGFloat
         let startViewX: CGFloat
         var lastPointerX: CGFloat
+        /// Where inside the tab the pointer took hold of it. The tab must
+        /// stay under the pointer when it lands in a window of its own.
+        let grabOffset: NSPoint
     }
 
     private var dragSession: DragSession?
     private var dragRevealTimer: Timer?
     private var dragEscMonitor: Any?
+    /// True from the moment a drag leaves the strip until it is released.
+    /// The strip reorders nothing any more; it only carries the rest of the
+    /// gesture to the delegate, which owns the window the tab is now in.
+    private var isTornOff = false
+    /// The gap a tab released now would drop into, when this strip is the
+    /// one under another window's torn-off tab.
+    private var dropCaretSlot: Int?
 
     /// The strip never lets AppKit move the window on its own: with the
     /// automatic region on, a press on a tab dragged the window *and* the
@@ -140,6 +175,44 @@ final class TabBarView: NSView {
         self.items = items
         self.selectedIndex = selectedIndex
         rebuild()
+    }
+
+    // MARK: - Dropping a torn-off tab
+
+    /// Shows where a tab released now would go in: a caret in the gap
+    /// itself, the way a browser marks the insertion point. `nil` clears it.
+    func showDropCaret(at slot: Int?) {
+        guard dropCaretSlot != slot else { return }
+        dropCaretSlot = slot
+        needsDisplay = true
+    }
+
+    /// This point on screen inside the strip, in the strip's own
+    /// coordinates — `nil` when the pointer is somewhere else entirely.
+    func barPoint(forScreenPoint point: NSPoint) -> NSPoint? {
+        guard let window else { return nil }
+        let local = convert(window.convertPoint(fromScreen: point), from: nil)
+        return bounds.contains(local) ? local : nil
+    }
+
+    /// The slot a tab released here would take. The visible tabs' midpoints
+    /// are the boundaries, so the caret follows the pointer tab by tab.
+    func dropSlot(at pointer: NSPoint) -> Int {
+        var slot = itemViews.firstIndex { !$0.isHidden } ?? 0
+        for (index, view) in itemViews.enumerated() where !view.isHidden {
+            guard pointer.x >= view.frame.midX else { break }
+            slot = index + 1
+        }
+        return slot
+    }
+
+    /// Where the caret is drawn for `slot`: the middle of the gap before
+    /// that tab, or after the last one.
+    private func dropCaretX(for slot: Int) -> CGFloat {
+        if itemViews.indices.contains(slot), !itemViews[slot].isHidden {
+            return itemViews[slot].frame.minX - Self.spacing / 2
+        }
+        return (itemViews.last { !$0.isHidden }?.frame.maxX ?? 0) + Self.spacing / 2
     }
 
     // MARK: - Test hooks
@@ -193,7 +266,7 @@ final class TabBarView: NSView {
     internal func beginDragForTesting(index: Int) {
         guard itemViews.indices.contains(index) else { return }
         let view = itemViews[index]
-        beginDrag(for: view, pointerX: view.frame.midX)
+        beginDrag(for: view, pointer: NSPoint(x: view.frame.midX, y: bounds.midY))
     }
 
     /// Test hook: the dragged tab's current x, or `nil` when nothing is
@@ -205,10 +278,32 @@ final class TabBarView: NSView {
 
     /// Test hook: advances the active drag in the same coordinate space as
     /// `TabItemView`'s real mouse events.
-    internal func updateDragForTesting(pointerX: CGFloat) {
-        guard let session = dragSession else { return }
-        updateDrag(for: itemViews[session.originalIndex], pointerX: pointerX)
+    internal func updateDragForTesting(pointerX: CGFloat,
+                                       pointerY: CGFloat? = nil,
+                                       screenPoint: NSPoint = .zero) {
+        let index = dragSession?.originalIndex ?? 0
+        guard itemViews.indices.contains(index) else { return }
+        guard dragSession != nil || isTornOff else { return }
+        updateDrag(
+            for: itemViews[index],
+            pointer: NSPoint(x: pointerX, y: pointerY ?? bounds.midY),
+            screenPoint: screenPoint
+        )
     }
+
+    /// Test hook: releases (or, with `committed` false, abandons) the drag
+    /// the way a mouse-up or Esc inside the tracking loop would.
+    internal func endDragForTesting(committed: Bool, at screenPoint: NSPoint = .zero) {
+        let index = dragSession?.originalIndex ?? 0
+        guard itemViews.indices.contains(index) else { return }
+        endDrag(for: itemViews[index], committed: committed, screenPoint: screenPoint)
+    }
+
+    /// Test hook: the gap the insertion caret is sitting in, if any.
+    internal var dropCaretSlotForTesting: Int? { dropCaretSlot }
+
+    /// Test hook: whether the strip has handed its tab to another window.
+    internal var isTornOffForTesting: Bool { isTornOff }
 
     /// Test hook: the slot the dragged tab would occupy if dropped now.
     internal var draggedTabSlotForTesting: Int? { dragSession?.currentSlot }
@@ -235,9 +330,13 @@ final class TabBarView: NSView {
             view.onSelect = { [weak self] tab in self?.select(tab) }
             view.onClose = { [weak self] tab in self?.close(tab) }
             view.onHoverChange = { [weak self] tab, hovering in self?.hoverChanged(tab, hovering) }
-            view.onDragStart = { [weak self] tab, pointerX in self?.beginDrag(for: tab, pointerX: pointerX) }
-            view.onDragMove = { [weak self] tab, pointerX in self?.updateDrag(for: tab, pointerX: pointerX) }
-            view.onDragEnd = { [weak self] tab, committed in self?.endDrag(for: tab, committed: committed) }
+            view.onDragStart = { [weak self] tab, grab in self?.beginDrag(for: tab, pointer: grab) }
+            view.onDragMove = { [weak self] tab, pointer, screen in
+                self?.updateDrag(for: tab, pointer: pointer, screenPoint: screen)
+            }
+            view.onDragEnd = { [weak self] tab, committed, screen in
+                self?.endDrag(for: tab, committed: committed, screenPoint: screen)
+            }
             addSubview(view, positioned: .below, relativeTo: newTabButton)
             itemViews.append(view)
         }
@@ -387,6 +486,17 @@ final class TabBarView: NSView {
     /// gap, which belongs to the strip rather than to either tab.
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+
+        if let slot = dropCaretSlot {
+            NSColor.controlAccentColor.setFill()
+            NSBezierPath(rect: NSRect(
+                x: dropCaretX(for: slot) - Self.dropCaretWidth / 2,
+                y: (bounds.height - Self.tabHeight) / 2,
+                width: Self.dropCaretWidth,
+                height: Self.tabHeight
+            )).fill()
+        }
+
         guard itemViews.count > 1 else { return }
         NSColor.labelColor.withAlphaComponent(0.15).setFill()
         let y = (bounds.height - Self.separatorHeight) / 2
@@ -404,8 +514,8 @@ final class TabBarView: NSView {
 
     // MARK: - Drag to reorder
 
-    private func beginDrag(for view: TabItemView, pointerX: CGFloat) {
-        guard dragSession == nil, let index = itemViews.firstIndex(of: view) else { return }
+    private func beginDrag(for view: TabItemView, pointer: NSPoint) {
+        guard dragSession == nil, !isTornOff, let index = itemViews.firstIndex(of: view) else { return }
         let plan = currentLayout()
         guard plan.widths.count == itemViews.count else { return }
         dragSession = DragSession(
@@ -416,9 +526,10 @@ final class TabBarView: NSView {
             revealedSlots: plan.firstVisibleIndex,
             originX: plan.xs.first ?? 0,
             plusX: plan.plusX,
-            startPointerX: pointerX,
+            startPointerX: pointer.x,
             startViewX: view.frame.minX,
-            lastPointerX: pointerX
+            lastPointerX: pointer.x,
+            grabOffset: NSPoint(x: pointer.x - view.frame.minX, y: pointer.y - view.frame.minY)
         )
         // Above every sibling while it rides the pointer, and a touch
         // translucent so it reads as lifted off the strip.
@@ -427,11 +538,51 @@ final class TabBarView: NSView {
         startEscMonitor()
     }
 
-    private func updateDrag(for view: TabItemView, pointerX: CGFloat) {
-        guard dragSession != nil else { return }
-        dragSession?.lastPointerX = pointerX
-        updateDragPositions(pointerX: pointerX)
-        updateEdgeReveal(pointerX: pointerX)
+    /// `pointer` is `nil` once the dragged tab has left the strip — the note
+    /// has gone to another window and its view went with it, so there is no
+    /// strip left to place it against. Only the screen point matters then.
+    private func updateDrag(for view: TabItemView, pointer: NSPoint?, screenPoint: NSPoint) {
+        // Past the tear-off the strip is only a courier: the tab is a window
+        // now, and coming back over the strip does not dock it again —
+        // Chromium does not re-dock either, the window simply follows.
+        if isTornOff {
+            delegate?.tabBarDragMoved(self, to: screenPoint)
+            return
+        }
+        guard let pointer, let session = dragSession else { return }
+        if hasLeftTheStrip(pointer) {
+            tearOff(session, screenPoint: screenPoint)
+            return
+        }
+        dragSession?.lastPointerX = pointer.x
+        updateDragPositions(pointerX: pointer.x)
+        updateEdgeReveal(pointerX: pointer.x)
+    }
+
+    /// Far enough above or below the strip, or off either side of the
+    /// window: the pointer is no longer arranging this window's tabs.
+    private func hasLeftTheStrip(_ pointer: NSPoint) -> Bool {
+        if pointer.y < -Self.tearOffDistance || pointer.y > bounds.height + Self.tearOffDistance {
+            return true
+        }
+        guard let window else { return false }
+        let inWindow = convert(pointer, to: nil)
+        return inWindow.x < 0 || inWindow.x > window.frame.width
+    }
+
+    /// Hands the tab over. The strip drops its own reorder outright rather
+    /// than cancelling it: the dragged tab is about to leave `items`, so
+    /// sliding it home would only animate a tab on its way out.
+    private func tearOff(_ session: DragSession, screenPoint: NSPoint) {
+        stopEdgeReveal()
+        stopEscMonitor()
+        dragSession = nil
+        isTornOff = true
+        itemViews[session.originalIndex].alphaValue = 1
+        restoreSubviewOrdering()
+        needsLayout = true
+        delegate?.tabBar(self, tearOff: session.originalIndex,
+                         grabOffset: session.grabOffset, screenPoint: screenPoint)
     }
 
     /// Moves the tab one-to-one with the pointer, then snaps the gap to the
@@ -594,7 +745,13 @@ final class TabBarView: NSView {
         }
     }
 
-    private func endDrag(for view: TabItemView, committed: Bool) {
+    private func endDrag(for view: TabItemView, committed: Bool, screenPoint: NSPoint) {
+        if isTornOff {
+            isTornOff = false
+            showDropCaret(at: nil)
+            delegate?.tabBarDragEnded(self, committed: committed, at: screenPoint)
+            return
+        }
         guard let session = dragSession else { return }
         stopEdgeReveal()
         stopEscMonitor()
@@ -626,7 +783,7 @@ final class TabBarView: NSView {
 
     private func cancelDrag() {
         guard let session = dragSession else { return }
-        endDrag(for: itemViews[session.originalIndex], committed: false)
+        endDrag(for: itemViews[session.originalIndex], committed: false, screenPoint: .zero)
     }
 
     /// Sum of the widths (plus spacing) of every tab before `slot` in
@@ -768,12 +925,18 @@ private final class TabItemView: NSView {
     /// prevents the tab from lagging behind the pointer by the activation
     /// threshold. It arrives from inside `mouseDown`'s tracking loop, after
     /// the tab has already been selected.
-    var onDragStart: ((TabItemView, CGFloat) -> Void)?
-    /// Fired on every subsequent drag, same coordinate space.
-    var onDragMove: ((TabItemView, CGFloat) -> Void)?
+    var onDragStart: ((TabItemView, NSPoint) -> Void)?
+    /// Fired on every subsequent drag, with the pointer in the bar's
+    /// coordinates and on screen. The screen point is what survives the tab
+    /// leaving the window: after a tear-off the events belong to the new
+    /// window, and the bar's own coordinates mean nothing to it any more —
+    /// the tab view itself is usually out of the strip by then, which is
+    /// what the bar point being optional says.
+    var onDragMove: ((TabItemView, NSPoint?, NSPoint) -> Void)?
     /// Fired once a drag was underway and has finished: `committed` is
-    /// `true` on mouse-up, `false` when Esc abandoned it mid-gesture.
-    var onDragEnd: ((TabItemView, Bool) -> Void)?
+    /// `true` on mouse-up, `false` when Esc abandoned it mid-gesture, with
+    /// the pointer on screen at that moment.
+    var onDragEnd: ((TabItemView, Bool, NSPoint) -> Void)?
 
     private static let font = NSFont.systemFont(ofSize: 12)
     private static let horizontalPadding: CGFloat = 10
@@ -802,6 +965,9 @@ private final class TabItemView: NSView {
     private var isHoveringClose = false
     private var dragTrackingStart: NSPoint?
     private var isDraggingTab = false
+    /// The last pointer position on screen this gesture saw. Esc arrives as
+    /// a key event, which has no useful location of its own.
+    private var lastDragScreenPoint: NSPoint = .zero
 
     private let dotView = DirtyDotView()
     private let closeButton = TabCloseButton()
@@ -966,6 +1132,7 @@ private final class TabItemView: NSView {
     /// handled in the loop rather than by the bar's monitor.
     override func mouseDown(with event: NSEvent) {
         dragTrackingStart = event.locationInWindow
+        lastDragScreenPoint = screenPoint(of: event)
         isDraggingTab = false
         onSelect?(self)
 
@@ -974,28 +1141,36 @@ private final class TabItemView: NSView {
         // Selection can also have removed this tab outright.
         guard superview != nil, window != nil else { return }
 
-        while let window = self.window,
-              let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown],
-                                          until: .distantFuture,
-                                          inMode: .eventTracking,
-                                          dequeue: true) {
-            switch next.type {
-            case .leftMouseDragged:
-                mouseDragged(with: next)
-            case .leftMouseUp:
-                mouseUp(with: next)
-                return
-            case .keyDown:
-                // Esc abandons a drag in progress, but the button is still
-                // down: keep dequeuing until it comes up. Every other key is
-                // swallowed for the duration of the gesture.
-                guard next.keyCode == 53 else { break }
-                let wasDragging = isDraggingTab
-                isDraggingTab = false
-                dragTrackingStart = nil
-                if wasDragging { onDragEnd?(self, false) }
-            default:
-                break
+        // The app's queue, not this window's: a tear-off makes a new window
+        // key half way through the gesture, and the drags and the mouse-up
+        // then belong to that one. Asking only this window for its own
+        // events would strand the tab the moment it left the strip. The
+        // view can also leave the strip while the loop runs — the note goes
+        // to another window, its tab view goes with it — so the loop holds
+        // itself alive and ends on the mouse-up rather than on the window.
+        withExtendedLifetime(self) {
+            while let next = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown],
+                                             until: .distantFuture,
+                                             inMode: .eventTracking,
+                                             dequeue: true) {
+                switch next.type {
+                case .leftMouseDragged:
+                    mouseDragged(with: next)
+                case .leftMouseUp:
+                    mouseUp(with: next)
+                    return
+                case .keyDown:
+                    // Esc abandons a drag in progress, but the button is still
+                    // down: keep dequeuing until it comes up. Every other key is
+                    // swallowed for the duration of the gesture.
+                    guard next.keyCode == 53 else { break }
+                    let wasDragging = isDraggingTab
+                    isDraggingTab = false
+                    dragTrackingStart = nil
+                    if wasDragging { onDragEnd?(self, false, lastDragScreenPoint) }
+                default:
+                    break
+                }
             }
         }
     }
@@ -1003,6 +1178,8 @@ private final class TabItemView: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard let start = dragTrackingStart else { return }
         let location = event.locationInWindow
+        let screen = screenPoint(of: event)
+        lastDragScreenPoint = screen
         if !isDraggingTab {
             // Count the user's actual pointer travel. Looking only at x made
             // a natural, slightly diagonal gesture take longer to engage.
@@ -1012,20 +1189,37 @@ private final class TabItemView: NSView {
             isDraggingTab = true
             // The grab point, not the current location: the tab must not
             // jump forward by the threshold the moment it lifts off.
-            if let grabX = superview?.convert(start, from: nil).x {
-                onDragStart?(self, grabX)
+            if let grab = superview?.convert(start, from: nil) {
+                onDragStart?(self, grab)
             }
         }
-        if let barX = superview?.convert(location, from: nil).x {
-            onDragMove?(self, barX)
-        }
+        onDragMove?(self, barPoint(of: event, onScreen: screen), screen)
     }
 
     override func mouseUp(with event: NSEvent) {
         dragTrackingStart = nil
         guard isDraggingTab else { return }
         isDraggingTab = false
-        onDragEnd?(self, true)
+        onDragEnd?(self, true, screenPoint(of: event))
+    }
+
+    /// The pointer on screen. An event carries its location in *its own*
+    /// window, which stops being this one the moment a tab is torn off, so
+    /// the event's window is the only sound thing to convert through.
+    private func screenPoint(of event: NSEvent) -> NSPoint {
+        let source = event.window ?? window
+        return source?.convertPoint(toScreen: event.locationInWindow) ?? event.locationInWindow
+    }
+
+    /// The same pointer in the strip's coordinates. An event from another
+    /// window comes back through the screen; one from this window is
+    /// converted directly, which is what every drag before a tear-off is.
+    private func barPoint(of event: NSEvent, onScreen screen: NSPoint) -> NSPoint? {
+        guard let superview else { return nil }
+        guard let window, event.window !== window else {
+            return superview.convert(event.locationInWindow, from: nil)
+        }
+        return superview.convert(window.convertPoint(fromScreen: screen), from: nil)
     }
 
     /// Middle-click closes, the way it does in a browser.

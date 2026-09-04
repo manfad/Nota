@@ -30,9 +30,39 @@ final class MainWindowController: NSWindowController {
         static let previewModeSlideStep: TimeInterval = 1.0 / 60
     }
 
+    /// How far the tab strip starts from the window's leading edge: the
+    /// room the traffic lights need. A tab torn off into a window of its own
+    /// lands right against it, so the gesture has to know the figure.
+    static let tabStripLeadingInset = Layout.trafficLightInset
+
     private let store: SessionStore
     private var notes: [Note] = []
     private var selectedIndex = 0
+
+    /// How the session file gets written. The app hands in its own, which
+    /// gathers every window; a controller standing on its own — a test, or
+    /// the last window left — writes itself out as the whole session.
+    var sessionWriter: (() -> Void)?
+    /// What ⌘W means for this window, once the app has more than one. `nil`,
+    /// or a handler that says no, keeps today's behaviour: flush and hide.
+    /// Saying yes lets the window close for real; the handler has already
+    /// found its tabs another home.
+    var windowCloseHandler: ((MainWindowController) -> Bool)?
+
+    /// A tab dragged out of the strip needs a window of its own: the
+    /// registry makes one around the note, at the frame the gesture asks
+    /// for. Without a handler — a controller standing on its own in a test
+    /// — a tab simply cannot be torn off, and the drag does nothing.
+    var tearOffHandler: ((Note, NSRect) -> MainWindowController?)?
+    /// Which window a torn-off tab is hovering, so its strip can show where
+    /// the tab would land. The registry asks the window server; a test
+    /// answers for the windows it parked off screen itself.
+    var dockTargetFinder: ((NSPoint, NSWindow) -> MainWindowController?)?
+    /// How a window nobody wants any more goes away.
+    var windowCloser: ((MainWindowController) -> Void)?
+    /// How a window is put in front. Tests hand in one that keeps it off
+    /// every display, so a run of the suite never flashes a window up.
+    var windowPresenter: ((NSWindow) -> Void)?
 
     private var preferences: Preferences { .shared }
     private var fontSize: CGFloat { preferences.fontSize }
@@ -169,10 +199,42 @@ final class MainWindowController: NSWindowController {
     private var installedStorage: NSTextStorage
     private var saveWorkItem: DispatchWorkItem?
 
+    /// A tab that has been dragged out of this window's strip and is riding
+    /// the pointer in a window of its own. It lives until the release, and
+    /// the release is what decides whether that window stays.
+    struct TearOff {
+        let controller: MainWindowController
+        /// Where the tab was in this window's strip, so Esc can put it back.
+        let sourceIndex: Int
+        /// Where the pointer sits inside the torn-off window.
+        let pointerOffset: NSPoint
+        /// Whether this window gave up its last tab to start the gesture.
+        let sourceEmptied: Bool
+        /// The strip the pointer is over, and the slot it would drop into.
+        var dockTarget: MainWindowController?
+        var dockSlot: Int?
+    }
+
+    private var tearOffGesture: TearOff?
+
+    /// True only while AppKit is inside this window's own close, so nothing
+    /// asks a window that is already going to go again.
+    private(set) var isClosingWindow = false
+
     // MARK: - Setup
 
-    init(store: SessionStore) {
+    /// `sessionWindow` is the window this controller stands for at launch:
+    /// the app hands one in per window in the session file. `nil` means read
+    /// the file and take the first window — the single-window path a test
+    /// and a lone window take, and the only one that may prune the cache.
+    /// `adopting` hands the window its notes outright, for one torn off
+    /// another window.
+    init(store: SessionStore,
+         restoring sessionWindow: SessionWindow? = nil,
+         adopting adoptedNotes: [Note] = [],
+         sessionWriter: (() -> Void)? = nil) {
         self.store = store
+        self.sessionWriter = sessionWriter
 
         // Explicit TextKit 1 stack: `replaceTextStorage` is how a tab switch
         // swaps documents, and that lives on NSLayoutManager.
@@ -205,8 +267,9 @@ final class MainWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 420, height: 260)
         window.delegate = self
+        // Where the window sits is the session's to say, per window — one
+        // autosaved frame cannot hold more than one of them.
         window.center()
-        window.setFrameAutosaveName("NotaMainWindow")
 
         let workspace = PaneView()
         workspacePane.view = workspace
@@ -227,7 +290,24 @@ final class MainWindowController: NSWindowController {
         buildWorkspaceSplitItems()
         rebuildSplitItems()
         configureVim()
-        restoreSession()
+
+        // A window with no session window of its own is the whole session:
+        // it reads the file, takes the font size from it, and is the only
+        // one entitled to prune the cache — with more than one window open,
+        // another window's cached text is not rubbish.
+        let loaded = sessionWindow == nil && adoptedNotes.isEmpty ? store.load() : nil
+        if let size = loaded?.fontSize { preferences.fontSize = CGFloat(size) }
+        let restored = sessionWindow ?? loaded?.windows.first
+
+        // Before the tabs, so the first save this window makes already has
+        // the frame it came back to rather than the one it was built with.
+        if let frame = restored?.frame { window.setFrame(frame.rect, display: false) }
+
+        if adoptedNotes.isEmpty {
+            restoreSession(restored, pruningCache: sessionWindow == nil)
+        } else {
+            adopt(adoptedNotes)
+        }
 
         NotificationCenter.default.addObserver(
             self, selector: #selector(preferencesChanged),
@@ -868,13 +948,8 @@ final class MainWindowController: NSWindowController {
 
     // MARK: - Session restore
 
-    private func restoreSession() {
-        let state = store.load()
-        if let sessionFontSize = state?.fontSize {
-            preferences.fontSize = CGFloat(sessionFontSize)
-        }
-
-        for tab in state?.tabs ?? [] {
+    private func restoreSession(_ sessionWindow: SessionWindow?, pruningCache: Bool) {
+        for tab in sessionWindow?.tabs ?? [] {
             notes.append(makeRestoredNote(from: tab))
         }
         if notes.isEmpty {
@@ -882,10 +957,23 @@ final class MainWindowController: NSWindowController {
         }
         normalizeUntitledNames()
 
-        selectedIndex = state?.selectedTabID
+        selectedIndex = sessionWindow?.selectedTabID
             .flatMap { id in notes.firstIndex { $0.id == id } } ?? 0
 
-        store.pruneCache(keeping: notes.map(\.id))
+        if pruningCache { store.pruneCache(keeping: notes.map(\.id)) }
+        finishRestore()
+    }
+
+    /// A window opened around notes that already exist — one torn off
+    /// another window. Nothing is read and nothing is pruned: the notes
+    /// bring their text, their undo history and their cache files with them.
+    private func adopt(_ adopted: [Note]) {
+        notes = adopted
+        selectedIndex = 0
+        finishRestore()
+    }
+
+    private func finishRestore() {
         installCurrentNote()
         refreshTabs()
         updateStatus()
@@ -1181,6 +1269,22 @@ final class MainWindowController: NSWindowController {
         notes.map { ($0.title, $0.text, $0.fileURL, $0.format) }
     }
 
+    /// This window's tab strip. Another window's tear-off asks it where a
+    /// dropped tab would land and tells it what caret to show.
+    var tabStrip: TabBarView { tabBar }
+
+    /// Where a tab released at this point on screen would go in this
+    /// window's strip — `nil` when the point is not over the strip at all.
+    func dropSlot(forScreenPoint point: NSPoint) -> Int? {
+        tabBar.barPoint(forScreenPoint: point).map(tabBar.dropSlot(at:))
+    }
+
+    /// Shows (or, with `nil`, clears) the insertion caret a torn-off tab
+    /// hovering this window's strip draws.
+    func showDropCaret(at slot: Int?) {
+        tabBar.showDropCaret(at: slot)
+    }
+
     /// The footer's three regions, for the layout tests: the vim badge, the
     /// centred counts, and the caret position.
     var footerRegions: (badge: NSView, pendingKeys: NSTextField,
@@ -1252,6 +1356,84 @@ final class MainWindowController: NSWindowController {
             selectedIndex = notes.firstIndex { $0 === selectedNote } ?? selectedIndex
         }
         refreshTabs()
+        flush()
+    }
+
+    /// Takes a tab out of this window without deleting its cached text and
+    /// without asking about unsaved edits: the note is not going away, it is
+    /// going to another window. The note carries its own storage, undo
+    /// manager, selection and dirty flag, so all of that moves with it.
+    ///
+    /// `keepingOneTab` is what a window that stays open wants — a strip is
+    /// never empty. The window whose last tab is being torn off passes
+    /// false, and closes.
+    func detachNote(at index: Int, keepingOneTab: Bool = true) -> Note? {
+        guard notes.indices.contains(index) else { return nil }
+        let note = notes[index]
+        let wasSelected = index == selectedIndex
+        if wasSelected { rememberSelection(note) }
+        notes.remove(at: index)
+
+        if notes.isEmpty {
+            guard keepingOneTab else {
+                // Nothing is in front any more. The text view is parked on an
+                // empty storage so the note takes its own — and its layout —
+                // away with it, ready to be installed in the next window.
+                let empty = NSTextStorage()
+                textView.layoutManager?.replaceTextStorage(empty)
+                installedStorage = empty
+                selectedIndex = 0
+                refreshTabs()
+                updateStatus()
+                return note
+            }
+            notes.append(makeUntitledNote())
+            selectedIndex = 0
+            store.writeText("", for: notes[0].id)
+            installCurrentNote()
+        } else {
+            if index < selectedIndex {
+                selectedIndex -= 1
+            } else if wasSelected {
+                selectedIndex = min(index, notes.count - 1)
+            }
+            if wasSelected { installCurrentNote() }
+        }
+
+        refreshTabs()
+        updateStatus()
+        refreshImages(force: true)
+        flush()
+        return note
+    }
+
+    /// Puts a detached note into this window's strip. `index` is where it
+    /// lands; `nil` is the end.
+    func attach(_ note: Note, at index: Int? = nil, select: Bool = true) {
+        let target = min(max(index ?? notes.count, 0), notes.count)
+        let hadNotes = !notes.isEmpty
+        notes.insert(note, at: target)
+        // Two windows can each hold an `Untitled`; the one moving in takes
+        // the next free name rather than doubling up in one strip.
+        if note.fileURL == nil,
+           notes.contains(where: { $0 !== note && $0.title == note.title }) {
+            note.untitledName = UntitledNaming.nextName(
+                existing: notes.filter { $0 !== note }.map(\.title)
+            )
+        }
+
+        // An empty window has nothing else to show, so the arrival is what
+        // goes in front whether it was asked for or not.
+        if select || !hadNotes {
+            selectedIndex = target
+            installCurrentNote()
+        } else if target <= selectedIndex {
+            selectedIndex += 1
+        }
+
+        refreshTabs()
+        updateStatus()
+        refreshImages(force: true)
         flush()
     }
 
@@ -1497,15 +1679,26 @@ final class MainWindowController: NSWindowController {
         note.selectionLocation = position
     }
 
-    /// Scratch tabs are left out of both the session file and the cache, so
-    /// `:help` is gone by the next launch rather than restored as a note.
-    private func writeSessionFile() {
+    /// This window as the session file holds it. Scratch tabs are left out
+    /// of both the session file and the cache, so `:help` is gone by the
+    /// next launch rather than restored as a note.
+    var sessionWindow: SessionWindow {
         let saved = notes.filter { !$0.isScratch }
-        store.save(SessionState(
+        return SessionWindow(
             tabs: saved.map { $0.sessionTab() },
             selectedTabID: (currentNote?.isScratch == true ? saved.first : currentNote)?.id,
-            fontSize: Double(fontSize)
-        ))
+            frame: window.map { SessionFrame($0.frame) }
+        )
+    }
+
+    /// The app's writer knows about every window; without one this window is
+    /// the whole session.
+    private func writeSessionFile() {
+        guard let sessionWriter else {
+            store.save(SessionState(windows: [sessionWindow], fontSize: Double(fontSize)))
+            return
+        }
+        sessionWriter()
     }
 
     // MARK: - Font size
@@ -1899,8 +2092,8 @@ extension MainWindowController {
     /// source.
     var canShowRenderedPreview: Bool { currentNote?.supportsRenderedPreview ?? false }
 
-    /// Which grammar the front tab's render reads — what the View item calls
-    /// itself. `nil` for a tab with no render, where the item is disabled.
+    /// What the front tab is read through — what the View item calls itself.
+    /// `nil` for a tab with no preview, where the item is disabled.
     var currentRenderedPreviewKind: RenderedPreviewKind? { currentNote?.previewKind }
 
     /// What the tab in front asks for — what the View menu's checkmarks say,
@@ -2755,6 +2948,100 @@ extension MainWindowController: TabBarViewDelegate {
     func tabBar(_ bar: TabBarView, didMove index: Int, to newIndex: Int) {
         moveTab(from: index, to: newIndex)
     }
+
+    // MARK: Tear-off
+
+    /// The tab has left the strip: it gets a window of its own, sized like
+    /// this one and placed so the tab is exactly where the pointer left it.
+    /// The gesture is still running in this window's tab view, so this
+    /// window stays alive until the release, even when it has nothing left
+    /// to show.
+    func tabBar(_ bar: TabBarView, tearOff index: Int, grabOffset: NSPoint, screenPoint: NSPoint) {
+        guard tearOffGesture == nil, let window, notes.indices.contains(index) else { return }
+        let wasLastTab = notes.count == 1
+        guard let note = detachNote(at: index, keepingOneTab: !wasLastTab) else { return }
+
+        // Where the pointer sits inside the window it is about to hold: the
+        // strip starts after the traffic lights, the torn tab is the first
+        // one in it, and the strip's middle is the height it is grabbed at.
+        let size = window.frame.size
+        let pointerOffset = NSPoint(
+            x: Self.tabStripLeadingInset + grabOffset.x,
+            y: size.height - TabBarView.height / 2
+        )
+        let frame = NSRect(origin: originForPointer(screenPoint, offset: pointerOffset), size: size)
+
+        guard let torn = tearOffHandler?(note, frame) else {
+            // Nowhere to put it: the tab goes straight back where it was.
+            attach(note, at: index, select: true)
+            return
+        }
+        torn.windowPresenter = windowPresenter
+        if let tornWindow = torn.window { present(tornWindow) }
+        if wasLastTab { window.orderOut(nil) }
+
+        tearOffGesture = TearOff(
+            controller: torn, sourceIndex: index,
+            pointerOffset: pointerOffset, sourceEmptied: wasLastTab
+        )
+    }
+
+    /// The torn-off window follows the pointer one to one, and whichever
+    /// strip is under the pointer shows where the tab would drop.
+    func tabBarDragMoved(_ bar: TabBarView, to screenPoint: NSPoint) {
+        guard var state = tearOffGesture, let tornWindow = state.controller.window else { return }
+        tornWindow.setFrameOrigin(originForPointer(screenPoint, offset: state.pointerOffset))
+
+        let target = dockTargetFinder?(screenPoint, tornWindow)
+        let slot = target?.dropSlot(forScreenPoint: screenPoint)
+        if let previous = state.dockTarget, previous !== target || slot == nil {
+            previous.showDropCaret(at: nil)
+        }
+        state.dockTarget = slot == nil ? nil : target
+        state.dockSlot = slot
+        if let slot { target?.showDropCaret(at: slot) }
+        tearOffGesture = state
+    }
+
+    /// Mouse-up drops the tab — into the strip under it, or nowhere, which
+    /// leaves the new window standing where it is. Esc undoes the whole
+    /// gesture: the tab goes home and the extra window never happened.
+    func tabBarDragEnded(_ bar: TabBarView, committed: Bool, at screenPoint: NSPoint) {
+        guard let state = tearOffGesture else { return }
+        tearOffGesture = nil
+        state.dockTarget?.showDropCaret(at: nil)
+
+        guard committed else {
+            if let note = state.controller.detachNote(at: 0, keepingOneTab: false) {
+                attach(note, at: state.sourceIndex, select: true)
+            }
+            if state.sourceEmptied, let window { present(window) }
+            windowCloser?(state.controller)
+            return
+        }
+
+        if let target = state.dockTarget,
+           let note = state.controller.detachNote(at: 0, keepingOneTab: false) {
+            target.attach(note, at: state.dockSlot, select: true)
+            if let window = target.window { present(window) }
+            windowCloser?(state.controller)
+        }
+
+        // The window that gave up its last tab and got nothing back has
+        // nothing left to be.
+        if notes.isEmpty { windowCloser?(self) }
+    }
+
+    /// The window origin that puts `offset` — a point in the window's own
+    /// coordinates — under the pointer.
+    private func originForPointer(_ screenPoint: NSPoint, offset: NSPoint) -> NSPoint {
+        NSPoint(x: screenPoint.x - offset.x, y: screenPoint.y - offset.y)
+    }
+
+    private func present(_ window: NSWindow) {
+        guard let windowPresenter else { return window.makeKeyAndOrderFront(nil) }
+        windowPresenter(window)
+    }
 }
 
 extension MainWindowController: NSTextViewDelegate {
@@ -2796,8 +3083,14 @@ extension MainWindowController: NSTextViewDelegate {
 extension MainWindowController: NSWindowDelegate {
     /// Closing the window only hides it — nothing is ever lost, so there is
     /// nothing to prompt about.
+    /// With one window open, closing it only hides it — the window is a view
+    /// onto the cache, not the app. With more than one, the app's handler
+    /// hands this window's tabs to another one and lets it close for real.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         flushAll()
+        isClosingWindow = true
+        defer { isClosingWindow = false }
+        if windowCloseHandler?(self) == true { return true }
         sender.orderOut(nil)
         return false
     }
