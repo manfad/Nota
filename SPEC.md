@@ -328,8 +328,17 @@
    tab; with none installed it prints the native render, the same as the Markdown export.
 7. **Line operations** the Notepad++ hands expect outside vim mode: ⌥↑ / ⌥↓ move line, ⇧⌥↓ duplicate, ⌘D duplicate/select-next,
    ⌘/ toggle a `#`/`//` comment by extension, Tab / ⇧Tab indent a selection, ⌘] ⌘[ likewise.
-8. **Big files.** Open a 100 MB log and a 200k-line CSV without the gutter, the chip scan or the word count freezing the
-   run loop: count on a background queue, chip scan only the visible range, gutter numbers by line-index table.
+8. **Big files (done 2026-09-04, with 16).** Open a 100 MB log and a 200k-line CSV without the gutter, the chip scan or
+   the word count freezing the run loop. A note past `BigFile.threshold` (1M UTF-16 units) is *big*. Every note owns a
+   `LineIndex` — the start of every hard line, built once with chunked `getCharacters` and folded forward from
+   `NSTextStorage.didProcessEditingNotification` one edit at a time — and the gutter, the footer's line count and the
+   caret's `Ln, Col` read it by binary search. Pictures are counted through the attribute runs
+   (`forEachAttachmentRun`; `enumerateAttribute` walks the characters), so a log with none costs one run. Words and
+   characters of a big note count on a background queue from a snapshot — 0.5 s after the last keystroke, at once on
+   open and tab switch — and the footer keeps the last answer until the new one lands; a small note counts on the spot
+   as before. `NoteText` skips its regex when the text has no `](nota://` in it and `serialize` hands the string back
+   when nothing is attached. A big note's cache write is debounced 2 s and done off the main thread.
+   The storage's `string` bridges to Swift by copying: hot paths read `mutableString` instead.
 9. **Headings outline.** `@` in the ⌘P switcher lists the front `.md` tab's headings; choosing one puts the caret there
    and, in split/reading, scrolls the render to the block.
 10. **Ship it.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on another Mac
@@ -391,8 +400,13 @@
       Two departures from Chromium: coming back over the strip the tab left does not re-dock it (the window simply
       follows the pointer, and only a release over a strip docks), and a window closing with tabs in it hands them to
       the most recently active window instead of closing them.
-16. **Big files, in full** (after the tab strip; see 8). Also: spell checking off for anything that is not prose (by
-    extension) and for any file past a size, and `allowsNonContiguousLayout` so word wrap lays out only what is on screen.
+16. **Big files, in full (done 2026-09-04; see 8).** `SpellCheckPolicy`: the spell checker runs only for prose by
+    extension (`md markdown txt text tex latex ltx rst adoc asciidoc org`, an untitled note, a file with no extension)
+    and never for a big note; set per tab on install and again after Save As. `allowsNonContiguousLayout` on the
+    editor's layout manager, and the two calls that defeated it — `applyWordWrap`'s full `ensureLayout` (now the
+    visible rect) and `editorRect(for:)`'s (now the target character's range) — scoped. Still whole-text, later:
+    `RenderedPreviewView.show` lays out its whole render; vim's `text` copies the storage per motion;
+    `preferencesChanged` restyles every note in full (settings only).
 
 Order from here: v0.4 (tab drag, PDF tabs, maths in Markdown) → workspace refactor → LaTeX preview (v0.5, done) →
-HTML preview → tab strip → big files.
+HTML preview → tab strip → big files (done).
