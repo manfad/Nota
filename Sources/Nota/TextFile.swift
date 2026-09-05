@@ -204,26 +204,33 @@ enum TextFile {
 
     // MARK: - Types
 
-    /// Text on paper but not text to Nota on purpose: an RTF's or an
-    /// archive's own wrapper is plain ASCII and would decode as text as
-    /// happily as a real note, but SPEC rules them out by what they are
-    /// regardless — an image belongs to the asset store, not to a tab, and a
-    /// rich-text or zipped file is not a note either. PDF is not in this
-    /// list: it is content Nota opens, only as a viewer instead of an
-    /// editor, so `FileSniff` decides it by its magic bytes rather than by
-    /// exclusion. Nor is video: the system files `.ts` and `.mts` under
-    /// MPEG-2 transport stream, and a TypeScript module dropped on the window
-    /// used to be refused for it. A real video never decodes as text, so when
-    /// the bytes say text the name's claim to be a film is simply wrong.
+    /// Text on paper but not text to Nota on purpose: an archive's own
+    /// wrapper is plain ASCII and would decode as text as happily as a real
+    /// note, but SPEC rules it out by what it is regardless — an image
+    /// belongs to the asset store, not to a tab, and a zipped file is not a
+    /// note either.
+    ///
+    /// This is the "refused by name even when the bytes say text" list, and
+    /// three types that once looked like they belonged on it do not. PDF and
+    /// RTF are content Nota opens, only as viewers instead of editors, so
+    /// `FileSniff` decides each by its own magic bytes long before a name is
+    /// asked; a file merely *named* `.rtf` whose bytes are prose is prose,
+    /// and opens as the text it holds. Nor is video here: the system files
+    /// `.ts` and `.mts` under MPEG-2 transport stream, and a TypeScript
+    /// module dropped on the window used to be refused for it. A real video
+    /// never decodes as text, so when the bytes say text the name's claim to
+    /// be a film is simply wrong.
     static let deliberatelyExcludedTypes: [UTType] = [
-        .rtf, .image, .archive,
+        .image, .archive,
     ]
 
-    /// The same list, plus PDF and video, for the places that are still
-    /// deciding by extension alone rather than by content — where a `.ts`
-    /// that cannot be read really might be a film.
+    /// The same list, plus the three kinds that are never text *as text*, for
+    /// the places that are still deciding by extension alone rather than by
+    /// content — where a `.ts` that cannot be read really might be a film,
+    /// and where a `.rtf` is rich text to be viewed rather than a note to be
+    /// edited.
     private static let excludedTypes: [UTType] = deliberatelyExcludedTypes
-        + [.pdf, .audiovisualContent]
+        + [.rtf, .pdf, .audiovisualContent]
 
     /// A drawing — the one thing the system files under images that Nota
     /// opens as a note. An `.svg` is text: a tree of tags you edit, with the
@@ -260,31 +267,6 @@ enum TextFile {
         if isDrawing(url) { return false }
         guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
         return deliberatelyExcludedTypes.contains(where: type.conforms(to:))
-    }
-
-    /// The plain text of an RTF file or an RTFD package, if `url` really is
-    /// one — decided by asking `NSAttributedString` to parse it rather than
-    /// by its extension alone, so a `.rtf` that turns out to hold something
-    /// else (plain text under the wrong suffix, say) comes back `nil` and is
-    /// left to the ordinary open rules instead of being imported. `nil` for
-    /// any other extension without even trying. This is `MainWindowController
-    /// .open(url:)`'s one look at an RTF's bytes, asked before
-    /// `isDeliberatelyExcluded` would otherwise refuse it outright: import
-    /// rather than the ordinary text-editing path, since Nota drops the
-    /// formatting and any pictures rather than keeping them.
-    static func rtfPlainText(at url: URL) -> String? {
-        let ext = url.pathExtension.lowercased()
-        if ext == "rtfd" {
-            guard let wrapper = try? FileWrapper(url: url, options: []),
-                  let attributed = NSAttributedString(rtfdFileWrapper: wrapper, documentAttributes: nil)
-            else { return nil }
-            return attributed.string
-        }
-        guard ext == "rtf",
-              let data = try? Data(contentsOf: url),
-              let attributed = NSAttributedString(rtf: data, documentAttributes: nil)
-        else { return nil }
-        return attributed.string
     }
 
     /// The first 8 KB, so sniffing a huge log does not read the whole thing.
@@ -332,6 +314,10 @@ enum FileClass {
     /// A zip whose first entry is a stored `mimetype` reading
     /// `application/epub+zip` — which is what an EPUB is, by specification.
     case epub
+    /// `{\rtf` at the start of the file, or an RTFD package — a folder whose
+    /// name ends `.rtfd`, the way the system writes rich text with pictures
+    /// in it.
+    case rtf
     /// One of the picture formats `NSImage` draws, known by the bytes every
     /// one of them starts with.
     case image
@@ -354,17 +340,47 @@ enum FileSniff {
     private static let epubEntryName: [UInt8] = Array("mimetype".utf8)
     private static let epubMediaType: [UInt8] = Array("application/epub+zip".utf8)
 
-    /// Classifies a file by its first 8 KB, in order: the PDF signature, the
-    /// picture signatures, the EPUB container's own first entry, then whether
-    /// `TextFile.decode` reads the bytes as text, and binary for everything
-    /// else that could still be read.
+    private static let rtfMagic: [UInt8] = Array("{\\rtf".utf8)
+
+    /// Classifies a file by its first 8 KB, in order: the RTFD package, which
+    /// is the one kind with no bytes of its own to read, then the PDF
+    /// signature, the picture signatures, the EPUB container's own first
+    /// entry, the RTF header, then whether `TextFile.decode` reads the bytes
+    /// as text, and binary for everything else that could still be read.
+    ///
+    /// RTF has to be asked before text, and for the same reason a name is
+    /// never asked at all: an RTF's own markup is ASCII, so `decode` reads it
+    /// as happily as a note and every `.rtf` would open as a wall of control
+    /// words. Its header is the five bytes every RTF file begins with.
     static func classify(at url: URL) -> FileClass {
+        if isRTFDPackage(url) { return .rtf }
         guard let head = TextFile.head(of: url) else { return .unreadable }
         if isPDF(head) { return .pdf }
         if isImage(head) { return .image }
         if isEPUB(head) { return .epub }
+        if isRTF(head) { return .rtf }
         if TextFile.decode(head) != nil { return .text }
         return .binary
+    }
+
+    /// `{\rtf`, which every RTF document starts with — the version digit
+    /// after it is the only thing that varies, so the check stops before it.
+    private static func isRTF(_ head: Data) -> Bool {
+        [UInt8](head.prefix(rtfMagic.count)) == rtfMagic
+    }
+
+    /// An RTFD: rich text with pictures in it, which the system writes as a
+    /// folder rather than a file. There are no first bytes to read — the
+    /// document itself is `TXT.rtf` inside — so this is the one thing the
+    /// sniff decides by looking at the wrapper. A folder merely *named*
+    /// `.rtfd` with no document in it is not one.
+    private static func isRTFDPackage(_ url: URL) -> Bool {
+        guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
+              url.pathExtension.caseInsensitiveCompare("rtfd") == .orderedSame
+        else { return false }
+        return FileManager.default.fileExists(
+            atPath: url.appendingPathComponent("TXT.rtf").path
+        )
     }
 
     /// A PDF is never actually preceded by a byte-order mark, but a file

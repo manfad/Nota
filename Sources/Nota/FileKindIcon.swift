@@ -65,7 +65,7 @@ enum FileKindIcon {
     private static func artStem(forExtension ext: String) -> String? {
         switch ext {
         case "css": return "css"
-        case "csv": return "csv"
+        case "csv", "tsv": return "csv"
         case "epub": return "epub"
         case "gif": return "gif"
         case "go": return "go"
@@ -137,6 +137,8 @@ enum FileKindIcon {
             return ["curlybraces"]
         case "tsv":
             return ["tablecells"]
+        case "rtf", "rtfd":
+            return ["doc.richtext"]
         case "log":
             return ["list.bullet.rectangle"]
         case "rb", "c", "h", "cpp", "cc", "hpp", "m", "mm", "java", "kt",

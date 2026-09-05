@@ -3056,8 +3056,11 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(overlay.bounds.maxY - bezel.maxY, 8, accuracy: 0.5)
         XCTAssertEqual(overlay.frame.height, ModeControlOverlay.hoverBandHeight)
 
-        // One layer: the control is the whole of it, with nothing behind it.
-        XCTAssertEqual(overlay.subviews, [overlay.modeControl])
+        // One layer: whatever the slot is holding is the whole of it, with no
+        // plate behind it. The other thing it can hold is in the hierarchy
+        // and hidden — a slot carries both and shows one.
+        XCTAssertEqual(overlay.subviews, [overlay.modeControl, overlay.jsonButton])
+        XCTAssertTrue(overlay.jsonButton.isHidden, "not over a Markdown tab")
     }
 
     /// The unselected segments' bezel is drawn with some translucency, so

@@ -363,6 +363,24 @@ final class EPUBTests: XCTestCase {
                        "the chapter on screen is the line that is rung")
     }
 
+    /// The Traditional Chinese example: a name in Han characters on disk, a
+    /// title and contents in them too. The contents parser folds runs of
+    /// whitespace to one space, and an ideographic space (U+3000) is
+    /// whitespace to it — so the full-width gap the book writes between
+    /// "第一章" and its name comes back as an ordinary space.
+    @MainActor
+    func testTheChineseBookOpensWithItsContentsIntact() throws {
+        let controller = try makeReadingController(url: exampleURL("燈籠.epub"))
+        XCTAssertEqual(controller.previewPanes.epub.chapterCount, 3)
+        XCTAssertEqual(controller.previewPanes.epub.chapterTitle, "第一章 燈籠")
+        XCTAssertEqual(controller.contentsSidebarView.rowTitles, [
+            "第一章 燈籠", "一、翻頁", "二、找字",
+            "第二章 文字與圖表", "一、一張小表",
+            "第三章 最後一章", "一、後記",
+        ])
+        XCTAssertEqual(controller.openNotes.last?.title, "燈籠.epub")
+    }
+
     /// Clicking a line turns to the chapter it names, and the line rung goes
     /// with it.
     @MainActor
@@ -451,6 +469,10 @@ final class EPUBTests: XCTestCase {
     func testTheChapterIsDrawnWithTheBooksOwnStylesheet() throws {
         let controller = try makeReadingController(named: "novel.epub")
         let pane = controller.previewPanes.epub
+        // Light: in dark the reader theme takes the body colour over (its own
+        // test below), and the test process follows the Mac's setting.
+        try XCTUnwrap(controller.window).appearance = NSAppearance(named: .aqua)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
 
         XCTAssertEqual(try string("document.title", in: pane), "The Beginning")
         XCTAssertEqual(try string("getComputedStyle(document.body).color", in: pane),
@@ -615,6 +637,78 @@ final class EPUBTests: XCTestCase {
                        "Couldn’t open “torn.epub”.")
         XCTAssertFalse(controller.currentTabState.isDirty)
         XCTAssertFalse(controller.currentTabIsSavable)
+    }
+
+    // MARK: - Dark mode
+
+    /// A book's stylesheet is written for paper: `color: rgb(1, 2, 3)` on the
+    /// body is "the text", and on Nota's dark ground it would be near-black
+    /// type on near-black. In dark mode the chapter is read in the label
+    /// colour instead; in light mode the author's colour stands.
+    @MainActor
+    func testAChapterIsReadInTheLabelColourWhenTheMacIsDark() throws {
+        let controller = try makeReadingController(named: "novel.epub")
+        let window = try XCTUnwrap(controller.window)
+        let pane = controller.previewPanes.epub
+
+        window.appearance = NSAppearance(named: .aqua)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(
+            try evaluate("getComputedStyle(document.body).color", in: pane) as? String,
+            "rgb(1, 2, 3)", "light: the book's own colour"
+        )
+
+        window.appearance = NSAppearance(named: .darkAqua)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(
+            try evaluate("window.matchMedia('(prefers-color-scheme: dark)').matches", in: pane) as? Bool,
+            true, "the page follows the window's appearance"
+        )
+        XCTAssertEqual(
+            try evaluate("getComputedStyle(document.body).color", in: pane) as? String,
+            "rgba(255, 255, 255, 0.85)", "dark: Nota's label colour"
+        )
+        XCTAssertEqual(
+            try evaluate("!!document.querySelector('style[data-nota=reader-theme]')", in: pane) as? Bool,
+            true, "the reader theme went in with the chapter"
+        )
+    }
+
+    /// The editor/preview split's own divider used to be drawn down the
+    /// window's leading edge in reading — a 1pt dark line right beside the
+    /// sidebar's divider, so the seam read as two lines. Outside split the
+    /// divider is not drawn at all.
+    @MainActor
+    func testTheDocumentSplitDrawsNoDividerWhileTheEditorIsClosed() throws {
+        let controller = try makeReadingController(named: "novel.epub")
+        let window = try XCTUnwrap(controller.window)
+        window.appearance = NSAppearance(named: .darkAqua)
+        let content = try XCTUnwrap(window.contentView)
+        window.layoutIfNeeded()
+        window.displayIfNeeded()
+
+        let split = try XCTUnwrap(
+            content.descendants.compactMap { $0 as? DocumentSplitView }.first,
+            "the document split draws through its own view"
+        )
+        XCTAssertTrue(split.hidesDivider(), "reading: the editor column is closed")
+
+        let rep = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+        content.cacheDisplay(in: content.bounds, to: rep)
+        // The divider stands at the split's leading edge; a point inside the
+        // column is the ground it should match.
+        let edge = split.convert(NSPoint(x: split.bounds.minX, y: split.bounds.midY), to: content)
+        let inside = split.convert(NSPoint(x: split.bounds.minX + 20, y: split.bounds.midY), to: content)
+        let scale = CGFloat(rep.pixelsWide) / content.bounds.width
+        func colour(at point: NSPoint) throws -> NSColor {
+            try XCTUnwrap(rep.colorAt(
+                x: Int(point.x * scale), y: Int((content.bounds.height - point.y) * scale)
+            ))
+        }
+        XCTAssertEqual(
+            try colour(at: edge).redComponent, try colour(at: inside).redComponent,
+            accuracy: 0.02, "no line down the window's edge"
+        )
     }
 
     // MARK: - Fixtures
@@ -989,4 +1083,9 @@ final class EPUBTests: XCTestCase {
         temporaryDirectories.append(directory)
         return directory
     }
+}
+
+extension NSView {
+    /// Every view under this one, depth first.
+    var descendants: [NSView] { subviews.flatMap { [$0] + $0.descendants } }
 }

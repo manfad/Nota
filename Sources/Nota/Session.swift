@@ -189,6 +189,50 @@ enum TextStats {
         "Chapter \(current) of \(total)"
     }
 
+    /// `"7 tables"` — the middle of the footer for a `.sql` tab being read.
+    /// A dump has words and characters like any other text file, but while
+    /// the grid is up they are not what is being read: how big a database
+    /// is, is how many tables it has.
+    static func tableCounts(_ tables: Int) -> String {
+        "\(tables) \(tables == 1 ? "table" : "tables")"
+    }
+
+    /// `"2,345 rows · 6 columns"` — the middle of the footer for a `.csv` or
+    /// `.tsv` tab being read. A delimited file has words and characters like
+    /// any other text file, but while the grid is up they are not what is
+    /// being read: how big a table is, is how many rows and columns it has.
+    static func rowAndColumnCounts(rows: Int, columns: Int) -> String {
+        "\(group(rows)) \(rows == 1 ? "row" : "rows")" + separator
+            + "\(group(columns)) \(columns == 1 ? "column" : "columns")"
+    }
+
+    /// `"1–100 of 4,213"` — which rows of a table the grid is showing, for
+    /// the bar over it. An en dash, because it is a range rather than a
+    /// subtraction, and grouped thousands, because four thousand rows read
+    /// as four thousand rather than as a long number.
+    static func rowRange(first: Int, last: Int, total: Int) -> String {
+        guard total > 0, first > 0 else { return "No rows" }
+        return "\(group(first))–\(group(last)) of \(group(total))"
+    }
+
+    /// `"Rows 1–100 of 4,213"` — the same at the right of the footer, in
+    /// place of the caret's line and column, where it has to say what it is
+    /// counting.
+    static func rowPosition(first: Int, last: Int, total: Int) -> String {
+        let range = rowRange(first: first, last: last, total: total)
+        return total > 0 && first > 0 ? "Rows " + range : range
+    }
+
+    private static let grouping: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        return formatter
+    }()
+
+    private static func group(_ value: Int) -> String {
+        grouping.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
     /// `"13 pt"` — shown next to the gear at the right of the status bar.
     static func pointSize(_ size: Int) -> String {
         "\(size) pt"
@@ -267,10 +311,19 @@ struct SessionTab: Codable, Equatable {
     /// written before the mode was a per-tab thing — those tabs come back in
     /// the editor.
     var previewMode: PreviewMode?
+    /// Which table of a `.sql` dump was being read, and what was in the
+    /// query box beside it. Where a dump tab was left, the way `selection`
+    /// is where a text tab was left — a database of forty tables opens on
+    /// the one you were looking at rather than on the first in the
+    /// alphabet. Both `nil` for every other kind of tab, and for a session
+    /// written before dumps had a grid at all.
+    var sqlTable: String?
+    var sqlQuery: String?
 
     /// Named, so the old yes/no key is decoded without being written back.
     enum CodingKeys: String, CodingKey {
         case id, path, untitledName, isDirty, selection, scroll, format, previewMode
+        case sqlTable, sqlQuery
     }
 
     private enum LegacyKeys: String, CodingKey {
@@ -291,6 +344,11 @@ extension SessionTab {
         selection = try container.decode(Int.self, forKey: .selection)
         scroll = try container.decodeIfPresent(Double.self, forKey: .scroll)
         format = try container.decodeIfPresent(TextFileFormat.self, forKey: .format)
+        // Written since dumps grew a grid; a session from before that has
+        // neither key, and its tabs open on the first table with an empty
+        // query box.
+        sqlTable = try container.decodeIfPresent(String.self, forKey: .sqlTable)
+        sqlQuery = try container.decodeIfPresent(String.self, forKey: .sqlQuery)
         if let mode = try container.decodeIfPresent(PreviewMode.self, forKey: .previewMode) {
             previewMode = mode
         } else {

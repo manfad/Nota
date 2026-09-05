@@ -60,6 +60,12 @@ final class HTMLPreviewView: NSView, PreviewContent {
     /// it has landed.
     var onLoadFinished: (() -> Void)?
 
+    /// Whether the page is drawn in Nota's own colours when the Mac is dark.
+    /// Set by the book pane before its first chapter loads; a script cannot
+    /// be added to a page already started, so it is read once, when the web
+    /// view is made.
+    var appliesReaderTheme = false
+
     /// Where the reader is in each tab's page, kept up to date by the page
     /// itself, so a reload can put them back. Read before a load rather than
     /// asked for: asking is asynchronous, and the load cannot wait on an
@@ -216,6 +222,15 @@ final class HTMLPreviewView: NSView, PreviewContent {
             source: Self.chapterKeys, injectionTime: .atDocumentEnd,
             forMainFrameOnly: true, in: .defaultClient
         ))
+        // A book is read in Nota's own light or dark, the way a note is (see
+        // `readerTheme`); a `.html` file is the author's page and keeps its
+        // own colours.
+        if appliesReaderTheme {
+            controller.addUserScript(WKUserScript(
+                source: Self.readerThemeScript, injectionTime: .atDocumentStart,
+                forMainFrameOnly: true, in: .defaultClient
+            ))
+        }
         controller.add(ScrollReporter(view: self), contentWorld: .defaultClient,
                        name: Self.scrollHandlerName)
         controller.add(ChapterKeyReporter(view: self), contentWorld: .defaultClient,
@@ -423,6 +438,38 @@ final class HTMLPreviewView: NSView, PreviewContent {
     /// to, rather than us asking for it. Asking is asynchronous, and the one
     /// moment the answer is wanted — just before a reload — is the one moment
     /// there is no time to wait for it.
+    /// The reader theme, for a book: in dark mode every run of text is drawn
+    /// in the label colour, links in the system blue, rules and table borders
+    /// in the separator grey, and the paper the book asked for is taken away
+    /// so Nota's own ground shows through. A book's stylesheet is written for
+    /// paper — `color: #000` on the body is "the text", not a colour anybody
+    /// chose — and taking it at its word prints black type onto a dark ground.
+    /// Light mode is left exactly as the author styled it. The sheet goes in
+    /// at document start, before the book's own, and wins by `!important`.
+    static let readerThemeCSS = """
+    @media (prefers-color-scheme: dark) {
+      html { color-scheme: dark; }
+      html, body { background: transparent !important; }
+      body, body * { color: rgba(255, 255, 255, 0.85) !important; }
+      a, a * { color: #409cff !important; }
+      hr, table, th, td, blockquote { border-color: rgba(255, 255, 255, 0.25) !important; }
+    }
+    """
+
+    private static let readerThemeScript = """
+    (function () {
+        function install() {
+            var style = document.createElement("style");
+            style.setAttribute("data-nota", "reader-theme");
+            style.textContent = `\(readerThemeCSS)`;
+            document.documentElement.appendChild(style);
+        }
+        // An XHTML chapter may have no root element yet at document start.
+        if (document.documentElement) { install(); }
+        else { document.addEventListener("DOMContentLoaded", install); }
+    })();
+    """
+
     private static let scrollReporter = """
     (function () {
         var pending = false;

@@ -21,18 +21,21 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | ⌘P switcher, `@` headings (text notes only), bookmarks dialog, ⇧⌘F search dialog, hover/arrow selection | `TabPickerPanel.swift`, ranking in `FuzzyMatch.swift` |
 | Settings window (draft + Save, sidebar pages) | `SettingsWindowController.swift`, values in `Preferences.swift` |
 | A new preference | `Preferences.swift` (key + property + `announce()`), then Settings UI |
-| A user-visible string / Chinese translation | `Localization.swift` (`L10n.text`) |
+| A user-visible string or its translation | `Localization.swift` (`L10n.text`), the languages themselves in `Preferences.swift` (`AppLanguage`) |
 | Editor typing, paste, drop, images in the text | `NotaTextView.swift`, tokens ↔ chips in `NoteText.swift` |
 | What a file *is* (sniff), encodings, line endings | `TextFile.swift` (`FileSniff`, `TextFile`) |
 | A tab's model: kind, dirty, file, session record | `Note.swift`, `Session.swift` |
 | Markdown render look | `MarkdownRenderer.swift`, `RenderStyle.swift`; maths `MarkdownMath.swift` |
 | LaTeX render | `LaTeXParser.swift` → `LaTeXRenderer.swift`; formulas `MathParser.swift` + `MathLayout.swift` |
 | Preview column plumbing (which view shows, zoom, scroll memory) | `PreviewPaneView.swift`, `PreviewContent.swift`, `RenderedPreviewView.swift` |
-| PDF / picture / HTML / EPUB viewer tabs | `PDFPreviewView.swift`, `ImagePreviewView.swift`, `HTMLPreviewView.swift`, `EPUBPreviewView.swift` + `EPUBBook.swift` |
+| PDF / picture / HTML / EPUB / RTF viewer tabs | `PDFPreviewView.swift`, `ImagePreviewView.swift`, `HTMLPreviewView.swift`, `EPUBPreviewView.swift` + `EPUBBook.swift`, `RTFPreviewView.swift` |
+| A `.sql` dump's grid: running it, paging it, sorting it, picking cells out of it | `SQLPreviewView.swift` (the pane), `SQLGridView.swift` (the grid, its header and its cells), `SQLQueryBox.swift` (the query editor), `SQLDump.swift` (the database), `SQLSourceMap.swift` (which line of the file a row was written on), `SQLQueryRewrite.swift` (the rowid spliced into a query so its rows point at the file too) |
+| A `.csv` / `.tsv` file's grid: reading it, paging it, sorting it | `CSVPreviewView.swift` (the pane, over `SQLGridView`), `CSVTable.swift` (the RFC 4180 reader and where each record is written) |
 | ⌘F find bar and its match bands (incl. dark-mode colours) | `FindBar.swift` (chrome), `FindSession.swift` (editor), `HTMLFindSession.swift`, `PDFFindSession.swift` |
 | ⌘L go to line | `GoToLine.swift`, line table `LineIndex.swift` |
 | Floating pill chrome shared by find / go-to-line / external-change | `Pill.swift`, `ExternalChangePill.swift` |
-| Editor · Split · Reading control | `ModeControlOverlay.swift` |
+| The corner slot (Editor · Split · Reading, or JSON Beautify / Compact) | `ModeControlOverlay.swift` |
+| Laying a `.json` file out or pulling it together | `JSONFormat.swift` |
 | Gutter / line numbers | `LineNumberRulerView.swift` |
 | The sidebar column: a note's thumbnails, a book's or PDF's contents | `ImageSidebarView.swift`, `ContentsSidebarView.swift`, which chips light up `ChipHighlight.swift` |
 | Tab / picker / bookmark-menu icons | `FileKindIcon.swift`, art in `FileKindArt.swift` (generated) |
@@ -59,35 +62,38 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `Preferences.swift` (~570) — every setting (`UserDefaults` + `Preferences.didChange`), enums `EditorFontFamily`, `LineSpacingOption`, `SidebarSide`, `PlainTextImageStyle`, `EditorPaddingOption`, `AppLanguage`, `AppTheme`; `shortcuts` table, `hotKey`; window chrome (`hidesTabBar`, `autoHidesTabBar`, `hidesTrafficLights`, `hidesBookmarkButton`, `hidesSettingsButton`).
 - `Shortcuts.swift` (~200) — `KeyCombo`, `ShortcutAction` (every adjustable menu key, defaults, groups, reserved combos), `NSMenuItem.applyShortcut`. ⌘D bookmarks the tab, ⇧⌘D shows the bookmarks; duplicating a line is ⇧⌥↓ only.
 - `Version.swift` — `AppVersion.current`; bumped with `Info.plist` by `.githooks/pre-commit` on every commit (`git config core.hooksPath .githooks`).
-- `Localization.swift` (~130) — `L10n.text`, the English→Chinese table.
+- `Localization.swift` (~430) — `L10n.text` and one table per language, all keyed by the English string: 简体中文, 繁體中文, Bahasa Melayu. `AppLanguage.resolved` (in `Preferences.swift`) says which one, resolving `.system` against the Mac's preferred language.
 - `SettingsWindowController.swift` (~900) — Settings: a sidebar source list over eight pages (General, Appearance, Editor, Preview, Tab bar, Status bar, Shortcuts, About), each page's controls in inset rounded groups of 44pt rows; draft-and-Save. Version shown on About comes from `Version.swift`.
 - `ShortcutRecorderField.swift` (~150) — press-a-key field; records a global hotkey (key code) or an app `KeyCombo` (character).
 - `GlobalHotKey.swift` (~170) — Carbon hotkey; `KeyCodeNames` (key code / key-equivalent display names).
 
 ### Main window
 - `MainWindowController.swift` (~4730) — the whole window. Sections by `MARK`:
-  Setup (332) · Text attributes (1029) · Auto-hidden tab strip (1338) · Session restore (1461) · Tabs (1602) · Encoding and line endings (1739) · Vim footer (1994) · Files (2316, open/save/close, sniff → viewer kinds, `importRTF` for `.rtf`/RTFD) · External changes (2646) · Persistence (2787) · Font size and zoom (2895) · Menu actions (2976) · Zen mode (3059) · Tab picker (3496, `@` headings, text notes only) · Markdown preview (3610, modes, split, footer status of viewers) · Images and book contents: chips and sidebar (4242) · Search across tabs (4345, `beginSearchAllNotes` opens the picker in `.search`) · Delegates / Vim's window (4383) · Background (4698) · Quick Look (4711).
+  Setup (332) · Text attributes (1029) · Auto-hidden tab strip (1338) · Session restore (1461) · Tabs (1602) · Encoding and line endings (1739) · Vim footer (1994) · Files (2316, open/save/close, sniff → viewer kinds) · External changes (2646) · Persistence (2787) · Font size and zoom (2895) · Menu actions (2976) · Zen mode (3059) · Tab picker (3496, `@` headings, text notes only) · Markdown preview (3610, modes, split, footer status of viewers) · Images and book contents: chips and sidebar (4242) · Search across tabs (4345, `beginSearchAllNotes` opens the picker in `.search`) · Delegates / Vim's window (4383) · Background (4698) · Quick Look (4711).
+  Also here: `DocumentSplitViewController` + `DocumentSplitView` (the editor/preview split; the divider is not drawn outside split mode), `VimCommandPane`, `DragRegionView`, `BackgroundView`.
   Footer regions: `statusLabel` (counts, `updateCountsLabel` / `availableCountsWidth`), `footerTrailingStack` (encoding · line ending · cursor), `modeBadge` (vim).
 - `TabBarView.swift` (~1600) — the strip: `TabBarItem`, `TabItemView` (icon, dot, ✕, bookmark badge), drag/reorder, tear-off, + button, bookmark and Settings-gear buttons at the trailing edge, context menu.
 - `TabStripLayout.swift` (~200) — pure width arithmetic for the strip.
 - `TabPickerPanel.swift` (~1200) — ⌘P panel: modes `.tabs` / `.headings` (`@`, text notes only — a book's contents are in the sidebar) / `.bookmarks` / `.search` (⇧⌘F, two-line hit rows, no top row); top fixed row; arrow keys and hover selection (`HoverTrackingTableView`); `TabPickerRowView`.
 - `FuzzyMatch.swift` (~80) — subsequence scoring for the picker.
-- `ModeControlOverlay.swift` (~260) — Editor · Split · Reading floating control.
+- `ModeControlOverlay.swift` (~390) — the corner slot: the hover band per column, and the one control the
+  front tab puts in it (`Content` — the Editor · Split · Reading segments, the JSON Beautify / Compact
+  button, or nothing). The band, the fade, the hit testing and the drop under ⌘F know nothing of which.
 - `ImageSidebarView.swift` (~330) — thumbnail column (no utility strip any more).
 - `ContentsSidebarView.swift` (~255) — the same column for a tab that is read: the table of contents (a book's chapters, a PDF's outline), indented by nesting, the line naming what is on screen rung. Knows nothing of either kind — it lists `ContentsEntry` values and hands a chosen line back.
 - `ChipHighlight.swift` (~50) — which thumbnails match the caret/selection.
 - `NoteSearch.swift` (~100) — the search itself, `NoteSearchMatch`; the panel's `.search` mode draws what it returns.
 
 ### Notes, files, session
-- `Note.swift` (~530) — `PreviewMode`, `RenderedPreviewKind`, `NoteKind` (`text`/`pdf`/`image`/`epub`), `Note` (storage, file, dirty, watcher, cached PDF/image/book, `sessionTab()`).
+- `Note.swift` (~560) — `PreviewMode`, `RenderedPreviewKind`, `NoteKind` (`text`/`pdf`/`image`/`epub`/`rtf`), `Note` (storage, file, dirty, watcher, cached PDF/image/book/rich text, `sessionTab()`).
 - `NoteText.swift` (~380) — `![](nota://id)` tokens ↔ attachments, and, given a closure for each direction, a
   saved file's own relative image links too: `serialize(_:sidecar:)` and `render(_:…:importing:)`. Touches no disk.
 - `Sidecar.swift` (~215) — the pictures a saved note keeps beside it in `<basename>.assets/`: folder naming,
   percent-encoded links, which link targets are relative paths, the identical-bytes check, `Writer` (save) and
   `importer(forFileAt:assets:)` (open).
 - `Assets.swift` (~250) — `NotaImageAttachment` chips, `AssetStore` on disk.
-- `TextFile.swift` (~430) — `LineEnding`, `TextFileFormat`, encoding detection, `FileSniff.classify` (PDF, image, EPUB, text, binary), `FileClass`, `rtfPlainText` (RTF/RTFD import), `isDrawing` (an `.svg` is text, not a picture — `Note.isImageFile` and the exclusions ask it).
-- `Session.swift` (~520) — `TextStats` (footer count phrases incl. pages/chapters), `SessionTab` / `SessionWindow` codables, `SessionStore`.
+- `TextFile.swift` (~430) — `LineEnding`, `TextFileFormat`, encoding detection, `FileSniff.classify` (PDF, image, EPUB, RTF, text, binary), `FileClass`, `isDrawing` (an `.svg` is text, not a picture — `Note.isImageFile` and the exclusions ask it).
+- `Session.swift` (~555) — `TextStats` (footer count phrases incl. pages/chapters/tables, a table's rows and columns, and a row range), `SessionTab` / `SessionWindow` codables (`sqlTable` / `sqlQuery` for a dump's tab), `SessionStore`.
 - `SaveNameComposer.swift` (~55) — pure logic for the save panel's Format combo: known extensions, splitting a name from its extension, composing the final name.
 - `FileWatcher.swift` (~230) — `FileStamp`, watching a path for change.
 - `Bookmarks.swift` (~120) — pinned paths store. `BookmarksMenu.swift` (~130) — the File submenu + ⇧⌘D toggle.
@@ -99,6 +105,9 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `NotaTextView.swift` (~940) — the text view: paste/drop of images and HTML, vim hooks, `setSearchHighlights`, chips.
 - `LineNumberRulerView.swift` (~220) — gutter.
 - `LineOperations.swift` (~380) — move/duplicate/comment/indent as pure functions.
+- `JSONFormat.swift` (~330) — Nota's own JSON walker, for the `.json` tab's corner button: `reformat(_:as:)`
+  (pretty / compact, every token re-emitted as it was written), `isPretty(_:)`, `errorLine(in:)`. Pure; no
+  `JSONSerialization`, so key order, number spelling and escapes all survive.
 - `HTMLClipboard.swift` (~290) — reading `public.html` / web archives on paste.
 - `TaskList.swift` (~200) — `- [ ]` boxes in render and source.
 - `ListContinuation.swift` (~365) — what Return means on a list item, as pure functions: `ListMarker.parse(line:above:)`, `.next()`, `.prefix`, and `ListContinuation.edit(forReturnIn:at:)`. The header explains how a lone `i.` is read.
@@ -113,7 +122,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `ExternalChangePill.swift` (~90) — "Changed on disk · Reload / Keep mine".
 
 ### Preview column and renderers
-- `PreviewContent.swift` (~350) — `PreviewContentKind` (markdown/latex/html/pdf/image/epub), `ContentsEntry` (one line of a table of contents), the `PreviewContent` protocol every content view adopts (`show`, zoom, find, `rememberedPosition`, `rememberedScroll`, `footerStatus`, `contentsEntries` / `currentContentsLine` / `goToContentsLine`, `onDropFiles`), and `PreviewFileDrop` — the drop from the Finder every view in the column answers the same way.
+- `PreviewContent.swift` (~385) — `PreviewContentKind` (markdown/latex/html/pdf/image/epub/sql/csv/rtf), `ContentsEntry` (one line of a table of contents), the `PreviewContent` protocol every content view adopts (`show`, zoom, find, `rememberedPosition`, `rememberedScroll`, `footerStatus`, `contentsEntries` / `currentContentsLine` / `goToContentsLine`, `onStateChange`, `onBlockClick` and `onSourceReveal` — a click that takes the caret with it and one that only moves it — `onDropFiles`), and `PreviewFileDrop` — the drop from the Finder every view in the column answers the same way.
 - `PreviewPaneView.swift` (~280) — holds one content view at a time; `panes` for tests; `onDropFiles` goes to every content view and to zen's drag band, so the whole column is a tab target.
 - `RenderedPreviewView.swift` (~670) — base class for rendered text panes (blocks, band, click-back, find, frozen wrap width).
 - `MarkdownPreviewView.swift` (17) / `LaTeXPreviewView.swift` (21) — the two subclasses.
@@ -123,9 +132,46 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `MarkdownHeadings.swift` (~130) — headings for `@` in ⌘P.
 - `MarkdownMath.swift` (~400) — `$…$` lifted out before parsing. `MathParser.swift` (~575), `MathLayout.swift` (~720), `MathAttachment.swift` (~40) — Nota's own formula layout.
 - `LaTeXParser.swift` (~1360) — `.tex` → blocks. `LaTeXRenderer.swift` (~480) — blocks → attributed string.
-- `HTMLPreviewView.swift` (~775) — WebKit page under `nota-file://`, scroll memory (pixels and fraction), `showPage(ofTab:at:…)` for EPUB chapters, chapter-key script.
+- `HTMLPreviewView.swift` (~820) — WebKit page under `nota-file://`, scroll memory (pixels and fraction), `showPage(ofTab:at:…)` for EPUB chapters, chapter-key script, and the dark-mode reader theme a book asks for (`appliesReaderTheme`, `readerThemeCSS`).
 - `PDFPreviewView.swift` (~540) — PDFKit viewer tab, and `PDFOutlineContents` (`outlineRoot` walked depth first into `ContentsEntry` lines). `ImagePreviewView.swift` (~240) — picture tab.
 - `EPUBBook.swift` (~425) — unpack (ditto), container/OPF/spine/nav/NCX parsing, `contentsEntries`, `contentsLine(ofChapter:)`. `EPUBPreviewView.swift` (~300) — chapter viewer; no floating chapter bar.
+- `RTFPreviewView.swift` (~430) — the rich-text viewer tab: `NSAttributedString(url:…)` into a read-only, selectable
+  `NSTextView` at the editor's margin, the document's own fonts and colours kept (black body text swapped for
+  `labelColor`), `TextFindSession` for ⌘F, and a zoom that scales every font, paragraph measurement and attachment.
+- `SQLDump.swift` (~715) — a `.sql` file run into an in-memory SQLite (`import SQLite3`, no dependency): the
+  prepare/tail loop and the first failure's own statement, the `SQLSourceMap` it takes down as it goes, `tables`,
+  `page(ofTable:offset:sort:)` / `page(ofQuery:…)` (`LIMIT 100 OFFSET`, `COUNT(*)`, and the rowids a page carries
+  beside its values with the table they belong to), `declaredTypes(ofTable:)`, `hasRowid(_:in:)`, and the read-only
+  authorizer the query box runs under. Knows nothing of AppKit.
+- `SQLPreviewView.swift` (~1105) — the pane that draws it: the query box under the corner slot's hover band, table
+  picker, the one `arrow.clockwise` button that runs the file again (and is a big dump's only way in), page bar, the grid's data source, the sort a header click asks for (`tableView(_:didClick:)`, on the
+  release — see the header's own note), the alerts a failing query or a failing file put up (once per message, with
+  `alertOverrideForTesting` for the tests), runs on its own queue with a token, and the per-tab table and query it
+  writes onto the note.
+- `SQLGridView.swift` (~485) — the grid itself: the spreadsheet cell cursor (click one, drag a rectangle, arrows and
+  ⇧-arrows, ⌘C as tab-separated text), whole rows from the `#` gutter, ⇧ and Space, the cell click it reports
+  (`onCellClick`) for the pane to take back to the file, `SQLCellView` drawing the accent wash
+  and the rectangle's hairline, and `SQLHeaderView` / `SQLHeaderCell` — the flat header with its own sort chevron.
+- `SQLSourceMap.swift` (~315) — where each row of a dump is written: the statements `SQLDump` took down as it ran
+  (each one's own characters, and the rowids an insert made), the lookup a clicked cell is answered from, and the
+  two scanners it needs — the table an `INSERT` names, and the `(…)` tuples after `VALUES`, counted outside string
+  literals, quoted identifiers and comments. Pure text and no SQLite.
+- `SQLQueryRewrite.swift` (~175) — the loose read of a query that says whether it is plainly one table's rows, and
+  the same query with that table's rowid spliced in after the `SELECT` keyword, so a cell of a query's result walks
+  the editor to its `INSERT` the way a table's does. What it refuses — a join, a `GROUP BY`, an aggregate, a
+  sub-select — and what SQLite refuses are both answered by running the reader's own query untouched. Pure text and
+  no SQLite; it borrows `SQLSourceMap`'s scanner.
+- `SQLQueryBox.swift` (~230) — the five-row query editor: rounded bezel, `SELECT …` placeholder, Return a newline,
+  ⌘↩ the run, Esc the cancel, no rich text and no substitutions.
+- `CSVTable.swift` (~330) — a `.csv` or `.tsv` read as the table it is: Nota's own RFC 4180 scanner (quoted fields,
+  `""` escapes, newlines inside quotes, CRLF / CR / LF, a trailing newline, a BOM, blank lines skipped), the first
+  record as the header with blanks named `Column 3`, ragged rows padded and widened, the `NSRange` of the lines each
+  record is written on, and `page(offset:sort:)` — a hundred rows, sorted numerically where the whole column parses
+  as numbers and by the reader's own collation where it does not. Pure; knows nothing of AppKit.
+- `CSVPreviewView.swift` (~810) — the pane that draws it: the dump's pane with the database taken out — one bar of
+  `Refresh` and the page arrows under the corner slot's hover band, `SQLGridView` below it unchanged, the sort a
+  header click asks for, the `onSourceReveal` a cell click sends, and the read it runs on its own queue with a
+  token (a big file only ever on the button).
 - `FileKindIcon.swift` (~160) — extension → icon name; `image(named:pointSize:)` (drawn art at 1.5× point size, SF Symbol fallback). `FileKindArt.swift` (generated) — the SVGs.
 
 ### Vim (`Sources/Nota/Vim/`)
@@ -140,16 +186,32 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 
 - `NotaTests.swift` (~100) — the grab bag: editor, footer, Settings window, find bands, ⌘P hover, session.
 - `MarkdownPreviewTests.swift` (~140) — preview modes, split, picker rows, the ⇧⌘F search dialog, sidebar.
-- `HTMLPreviewTests.swift`, `PDFTests.swift`, `ImageTests.swift`, `EPUBTests.swift` — the viewer tabs, including the contents sidebar each of them fills.
+- `CornerSlotTests.swift` — which control the corner slot shows per tab kind, and the JSON button's edit.
+- `JSONFormatTests.swift` — the walker: order, escapes, empties, unicode, pretty detection, error line.
+- `HTMLPreviewTests.swift`, `PDFTests.swift`, `ImageTests.swift`, `EPUBTests.swift`, `RTFTests.swift` — the viewer tabs, including the contents sidebar each of them fills (an RTF has none).
+- `CSVPreviewTests.swift` (~685) — the table: what counts as one, the scanner's every case (quotes, escapes, a
+  record over two lines, CRLF, ragged rows, a blank header cell, header-only and empty files, a BOM, tabs), paging,
+  sorting numerically and as text, the header click through `NSTableHeaderView`, refresh keeping the sort and the
+  page while typing drops the sort, the big file's one way in, the footer strings, a cell click moving the editor's
+  caret without taking its keyboard, and the mode through the session.
+- `SQLPreviewTests.swift` (~1500) — the dump: what counts as one, the run and its first failure, paging, the
+  authorizer refusing a write and the `SELECT 1; DELETE` trick, the pane's bar and five-row query box, a real header
+  click through `NSTableHeaderView` sorting the whole table, the cell cursor and its rectangle, the alerts (through
+  `alertOverrideForTesting`, so no modal ever), the footer strings, the refresh button (a big file's only
+  way in, and what it keeps), Space standing a row up, the source map and the tuple locator, a cell click moving the
+  editor's caret without taking its keyboard — from a table's page and from a query the rowid was got into, and the
+  cell cursor still answering the first click after a run, a refresh and a page turn — the query rewrite and what it
+  refuses, and the table and query through the session.
 - `LaTeXTests.swift`, `MathTests.swift`, `MarkdownMathTests.swift`, `MarkdownHeadingsTests.swift`, `TaskListTests.swift` — renderers.
 - `TextFileTests.swift`, `FileSniffTests.swift`, `FileKindIconTests.swift`, `LineIndexTests.swift`, `LineOperationsTests.swift`, `ListContinuationTests.swift` — files and editor logic.
+- `LocalizationTests.swift` (~170) — the tables against each other, `.system` resolution, the Settings language popup.
 - `BookmarksTests.swift` (also the ⌘P picker tests), `OpenRecentTests.swift`, `ShortcutsTests.swift`, `MultiWindowTests.swift`, `ExternalChangeTests.swift`, `ZoomTests.swift`, `TabStripLayoutTests.swift`, `DropOnStripTests.swift`, `SidecarTests.swift`, `BigFileTests.swift`, `NoteBigFileTests.swift`, `SpellCheckPolicyTests.swift`.
 - `VimTests.swift`, `VimStage2Tests.swift`, `VimStage3Tests.swift`.
 - Helpers: `OffscreenWindow.swift` (`makeKeyAndOrderFrontOffscreen()` — tests never launch the app), `DirtyProbe.swift`.
 - Gotcha: a hanging test is a modal alert; stub `confirmDiscardOverrideForTesting` / `savePanelProvider`.
 
 ## Other
-- `website/` — independent, static Astro promo page; commands, asset provenance, and deployment notes in `website/README.md`.
+- Promo website — lives outside the repo at `../nota-web` (moved 2026-09-05); an independent static Astro page, commands and deployment notes in its own `README.md`.
 - `SPEC.md` — behaviour spec, Todo list, Done ledger (numbers reused; "Todo 3" is both Go to line and EPUB).
 - `build.sh` — release build + hand-assembled `Nota.app` (binary + `Info.plist` + `Icon/Nota.icns`; no resource bundle, so assets are embedded in Swift).
 - `Icon/` — `logo.png` (source art) → `make-icon.swift` → `Nota.icns`; `make-file-icons.py` → `Sources/Nota/FileKindArt.swift`.

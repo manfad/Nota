@@ -3,26 +3,36 @@ import AppKit
 /// Which of the preview column's content views a note is read through. The
 /// tab's own kind settles it and nothing else does: a render for text — the
 /// Markdown one or the LaTeX one, by what the file is spelled — WebKit's page
-/// for HTML and for the drawing an SVG is, and the document or the picture
-/// for the two binaries. This is the only place in the app that has to be
-/// told.
+/// for HTML and for the drawing an SVG is, a grid for a dump and for a
+/// delimited file, and the
+/// document, the picture, the chapter or the rich text for the four kinds
+/// Nota views rather than edits. This is the only place in the app that has
+/// to be told.
 enum PreviewContentKind: Hashable {
-    case markdown, latex, html, pdf, image, epub
+    case markdown, latex, html, pdf, image, epub, sql, csv, rtf
 
     /// Every kind there is, in the order the column keeps them.
-    static let all: [PreviewContentKind] = [.markdown, .latex, .html, .pdf, .image, .epub]
+    static let all: [PreviewContentKind] = [
+        .markdown, .latex, .html, .pdf, .image, .epub, .sql, .csv, .rtf,
+    ]
 
     init(_ note: Note) {
         switch note.kind {
         case .pdf: self = .pdf
         case .image: self = .image
         case .epub: self = .epub
+        case .rtf: self = .rtf
         case .text:
             switch note.previewKind {
             case .latex: self = .latex
             // An SVG is a page WebKit draws, the same as an HTML file, and
             // the same pane draws both.
             case .html, .svg: self = .html
+            // A dump is neither text to lay out nor a page to draw: it is a
+            // database, and a database is read as a grid.
+            case .sql: self = .sql
+            // And a delimited file is a table without a database under it.
+            case .csv: self = .csv
             case .markdown, nil: self = .markdown
             }
         }
@@ -76,7 +86,8 @@ struct PreviewContext {
 }
 
 /// One thing the preview column can hold: the Markdown render, the LaTeX
-/// render, an HTML page, a PDF, and in time a picture.
+/// render, an HTML page, a PDF, a picture, a chapter of a book, a database
+/// and a rich-text document.
 ///
 /// The window controller has one editor pane and one preview pane. It asks
 /// the pane for the content the tab in front needs and says everything else
@@ -145,6 +156,18 @@ protocol PreviewContent: NSView {
     /// too: a checkbox is a control, not a jump.
     var onTaskToggle: ((NSRange) -> Void)? { get set }
 
+    /// Run when the content points at a place in the source *without* asking
+    /// for the keyboard: the editor's caret goes there and the line is
+    /// brought into view, and the content keeps the focus it has.
+    ///
+    /// A block click is a jump — the reader is done with the render and wants
+    /// to type — so it takes the caret with it. A dump's row click is not: the
+    /// grid is being walked cell by cell with the arrows, and a click that
+    /// moved the keyboard into the editor would end the walk. Same map, other
+    /// half of the gesture, so it is its own callback rather than a flag on
+    /// the first one.
+    var onSourceReveal: ((NSRange) -> Void)? { get set }
+
     /// Lights the block the editor's caret is sitting in and brings it into
     /// view. Returns whether there was one to light.
     @discardableResult
@@ -191,6 +214,13 @@ protocol PreviewContent: NSView {
     /// Run when the reader moves somewhere the content is keeping, with the
     /// same number `rememberedPosition` answers with.
     var onPositionChange: ((Int) -> Void)? { get set }
+
+    /// Run when the content has written something of its own onto the note —
+    /// the table a dump is open at, the query being read beside it. It says
+    /// nothing about what changed, because the window has nothing to do with
+    /// it: the note already holds the answer, and all that is left is to put
+    /// the session on the same debounce a keystroke uses.
+    var onStateChange: (() -> Void)? { get set }
 
     /// How far down that place the reader had got, 0 the top and 1 the
     /// bottom. Only content whose position is itself a thing with a length
@@ -310,6 +340,11 @@ extension PreviewContent {
         set { }
     }
 
+    var onSourceReveal: ((NSRange) -> Void)? {
+        get { nil }
+        set { }
+    }
+
     @discardableResult
     func highlightBlock(containingSource location: Int) -> Bool { false }
 
@@ -334,6 +369,11 @@ extension PreviewContent {
     var rememberedPosition: Int? { nil }
 
     var onPositionChange: ((Int) -> Void)? {
+        get { nil }
+        set { }
+    }
+
+    var onStateChange: (() -> Void)? {
         get { nil }
         set { }
     }

@@ -13,6 +13,9 @@ struct TabBarItem {
     /// The file behind this tab is bookmarked (SPEC Todo 13). Drawn as a
     /// small `bookmark.fill` badge on the corner of the leading icon.
     var isBookmarked: Bool = false
+    /// There is a file on disk behind this tab, so "Reveal in Finder" has
+    /// somewhere to go. An untitled note has none and the item is greyed.
+    var hasFile: Bool = false
 }
 
 protocol TabBarViewDelegate: AnyObject {
@@ -38,6 +41,9 @@ protocol TabBarViewDelegate: AnyObject {
     func tabBarDidRequestBookmarks(_ bar: TabBarView)
     /// "Bookmark" / "Remove Bookmark" in a tab's context menu.
     func tabBar(_ bar: TabBarView, didToggleBookmarkAt index: Int)
+    /// "Reveal in Finder" in a tab's context menu; only offered on a tab
+    /// with a file.
+    func tabBar(_ bar: TabBarView, didRequestRevealAt index: Int)
     /// The gear past the bookmark button: Settings, ⌘, by another door.
     func tabBarDidRequestSettings(_ bar: TabBarView)
 
@@ -56,6 +62,7 @@ extension TabBarViewDelegate {
     func tabBarDragEnded(_ bar: TabBarView, committed: Bool, at screenPoint: NSPoint) {}
     func tabBarDidRequestBookmarks(_ bar: TabBarView) {}
     func tabBar(_ bar: TabBarView, didToggleBookmarkAt index: Int) {}
+    func tabBar(_ bar: TabBarView, didRequestRevealAt index: Int) {}
     func tabBarDidRequestSettings(_ bar: TabBarView) {}
     func tabBar(_ bar: TabBarView, didDropFiles urls: [URL]) {}
 }
@@ -518,8 +525,8 @@ final class TabBarView: NSView {
         delegate?.tabBarDidRequestSettings(self)
     }
 
-    /// The tab's context menu (right-click, ctrl-click): bookmark it, or
-    /// close it. Built here rather than on the tab view so the strip's own
+    /// The tab's context menu (right-click, ctrl-click): bookmark it, show
+    /// its file in the Finder, or close it. Built here rather than on the tab view so the strip's own
     /// indices — the only ones the delegate knows — are what the items carry.
     private func contextMenu(for view: TabItemView) -> NSMenu? {
         guard let index = itemViews.firstIndex(of: view), items.indices.contains(index) else {
@@ -534,6 +541,13 @@ final class TabBarView: NSView {
         bookmark.target = self
         bookmark.tag = index
         menu.addItem(bookmark)
+        let reveal = NSMenuItem(
+            title: "Reveal in Finder", action: #selector(revealFromMenu(_:)), keyEquivalent: ""
+        )
+        reveal.target = self
+        reveal.tag = index
+        reveal.isEnabled = items[index].hasFile
+        menu.addItem(reveal)
         menu.addItem(.separator())
         let close = NSMenuItem(
             title: "Close Tab", action: #selector(closeFromMenu(_:)), keyEquivalent: ""
@@ -547,6 +561,10 @@ final class TabBarView: NSView {
 
     @objc private func toggleBookmarkFromMenu(_ sender: NSMenuItem) {
         delegate?.tabBar(self, didToggleBookmarkAt: sender.tag)
+    }
+
+    @objc private func revealFromMenu(_ sender: NSMenuItem) {
+        delegate?.tabBar(self, didRequestRevealAt: sender.tag)
     }
 
     @objc private func closeFromMenu(_ sender: NSMenuItem) {

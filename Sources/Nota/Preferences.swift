@@ -122,24 +122,44 @@ enum AppTheme: String, CaseIterable {
     }
 }
 
+/// The interface language. The order the cases are written in is the order
+/// the Settings popup lists them; the raw values are stored in `UserDefaults`,
+/// so they never change once shipped.
 enum AppLanguage: String, CaseIterable {
-    case system, english, simplifiedChinese
+    case system, english, simplifiedChinese, traditionalChinese, malay
 
+    /// Each language names itself in its own script — the one label a reader
+    /// who cannot read the current interface can still recognise.
     var title: String {
         switch self {
         case .system: L10n.text("System Default", chinese: "跟随系统")
         case .english: "English"
         case .simplifiedChinese: "简体中文"
+        case .traditionalChinese: "繁體中文"
+        case .malay: "Bahasa Melayu"
         }
     }
 
-    var usesChinese: Bool {
-        switch self {
-        case .simplifiedChinese: true
-        case .english: false
-        case .system:
-            Locale.preferredLanguages.first?.hasPrefix("zh") == true
+    /// The language the interface is actually drawn in: itself, or, for
+    /// `.system`, whatever the Mac's own preferred language asks for. Never
+    /// returns `.system`.
+    var resolved: AppLanguage {
+        guard self == .system else { return self }
+        return Self.resolving(preferredLanguage: Locale.preferredLanguages.first)
+    }
+
+    /// What a preferred-language identifier (`zh-Hant-TW`, `ms-MY`, `en-GB`)
+    /// means to us. Written as a pure function of the string so the tests can
+    /// ask without touching the Mac's own settings.
+    static func resolving(preferredLanguage identifier: String?) -> AppLanguage {
+        guard let identifier else { return .english }
+        let code = identifier.lowercased()
+        if code.hasPrefix("zh") {
+            let traditional = ["hant", "tw", "hk", "mo"].contains { code.contains("-\($0)") }
+            return traditional ? .traditionalChinese : .simplifiedChinese
         }
+        if code == "ms" || code.hasPrefix("ms-") || code.hasPrefix("ms_") { return .malay }
+        return .english
     }
 }
 

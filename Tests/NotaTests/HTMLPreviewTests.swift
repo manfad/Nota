@@ -26,9 +26,13 @@ final class HTMLPreviewTests: XCTestCase {
     // MARK: - What counts as HTML
 
     func testAPageIsKnownByItsSpellingWhateverCaseItIsIn() throws {
-        for spelling in ["html", "htm", "HTML", "Htm"] {
+        for spelling in ["html", "htm", "HTML", "Htm", "xhtml"] {
             XCTAssertEqual(RenderedPreviewKind(fileExtension: spelling), .html,
                            "\(spelling) is a page")
+        }
+        for spelling in ["md", "markdown", "mdown", "mkd", "Markdown"] {
+            XCTAssertEqual(RenderedPreviewKind(fileExtension: spelling), .markdown,
+                           "\(spelling) is Markdown")
         }
         for spelling in ["css", "js", "txt", "json", "xml"] {
             XCTAssertNil(RenderedPreviewKind(fileExtension: spelling),

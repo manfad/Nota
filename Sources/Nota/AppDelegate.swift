@@ -287,11 +287,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || menuItem.action == #selector(saveNoteAs(_:)) {
             return activeController?.currentTabIsSavable ?? true
         }
+        if menuItem.action == #selector(revealInFinder(_:)) {
+            return activeController?.currentTabHasFile ?? false
+        }
         return true
     }
 
     @objc private func saveNote(_ sender: Any?) {
         activeController?.saveCurrent(forcePanel: false)
+    }
+
+    @objc private func revealInFinder(_ sender: Any?) {
+        activeController?.revealCurrentTabInFinder()
     }
 
     @objc private func saveNoteAs(_ sender: Any?) {
@@ -443,6 +450,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .separator(),
             item(.save, #selector(saveNote(_:)), target: self),
             item(.saveAs, #selector(saveNoteAs(_:)), target: self),
+            .separator(),
+            item("Reveal in Finder", #selector(revealInFinder(_:)), key: "r",
+                 modifiers: [.command, .option], target: self),
         ])
 
         let findMenu = NSMenu(title: L10n.text("Find"))

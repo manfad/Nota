@@ -73,6 +73,10 @@ final class EPUBPreviewView: NSView, PreviewContent {
         wantsLayer = true
         registerForDraggedTypes(PreviewFileDrop.types)
 
+        // A book is read in Nota's light or dark, not on the paper it was
+        // typeset for: said before the first chapter, since the page's web
+        // view is built once, on that load.
+        page.appliesReaderTheme = true
         // Edge to edge, the same as the page it holds: a chapter lays out to
         // the viewport it is given, and its own body margin is already the
         // margin its author asked for.

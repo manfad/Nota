@@ -4,29 +4,38 @@
 
 ## Promo website (2026-09-05)
 
-- `website/` is a separate static Astro landing page: hero, persistent tabs, inline images,
+- `../nota-web` (outside the repo since 2026-09-05; was `website/`) is a separate static Astro landing page: hero, persistent tabs, inline images,
   split/reading previews, Zen benefits, file support, Vim, bookmarks, and native/open-source/no-login benefits.
-- Real screenshots use isolated demo content. The minimal screenshot uses chrome preferences;
-  the persistent-tab illustration is HTML. The page's only interaction switches preview screenshots.
+- Features share one compact section: a vertical rotating wheel of eight tabs at left, the selected
+  description below it, and a matching real screenshot at right. It advances every 5.5 seconds
+  while visible; hover pauses temporarily, manual navigation or keyboard focus pauses until Play.
+  Up/Down, Home/End, click, and previous/next controls work. Reduced motion disables autoplay and
+  transitions; without JavaScript, expandable descriptions remain available. Page scrolling is not captured.
+- Real screenshots use isolated demo content. The minimal screenshot uses chrome preferences.
 - Download links go to GitHub releases; source links go to `manfad/Nota`. A packaged release is
   needed before public promotion. No backend, login, additional pages, or app behavior changes.
 
 ## Model
 - **Tabs are the notes.** An open tab is the unit; the cache dir is the truth until ⌘S.
-  Closed tabs are gone (after the Save / Don't Save / Cancel prompt; Don't Save = ⌘D in the alert).
+  Closed tabs are gone (after the Save / Don't Save / Cancel prompt; Don't Save = ⌘D in the alert, and ⌘W — whatever
+  Close Tab is bound to — pressed again on the prompt, so two strokes of the same key close a dirty tab with no mouse; decided 2026-09-06).
 - Files are plain text of any kind — .md .txt .xml .json .css .js .html .yaml .toml .csv .log .ini .sh .py .swift and
   anything else that is text (Notepad++ model). Nota registers as an editor for text/source types (Finder "Open With",
-  drag onto the Dock icon, drop onto the window). No syntax highlighting. Not .docx / binaries — except the three
-  Nota views rather than edits: a PDF, a picture and an EPUB (see PDF, Image tabs and EPUB). An `.rtf` or an RTFD
-  package is imported rather than opened (done 2026-09-05, see Done 17): its plain text lands in a brand-new
-  untitled tab, formatting and any pictures dropped and never written back — `fileURL` stays nil, so it is never
-  the file itself, only ever a copy of its words.
+  drag onto the Dock icon, drop onto the window). No syntax highlighting. Not .docx / binaries — except the four
+  Nota views rather than edits: a PDF, a picture, an EPUB and a rich-text document (see PDF, Image tabs, EPUB and
+  RTF). An `.rtf` file or an `.rtfd` package opens as a viewer tab of its own (done 2026-09-05, see Done 26 and the
+  RTF section): the document as its author wrote it, read and never written, with nothing to save. It used to be
+  imported as plain text instead (Done 17, superseded).
 - Editing a named file only updates the cache; disk changes on ⌘S only. A named file keeps its extension, encoding
   (UTF-8 / UTF-16 / Latin-1 / Windows-1252 detected on open) and line endings (LF / CRLF) on save.
 - The save panel splits the extension out of the name field into its own editable "Format" combo box (pick one of
   Nota's known extensions, or type another), so it is never lost to the panel's own name-typed-with-a-dot handling; a
   named file's extension preselects it, and otherwise the last extension chosen through the panel is remembered
-  (`Preferences.lastSaveExtension`, default `md`) and offered again next time.
+  (`Preferences.lastSaveExtension`, default `md`) and offered again next time. The combo stands as one more row of the
+  panel's own form (2026-09-06): "Format:" right-aligned into the column "Save As:" and "Where:" share, the combo
+  starting where the fields start, both anchored to the panel's centre line (`SavePanelForm`), since the panel centres
+  its form and the accessory alike. It sits under "Where:" — the accessory area is the only place macOS gives an app,
+  and a row between "Save As:" and "Tags:" is not on offer; decided to keep it there rather than hide Tags.
 - The footer shows a text note's own shape at the right of the counts, `UTF-8` and `LF` as two capsule badges in
   the vim chip's family (done 2026-09-04, see Done 2): clicking either pops a menu to convert it, which marks the tab
   dirty for the next ⌘S; hover brightens the capsule so it reads as pressable. Empty over a PDF or a picture, which
@@ -115,7 +124,10 @@
   centred and bold, then the controls in inset rounded groups: a 10pt-radius card, a hairline between one
   44pt row and the next, the label left and the control on the right edge, an on/off setting wearing an
   `NSSwitch` rather than a checkbox, and a quiet footnote under the group where one is owed. **General**
-  — language, theme ("System Default follows the Mac."). **Appearance** — font family, size, line
+  — language and theme ("System Default follows the Mac."). The language popup lists five, each naming
+  itself in its own script: System Default, English, 简体中文, 繁體中文, Bahasa Melayu. System Default reads
+  the Mac's own preferred language — `zh-Hant` / `zh-TW` / `zh-HK` → 繁體中文, `zh-Hans` / `zh-CN` / bare
+  `zh` → 简体中文, `ms` → Bahasa Melayu, anything else English. **Appearance** — font family, size, line
   spacing, editor padding. **Tab bar** — a first group of "Show tab bar" and "Auto-hide tab bar", then a
   second group for what the strip shows: Traffic lights, Bookmark button, Settings button; no footnote —
   the keys (⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W) all keep working with the strip and its buttons hidden, but the page
@@ -204,8 +216,8 @@
 - **Editor** (default), **Split**, **Reading**. ⇧⌘P cycles editor → split → reading → editor; ⌥⇧⌘P jumps to reading and
   back out to the editor. The View menu keeps "Mode Toggle" (checkmarked in split and reading) and adds
   "Reading Mode" (checkmarked in reading). Both checkmarks are the front tab's.
-- Rendered files only: a note whose file is spelled `.md`, saved — or `.tex` (`.latex`, `.ltx`), which gets the LaTeX
-  render below instead, or `.html` (`.htm`), which gets the HTML preview, and everything else here unchanged. Every
+- Rendered files only: a note whose file is spelled `.md` (`.markdown`, `.mdown`, `.mkd`; 2026-09-06), saved — or `.tex` (`.latex`, `.ltx`), which gets the LaTeX
+  render below instead, or `.html` (`.htm`, `.xhtml`), which gets the HTML preview, and everything else here unchanged. Every
   other tab — an untitled note, a `.txt`, a `.css`, anything not yet saved — has no render, no mode control, and both
   View items are disabled there, so ⇧⌘P and ⌥⇧⌘P do nothing.
 - Split: a read-only rendered pane beside the editor (trailing side, resizable, 50% default, min 240pt); the image sidebar
@@ -215,7 +227,11 @@
 - Shared chrome: the tab strip runs across the top of both columns and the status bar across the bottom of both, so the
   editor/preview divider starts under the tabs and stops above the footer. The pane has no header of its own — it is the
   render and nothing else, starting at the top of its column with the editor's own leading inset.
-- Mode control: three segments — `pencil` / `rectangle.split.2x1` / `book`, tool tips naming the state and its keys —
+  Outside split the divider is not drawn at all (fixed 2026-09-06): the split's own `DocumentSplitView` draws nothing
+  while a column is closed, since the controller lays the divider out against the window's edge regardless of the
+  delegate — a 1pt dark line right beside the sidebar's, so the seam read as two lines in dark mode.
+- Mode control: what the corner slot (below) holds over a tab with a render. Three segments —
+  `pencil` / `rectangle.split.2x1` / `book`, tool tips naming the state and its keys —
   floating over the top-trailing corner of a column, 8pt under the strip and 12pt off the trailing edge, and nothing
   behind it — the control's own rounded bezel is the whole of it, with no plate or hairline around that. There is one per
   column: the editor's in editor and split modes, the preview's in split and reading. Split shows both, one in each
@@ -296,6 +312,40 @@
   `$$` or its fence in the source, and a caret in that source lights it. A `$$…$$` inside a sentence stays in the
   sentence, set in display style where it stands.
 
+## The corner slot (done 2026-09-05, Todo 4)
+- One band per column, and the front tab says what stands in it. The band, the hover, the fade, the hit testing and
+  the drop out of ⌘F's way are exactly as the mode control's above; only the thing in the corner changes.
+- A tab whose note `supportsRenderedPreview` gets the mode control. A `.json` text tab gets the Beautify / Compact
+  button. Every other tab — a `.txt`, an untitled note, a PDF, a picture, a book — gets nothing: the overlay goes away
+  whole, so the band takes no clicks and the text under it stays as reachable as any other. Zen empties every slot.
+- Keyed on the note, never on a list of extensions kept in the overlay, so a new kind of render is offered the mode
+  control the moment `RenderedPreviewKind` learns to spell it.
+- The mode control is per column (editor's in editor and split, preview's in split and reading); the JSON button is
+  the editor column's alone, since a `.json` tab has no second column.
+
+## JSON — Beautify / Compact (done 2026-09-05, Todo 5)
+- A saved `.json` tab carries one small button in the corner slot, in the segmented control's own bezel and size:
+  `text.alignleft` "Beautify JSON" when the file is compact, `arrow.down.right.and.arrow.up.left` "Compact JSON" when
+  it is already laid out. One button, because the file is in one of the two shapes already and the only thing worth
+  offering is the other one. Its symbol is drawn in `secondaryLabelColor`, `tertiaryLabelColor` while disabled, and
+  re-resolved when the Mac switches between light and dark, like the segments beside it.
+- Which way it points is read off the text: a newline anywhere outside a string literal means the file is laid out,
+  and the file's own trailing newline does not count. Invalid JSON leaves the button in place but disabled, with
+  "Not valid JSON: line N" naming the 1-based line the parse stopped at.
+- The state is worked out when the tab arrives in front and re-parsed on the same half-second debounce the footer's
+  counts use after typing, never once a keystroke.
+- Clicking replaces the whole note through the editor's own undoable path — one `shouldChangeText` /
+  `didChangeText` edit, the way a line operation replaces its lines — so the tab goes dirty, ⌘Z puts the file back
+  exactly as it was, and the save, vim and the footer see one edit. The caret goes to the top (every line has moved)
+  and the button flips at once.
+- `JSONFormat` is Nota's own walker, not `JSONSerialization`: every token — string, number, `true`, `false`, `null`,
+  and every key — is re-emitted as the byte range it occupied in the source, so key order, array order, number
+  spelling (`1.50` stays `1.50`) and every escape inside a string survive both directions, and beautifying then
+  compacting gives back exactly what was there. Pretty is two-space indent, `"key": value`, one element to a line,
+  with an empty `{}` or `[]` left on the line it is on; compact is no whitespace at all outside a string. The file's
+  trailing newline is kept if it had one. The grammar is RFC 8259 and nothing beside it — no comments, no trailing
+  commas, no single quotes, no unquoted keys.
+
 ## PDF
 - A PDF opens in a tab of its own and is read there, whatever it is named — its magic bytes decide, not its
   extension, so a PDF named `report` opens as one and a `.pdf` that is really a text file opens as text (see Model).
@@ -345,6 +395,52 @@
   you were reading. A pinch on a document is the same number, read back off the scale PDFKit lands on.
 - Footer: the middle counts pages (`12 pages`, `1 page`), the right says which one (`Page 3 of 12`), and it is empty
   when there is no document to be in. Everything else in the chrome — the strip, the vim badge, zen — is unchanged.
+
+## RTF (done 2026-09-05, Todo 26)
+- A rich-text document opens in a tab of its own and is read there, the fourth viewer after a PDF, a picture and a
+  book. The bytes decide, not the name: `{\rtf` at the front of a file is rich text whatever the file is called, so
+  a `.txt` written by TextEdit opens as the document it is and a `.rtf` holding nothing but prose opens as an
+  ordinary editable text tab. An RTFD is the one kind with no first bytes to read — it is a folder, not a file — so
+  it is known by being one: a package spelled `.rtfd` with a `TXT.rtf` inside it.
+- Entry points are the same as any other file's: ⌘O, a drag onto the strip, the band or the render column, the Dock
+  icon, Finder's "Open With", and `:e path`. Opening one that is already open comes back to its tab.
+- The tab is locked in reading, exactly as a PDF's is: the document takes the whole column, the editor stays
+  collapsed, there is no mode control in either corner, and ⇧⌘P, ⌥⇧⌘P and both View items do nothing there.
+- Read once with `NSAttributedString(url:options:documentAttributes:)`, which takes both flavours by the same URL and
+  brings an RTFD's pictures along as attachments, and drawn in a read-only `NSTextView` inside a scroll view on the
+  editor's own background, at the editor's own left and right margin — the one viewer whose content is text, so it
+  lines up with the text beside it rather than running edge to edge the way a page or a picture does. The document's
+  own fonts, sizes, colours and paragraph layout are what you read: this is a view of a document, not a re-rendering
+  of one. It is selectable, so ⌘C takes the words (and their formatting) out of it, and never editable.
+- Two things are settled on the way in and nothing else is. Text the author left plain black on no background is
+  drawn in `labelColor` — an RTF is written for paper, `\cf0` is "the body text" rather than a colour anybody chose,
+  and taking it at its word would print black type onto Nota's dark ground. A colour that was chosen stands: a red
+  word is red in both appearances, and so is a black word with a highlight behind it, since a colour laid against a
+  background of its own is a pair. And every attachment is given explicit bounds, which is what the zoom below
+  scales.
+- Read, never written, the same as a PDF: never dirty, ⌘S and Save As disabled, `:w` does nothing, ⌘W closes with no
+  prompt, and nothing about it is written to the cache — the file on disk is the whole of it. The document is parsed
+  once per tab and held, so switching back to it does not read the file again. A file rewritten under the tab is
+  simply read afresh, and one that has gone — or that holds nothing AppKit can parse — keeps its tab, stays clean,
+  and shows a quiet centred `Couldn't open "name.rtf".` in the editor's own font.
+- ⌘F is the same pill in the same corner, "Find in document", over this pane's own text storage through
+  `TextFindSession` — the session the editor and the rendered page already use, since what is being searched here is
+  an `NSTextView` like theirs. Find and Replace… is greyed out: a document Nota does not edit cannot be typed into.
+- ⌘+ / ⌘- / ⌘0 zoom the document, the way they zoom a page rather than the way they change a font: every font, every
+  measurement in a paragraph style and every attachment is multiplied, so the type grows and the lines re-wrap to the
+  column instead of the document being magnified as a picture of itself. Measured from the document as it was read
+  rather than from the last zoom, so ⌘+ and ⌘- back to where you started put the type back exactly; clamped to
+  0.25…8, and, like every other tab's zoom, the tab's own for as long as the tab is open and not in `session.json`.
+- The session keeps how far down the document the reader had got, as a share of its scrollable height — the same
+  field a book's chapter uses for the same reason, since pixels would mean somewhere else in a column of another
+  width. There is only one place to be in a document, so the number a PDF's page rides in is always 0 here.
+- Files let go on the document open as tabs, the way they do anywhere else over the render column. Nothing lands
+  *in* it: there is no note here to put a picture in.
+- The tab, picker and bookmark icon is `doc.richtext`.
+- Footer: the middle counts the document's words and characters exactly as a text note's does (`68 words · 349
+  characters`), because rich text is words on a page; the right is empty, since there is no caret behind it and no
+  page to be on, and so are the encoding and line-ending badges.
+- Print goes with Todo 1.
 
 ## Image tabs (decided 2026-09-04)
 - A picture opens in a tab of its own and is looked at there, the way a PDF is read in one: PNG, JPEG, GIF, TIFF,
@@ -409,6 +505,12 @@
   cannot put away has no business standing over the page, and the sidebar says which chapter this is without one.
 - ⌘F is the page's own find session, the same pill in the same corner. ⌘+ / ⌘- zoom the chapter the way they zoom any
   other page.
+- Read in Nota's light or dark, not on the paper it was typeset for (2026-09-06). In dark mode a reader stylesheet goes
+  into every chapter at document start (`HTMLPreviewView.readerThemeCSS`, only when `appliesReaderTheme`, which the
+  book pane sets): every run of text in the label colour, links in the system blue, rules and table borders in the
+  separator grey, the body's own paper made transparent so the column's ground shows through — the same call the RTF
+  viewer makes for black body text, for the same reason: `color: #000` in a book's sheet is "the text", not a colour
+  anybody chose. Light mode is the author's page untouched, and a `.html` tab is the author's page in both.
 - Read, never written, the same as a PDF: locked in reading, never dirty, ⌘S and Save As disabled, nothing in the
   cache, ⌘W with no prompt, no mode control and both View items greyed out. A file that has gone — or one that will
   not come apart, a torn archive or a package with no spine — keeps its tab and shows `Couldn't open "name.epub".`
@@ -492,6 +594,187 @@
   `file://` URL again on its way to the browser. The page reports its own scroll on each frame, so a reload puts the
   reader back where they were.
 
+## SQL preview (done 2026-09-05, Todo 6; second pass 6-A; third pass 6-B; the query's jump 6-C)
+- A `.sql` file is a tab with a preview beside it, the way a `.md` is: the same three modes, the same floating mode
+  control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the session. The View item
+  is "Mode Toggle" there as everywhere. What stands in the column is not a rendering of the text — it is the database
+  the text builds.
+- Run, not drawn. A dump is a program: the only way to know what `Shop.sql` holds is to run it. `SQLDump` opens a
+  database in memory (`sqlite3_open_v2(":memory:")`, the system SQLite, no dependency) and runs the editor's own text
+  into it — unsaved edits included — statement by statement through the `sqlite3_prepare_v2` tail loop, which is what
+  makes a semicolon inside a string literal a semicolon in a string. The file on disk is never opened by SQLite and
+  nothing is ever written anywhere: the database lives as long as the tab and is thrown away with it.
+- A statement that will not go in stops the run and says which one it was, in an alert on the window:
+  `Couldn’t run “Shop.sql”.` over the message SQLite gave and the statement it gave it about. Once, and not on every
+  keystroke — a dump being typed is broken most of the way through being written, so the same message is raised on
+  the run that first finds it and then held until the file runs clean again (a different message, and a different
+  tab, are different news). Everything the statements before it made is still there and still readable — half a
+  database is half a database, not none.
+- Two buttons say what the keys do (decided 2026-09-05): a small `Run` push button (`play.fill`, tool tip "Run the
+  query  ⌘↩") stands over the query box at its leading edge, inside the band the corner slot keeps clear, low in it, 6pt over
+  the box — the box is no lower for it — and does what ⌘↩ does; and the bar's refresh control wears its word — `arrow.clockwise` and `Refresh`, borderless like the page
+  arrows — rather than an arrow alone.
+- The grid is always there (decided 2026-09-05). A table with no rows, a query that found none and a file with no
+  tables in it yet are each still a table: the header stands — the picked table's columns from the schema, the
+  query's own, or three blank ones when there is no table to take them from — over the same striped rows, and the
+  bar's range says "No rows". No caption in the middle of an empty pane; the one left is the big file's "Run to read
+  this dump.", which is an instruction rather than a state. A blank column is not sortable.
+- The grid: a plain `NSTableView`, 22pt rows (taller with the editor's font), one vertical hairline between columns,
+  alternating rows, a `#` gutter numbering rows from the top of the *table* rather than of the page, and the last
+  column taking up whatever slack the others leave. Cells are monospaced at the editor's size; numbers are set right
+  so they line up on their last digit; `NULL` is dimmed and slanted, so a column of them reads as nothing rather than
+  as the word; a blob is `⟨12 KB⟩` and never its bytes. What a column is too narrow to show is one hover away, and a
+  header's tool tip is the declared type from `PRAGMA table_info`. A header click sorts by that column and a second
+  click turns it round — the database's own `ORDER BY`, so it orders the whole table and pages it again from the top.
+  The header is Nota's own: flat rather than the system's light gradient bezel, the sorted column's name in
+  semibold with a small accent chevron beside it. The sort is taken on the click's release
+  (`tableView(_:didClick:)`) and not on its press, and a page of the same columns keeps the very column objects it
+  had — the header tracks the mouse until the button comes up, and rebuilding its columns underneath it was what
+  made a header click do nothing.
+- Picking values out of the grid is a spreadsheet's, not a list's. A click takes one cell; a drag takes the
+  rectangle between where it started and where it is; the arrows move that cursor and ⇧ with them grows the
+  rectangle from its anchor. Whole rows are still there where a row is what is wanted: a click in the `#` gutter
+  takes one, and ⇧ anywhere takes the run between. The two never stand at once — picking either puts the other down,
+  because a wash under a wash says nothing about what ⌘C would take. What is picked out wears the accent at low
+  strength with a hairline of it round the rectangle's outer edge only, and the cursor cell carries a border of its
+  own; the gutter takes a fainter wash on every row of the selection. Esc puts it down, and so does a new page: a
+  (row, column) held across a page, a sort or a new set of columns would quietly point at somebody else's value.
+  ⌘C copies what is drawn — tab separated, a line per row, only the columns inside the rectangle for a cell
+  selection and every column for a row one, `NULL` copied as the word because that is what the cell says. Nothing in
+  the grid is editable.
+- Space stands the cursor up into its row and sits it back down (decided 2026-09-05). With a cell picked out —
+  clicked or arrowed to — Space takes the whole row it is in, exactly the selection a click in the `#` gutter makes,
+  and Space again puts the cursor back on the cell it stood up from. No ⇧ needed, and neither press scrolls the grid
+  (a table's own Space is a page down, which over a sheet of cells is nothing anyone asked for) or reaches the editor
+  as a typed space. A row taken from the gutter was not stood up from anywhere, so Space over one does nothing.
+- A cell clicked walks the editor to where that row is written (decided 2026-09-05), the way a click on a rendered
+  Markdown block walks it to the paragraph behind it. In split only — reading has no editor on screen — and without
+  taking the keyboard: the grid keeps it, so the arrows go on walking the cells. A row of a multi-row
+  `INSERT … VALUES (…),(…)` lands on its own tuple and not on the statement's head. It is `SQLSourceMap` that knows:
+  while `SQLDump` runs the file it writes down each statement's own characters, and for an insert the rowids it made
+  (`sqlite3_changes` and `sqlite3_last_insert_rowid` read together), and every page of a table carries its rowids
+  beside its values (`SELECT rowid, *`, the rowid taken back out before the grid ever sees it). A row that an
+  `UPDATE` further down the file changed still points at the `INSERT` that wrote it: that is where the row *is*
+  written. Anything with no rowid to be looked up by does nothing at all rather than landing somewhere arbitrary — a
+  `WITHOUT ROWID` table, a query of a shape no rowid fits, a row whose insert is not in this file — and so does a
+  statement whose tuples do not add up to the rows it claims, which is pointed at whole instead. `PreviewContent`
+  grew one callback for it, `onSourceReveal`: a block click is a jump and takes the caret with it, this is a look
+  and does not.
+- A query's rows jump too, when they are one table's rows (decided 2026-09-05, Todo 6-C). The last statement of the
+  box is read once by `SQLQueryRewrite` — loosely, since SQLite has already said the text is good — and if it is
+  plainly `SELECT <list> FROM <one table> [WHERE / ORDER BY / LIMIT …]` the page is asked of that query with the
+  table's rowid spliced in after the `SELECT` keyword: `SELECT "c".rowid AS "__nota_rowid", <the reader's own list>
+  FROM customers c`. Nothing else about the text is touched, the rowid column is taken back out before the grid sees
+  it, and the page remembers which table its rowids are of, so a click looks the row up in that table's `INSERT`.
+  `SELECT *` works, an alias works (the rowid is asked of the alias, since `FROM customers c` puts `customers` out
+  of reach), and the count, a header's sort and the second page are all the rewritten query's. Refused, and read
+  exactly as written instead: a join, a comma-separated `FROM`, `GROUP BY`, `DISTINCT`, a `UNION`, an aggregate
+  call, a leading `WITH`, a sub-select anywhere, `ORDER BY 2` (a positional order counts the columns the rewrite
+  would have changed), a schema-qualified name, and a table with no rowid. The rewrite is an offer and never a
+  requirement: it is prepared under the same read-only authorizer as anything else in the box, and one SQLite will
+  not take — an alias in quotes is the reachable case, since it is not read as an alias here — is dropped without a
+  word and the reader's own query runs, with no rowids, exactly as it did before.
+- A hundred rows to a page (`LIMIT 100 OFFSET`), with `COUNT(*)` beside it. The bar over the grid is the table
+  `NSPopUpButton` at the leading edge, an `arrow.clockwise` button beside it ("Run again"), and `1–100 of 4,213`
+  between ‹ › at the trailing one; the footer says
+  `7 tables` in place of the counts and `Rows 1–100 of 4,213` in place of the caret, both through `TextStats` — but
+  only while the column is on screen, since in the editor mode a `.sql` tab is source like any other and the words
+  and the caret stand.
+- The pane begins a `ModeControlOverlay.hoverBandHeight` band below the top of the column, left clear for the
+  floating Editor · Split · Reading control that lives in that corner. Under it is the query box: five rows of the
+  editor's monospaced font in a rounded bezel that takes the accent while the typing is going there, `SELECT …` for
+  a placeholder, and no rich text or smart substitutions at all — what is typed is what is run, and a query box that
+  turned `'shipped'` into curly quotes would be a box that lies. Return makes a line, because a query is written
+  over lines; ⌘↩ runs it, the key every database tool answers to. Esc puts it down and the picked table comes back,
+  and picking a table puts it down too: picking a table is asking for that table. What is typed there can never change the database: every
+  statement in the box is prepared under an authorizer (`sqlite3_set_authorizer`) that allows `SQLITE_SELECT`,
+  `SQLITE_READ`, `SQLITE_FUNCTION` and `SQLITE_RECURSIVE` and denies everything else, and the *whole* text is
+  prepared before anything runs — so `DELETE FROM t` comes back "not authorized" and so does `SELECT 1; DELETE FROM t`,
+  rather than the second half running behind the first. The last statement of the text is what is drawn, wrapped as a
+  sub-select so the paging and the count are Nota's arithmetic rather than something the query has to have been
+  written for. A query that will not run is an alert — `Couldn’t run the query.` over the message, `near "*": syntax
+  error` and the like, and under it the rule the box works by, `Only SELECT queries run here. The tables are
+  read-only.` (a refused write says only the rule: SQLite's "not authorized" is no explanation) — one per press, since a question is asked one ⌘↩ at a time; the page that was being read is
+  left alone under it. Running a query changes nothing about the grid's own hands: a cell is still picked out by one
+  click — the same click that takes the keyboard back from the box — and still walks the editor to its row whenever
+  the query carried rowids. Both alerts go through one test hook, so a test never puts a modal on screen.
+- Off the main thread, always: the run and every page are asked on one serial queue and answered back on the main
+  one, each carrying a token, so an answer about the file two keystrokes ago is dropped rather than drawn. An
+  ordinary dump is run again ~150 ms after typing stops, on the same debounce the Markdown render uses. A big file
+  (the `BigFile` threshold) is never run on its own — a hundred megabytes of inserts is not something to start
+  between two keystrokes — and typing after a run does not run it again; the `arrow.clockwise` button is what asks
+  for one. One button rather than two (decided 2026-09-05): over a small dump it says "as the file is now" and over
+  a big one it says "read it", which is the same press. It builds a fresh database and asks for the same page again,
+  keeping the picked table, the query, the sort and the page offset where they can be kept — and, since the reader
+  asked for it, a file that still will not run says so again rather than holding the message it was holding.
+- The table being read and the query beside it ride in `session.json` (`sqlTable`, `sqlQuery`), so a dump comes back
+  open where it was left; a session written before this has neither key and opens on the first table with an empty
+  box. `PreviewContent` grew one callback for it — `onStateChange`, "the content wrote something on the note" — and
+  the window answers it with a session save and nothing else.
+- ⌘F is the editor's, unchanged, in every mode: the find bar's machinery bands ranges in text, and a page of cells is
+  not text — the query box is how you find a row in a database. Nothing about the grid takes the find bar's corner.
+- Untitled notes and every other extension have no SQL preview. Save As to `.sql` is what turns a note into one.
+  `Examples/Shop.sql` is the demo: four tables that know about each other, and more rows than one page.
+
+## CSV preview (done 2026-09-06, Todo 27)
+- A `.csv` or `.tsv` file is a tab with a preview beside it, exactly the way a `.sql` is: the same three modes, the
+  same floating mode control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the
+  session, and the "open supported files in reading mode" setting opens one in reading like every other rendered
+  kind. The View item is "Mode Toggle" there as everywhere. `RenderedPreviewKind.csv` and `PreviewContentKind.csv`
+  are the whole of the plumbing; `CSVPreviewView` is the eighth content view the column holds.
+- Read, not run. A delimited file is already a table, so unlike a dump there is no engine and nothing to ask:
+  `CSVTable` walks the editor's own text once — unsaved edits included — and comes back with a header, the records
+  under it and where each record is written. Nota's own RFC 4180 scanner, no Foundation CSV and no dependency. The
+  comma for a `.csv` and the tab for a `.tsv`, spelled by the name the author gave the file and never sniffed.
+- What the scanner keeps, because a real file breaks all of it: a field that opens with `"` is quoted, `""` inside
+  it is one quote, and a separator or a newline inside it is text; a field that does *not* open with one keeps its
+  quotes as characters, because `Laptop Sleeve 14"` means fourteen inches. CRLF, LF and a lone CR all end a record
+  (a CRLF is one Swift `Character` and the two UTF-16 units the editor's storage holds, which is exactly the shape
+  the record wants); a trailing newline is the end of the last record rather than the start of an empty one; a blank
+  line anywhere is skipped, since it is whitespace in the file and not a row of nothing. A byte-order mark is the
+  encoding saying hello and not the first letter of the first header. The first record is the header, and a header
+  cell with nothing in it is named for its place — `Column 3` — so every column has something to click on. Rows are
+  ragged in practice: a short one is padded with empty cells and a long one widens the table, naming the columns it
+  made the same way. Nothing is ever thrown away and no record is ever a failure — an unterminated quote closes at
+  the end of the file.
+- The chrome is one bar and nothing else: the `arrow.clockwise` `Refresh` button at the leading edge ("Read again")
+  and `1–100 of 2,345` between ‹ › ("Previous page", "Next page") at the trailing one — the dump's bar with the
+  table picker, the query box and the Run button taken out of it, since a table has nothing to pick between and
+  nothing to be asked. The bar starts a `ModeControlOverlay.hoverBandHeight` band below the top of the column, left
+  clear for the floating Editor · Split · Reading control, so the header row is never behind it.
+- The grid is the dump's own, `SQLGridView` unchanged: the spreadsheet cell cursor, the rectangle a drag picks out,
+  the `#` gutter numbering rows from the top of the table, ⇧ and Space, the flat header with its accent chevron, the
+  last column taking up the slack, and ⌘C copying what is drawn, tab separated. Cells are monospaced at the editor's
+  size and every one of them is text — there is no schema to say otherwise, so nothing is set right and nothing is
+  dimmed. A value written over lines draws its first line and says the whole of itself in a tool tip, as does one
+  the column is too narrow for.
+- A hundred rows to a page, the same hundred a dump pages by, and the footer says `2,345 rows · 6 columns` in place
+  of the counts and `Rows 1–100 of 2,345` in place of the caret, both through `TextStats` — but only while the
+  column is on screen, since in the editor mode a `.csv` tab is source like any other.
+- A header click sorts by that column and a second click turns it round, on the click's release for the reason the
+  dump's is. The sort orders the whole table and the page is cut from that, so sorting four thousand rows by name
+  shows the first hundred names and not the first hundred rows rearranged. A column every non-empty value of which
+  parses as a number is ordered as numbers — `9` before `10` — and one value that is not is enough to make the whole
+  column text, ordered by the reader's own language with case ignored. An empty cell is nothing, and nothing sorts
+  before everything. Ties keep the file's own order. A blank column is not sortable, and neither is the `#` gutter.
+  A column is identified by its position *and* its name, since a CSV is free to have two columns called `id`.
+- A cell clicked walks the editor to the line the row is written on, in split only and without taking the keyboard —
+  the same `onSourceReveal` a dump's cell click uses, so the grid keeps the focus and the arrows go on walking the
+  cells. `CSVTable` takes the ranges down as it reads: a record whose quoted field runs over three lines has all
+  three, and the range begins where the record begins.
+- Off the main thread, always: the read is asked on a serial queue and answered back on the main one carrying a
+  token, so an answer about the file two keystrokes ago is dropped rather than drawn. An ordinary file is read again
+  ~150 ms after typing stops, on the same debounce the Markdown render uses. A file past the `BigFile` threshold is
+  never read on its own and typing after a read does not read it again; the `Refresh` button is what asks, and until
+  it is pressed the pane says `Refresh to read this file.` A read the *reader* asked for keeps the sort and the page
+  it was on; a read the *file* asked for drops the sort, since the columns may not even be the same ones.
+- Nothing new is persisted: the mode the tab is in is all the session keeps, and `sqlTable` / `sqlQuery` stay a
+  dump's. The file stays a text note in the editor — the preview is read-only and dirty and save semantics are
+  untouched. ⌘F is the editor's, unchanged, in every mode.
+- Untitled notes and every other extension have no table preview. Save As to `.csv` is what turns a note into one. A
+  `.tsv` wears the `.csv` drawing in the strip. `Examples/Products.csv` is the demo: forty rows, quoted fields with
+  commas and quotes in them, and one record written over two lines.
+
 ## Workspace (decided 2026-09-03, refactor before the LaTeX preview)
 - The window controller has exactly one editor pane and one preview pane and talks to nothing inside them by name. The
   preview pane is a host holding one content view at a time; every content view — the Markdown render, the PDF view, the
@@ -572,7 +855,7 @@
 - Choosing a heading puts the caret at its line start and scrolls it into view; in split or reading the render is walked to that block too, by hand through the `highlightBlock(containingSource:)` a caret move already drives.
 - The selected tab is always fully in view: at 40pt the strip stops shrinking and becomes a sliding window over the tabs, anchored on the selected one. Closing with the ✕ freezes the widths until the pointer leaves the strip, so a run of closes keeps each next ✕ under it; ⌘W does not freeze.
 - Tabs reorder by drag: the dragged tab rides the pointer and its neighbours slide into the gap; the order is the session's order.
-- Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab. Right-click a tab for Bookmark / Remove Bookmark and Close Tab. Closing the only tab closes the window too, the way the title-bar close button does: the last window hides, any other closes for real.
+- Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab. Right-click a tab for Bookmark / Remove Bookmark, Reveal in Finder (greyed on an untitled note; the same item sits at the foot of the File menu as ⌥⌘R, for the front tab) and Close Tab. Closing the only tab closes the window too, the way the title-bar close button does: the last window hides, any other closes for real.
 - **Bookmarks** (Done 13). A bookmark is a file path, app-wide, kept in `session.json` beside the
   windows in the order they were added. ⇧⌘D bookmarks the tab in front — any named tab, PDFs and pictures included —
   and an untitled note is asked for a name first, staying unbookmarked if the save panel is cancelled. File ›
@@ -612,6 +895,10 @@
   registers a system-wide hotkey by position — which is why it is stored apart from the app shortcuts below it.
 
 ## Vim mode (Settings checkbox, off by default)
+- The footer badge stands in for the vim mode while there is no editor in front (decided 2026-09-05): it reads
+  `Read-only` over a PDF, a picture, a book or an RTF and `Reading` over a note in reading mode, and it is shown there
+  whether vim is on or off; the pending-keys label stays away with it. Split and the editor give the word back to vim
+  — `Normal`, `Insert` and the rest — and, with vim off, take the badge away again.
 - Opens in normal mode. Esc alternatives: ⌃[ and ⌃C only (no jk).
 - Near-full: motions (h j k l w b e W B E 0 ^ $ gg G { } f t F T ; , % counts), operators d c y < > = ~ g~ gu gU
   with motions, doubled forms (dd cc yy >> << == guu gUU g~~), x X p P, u ⌃r, `.` (incl. the typed text of an insert
@@ -663,6 +950,147 @@
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+27. **A `.csv` or `.tsv` is read as the table it is (done 2026-09-06).** A delimited file was a text note and
+    nothing more: a hundred and forty characters of commas per line, read by counting them. It is a tab with a
+    preview beside it now, the eighth content view the column holds, and the preview is the dump's grid with the
+    database taken out of it. `CSVTable.swift` is the whole of the reading — Nota's own RFC 4180 scanner, pure and
+    with no dependency — and it hands back a header, the rows, and the characters each record is written on;
+    `CSVPreviewView.swift` is the pane, composing `SQLGridView` unchanged over one bar of `Refresh` and the page
+    arrows. Everything the grid already knew how to do came with it: the cell cursor, the rectangle, the `#` gutter,
+    ⇧ and Space, ⌘C as tab-separated text, and the flat header whose click sorts. What is new is the sort itself
+    (numeric where the column is all numbers, the reader's own collation where it is not), the source map (a click
+    on a cell walks the editor to the record's first line, quoted fields spanning lines and all), and the footer's
+    `2,345 rows · 6 columns`. Nothing was changed about the SQL pane; nothing new rides in the session.
+
+26. **RTF opens as a viewer tab (done 2026-09-05).** An `.rtf` or an `.rtfd` used to be imported — its plain text
+   poured into a new untitled tab, the formatting and the pictures thrown away (Done 17, now superseded). That was
+   the wrong shape: a rich-text document is something to read, not a note to be made out of. It is a viewer tab now,
+   the fourth after a PDF, a picture and a book. `NoteKind.rtf` and `FileClass.rtf` join the others; `FileSniff`
+   answers for it by the `{\rtf` header every RTF file starts with, asked before the text check since an RTF's own
+   markup is ASCII and would otherwise open as a wall of control words, and an RTFD by being the package it is.
+   `RTFPreviewView.swift` is the pane: `NSAttributedString(url:options:documentAttributes:)` into a read-only,
+   selectable `NSTextView` at the editor's own margin, keeping the document's fonts and colours, with black body
+   text swapped for `labelColor` so a page written for paper is legible on Nota's dark ground. ⌘F is
+   `TextFindSession`, the same one the editor and the render use; ⌘+ scales every font, paragraph measurement and
+   attachment, so the type re-wraps rather than being magnified. The session keeps how far down the document the
+   reader was, in the field a book's chapter share uses. `TextFile.rtfPlainText` and
+   `MainWindowController.importRTF` are gone, and with them the exception `Note.isOpenable` used to make for them.
+   `.rtf` moves out of `deliberatelyExcludedTypes` and into the list `isTextFile` alone consults, which is what it
+   always meant: a real RTF is not a note to edit, but a file merely *named* `.rtf` whose bytes are prose is prose
+   and opens as it, dropped or not. See the RTF section.
+6. **A `.sql` file is read as the database it builds (done 2026-09-05).** A dump was the one text file Nota could
+   show you nothing useful about: two hundred `INSERT` statements are a program, and reading a program is not reading
+   what it makes. A `.sql` tab now has the same three modes every other previewed file has, and what stands beside
+   the source is the database itself — the tables the file builds, a hundred rows at a time, in a grid. The whole of
+   it is the editor's own text, run into an in-memory SQLite (`SQLDump`, the system library, no dependency) every
+   time the typing settles, statement by statement through the prepare/tail loop so a semicolon inside a string is a
+   semicolon in a string; the file on disk is never opened by SQLite and nothing is ever written anywhere. A
+   statement that will not go in stops the run and puts its message and its own text on a red line under the query
+   box, with everything the statements before it made still readable — the failure a dump usually has is one bad line
+   in the middle, and half a database is what you want to see then. The query box asks questions of that database and
+   can never edit it: every statement in it is prepared under an authorizer that denies every action but a read, and
+   the whole text is prepared before any of it runs, so `DELETE FROM t` and `SELECT 1; DELETE FROM t` are both
+   refused rather than one of them half-running. Runs and pages go to a serial queue and come back with a token, so a
+   stale answer is dropped rather than drawn, and a file over the `BigFile` threshold is never run on its own — it
+   grows a Run button instead and typing does not start it again. `SQLPreviewView` is the column's seventh content
+   view and `PreviewContent` grew one callback for it (`onStateChange`), which is what puts the picked table and the
+   query into `session.json` beside the mode. ⌘F stays the editor's: a page of cells is not text for the find bar to
+   band, and the query box is how you find a row in a database.
+6-A. **SQL pane, second pass (done 2026-09-05).** Five things the pane got wrong once it was used on a real file.
+   A header click sorted nothing: the sort was taken on `mouseDownInHeaderOfTableColumn:`, which arrives while the
+   header is still tracking the mouse, and the page it asked for landed inside that tracking loop and rebuilt every
+   column the header was holding — it is taken on `tableView(_:didClick:)` now, after the header has let go, and a
+   page of the same columns keeps the column objects it had rather than tearing them down and building them again.
+   The one-line query box sat in the corner the floating mode control floats in, so the two overlapped; the pane
+   starts a hover band below the top of the column now and the box is five rows of the editor's monospaced font in a
+   rounded bezel, Return a newline and ⌘↩ the run. The red error line under the box is gone: a query that will not
+   run is an alert in the window's own words (`Couldn’t run the query.` over `near "*": syntax error`), and so is a
+   file whose statements fail (`Couldn’t run “Shop.sql”.`) — that one once per distinct message, held until the file
+   runs clean, because a dump mid-edit is broken on nearly every keystroke and an alert per keystroke is the pane
+   arguing with the reader. The grid picks out cells rather than rows: click one, drag out a rectangle, walk it with
+   the arrows, grow it with ⇧, ⌘C takes exactly what is drawn — with the `#` gutter and ⇧ still taking whole rows,
+   and the two selections never up at once. The header is drawn flat in Nota's taste with its own accent chevron,
+   since the system's grey triangle is small enough to be missed and the sorted column is the first thing a reader
+   looks for. Everything else stands: a hundred rows to a page, the table pop-up, ‹ ›, the footer strings and the
+   session's table and query.
+6-B. **SQL pane, third pass (done 2026-09-05).** Three things asked for after the pane had been read with.
+   The Run button and a refresh are the same press, so there is one button: `arrow.clockwise` beside the table
+   pop-up, "Run again", which runs the file as it stands into a fresh database and asks for the same page back —
+   same table, same query, same sort, same offset — and which is still the only way a big dump is ever run.
+   Space stands the cell cursor up into its whole row, the selection the `#` gutter makes, and Space again sits it
+   back down on the cell it came from; it never scrolls the grid and never reaches the editor. And a click on a value
+   walks the editor beside it to the `INSERT` that wrote the row — its own tuple in a multi-row insert, found by
+   counting parentheses outside string literals — in split only and without taking the keyboard, so the arrows go on
+   walking the cells. That last one is a new file: `SQLSourceMap`, written down as the dump runs, holding each
+   statement's own characters and the rowids each insert made (`sqlite3_changes` with `sqlite3_last_insert_rowid`),
+   with every page of a table now carrying its rowids beside its values. What has no rowid — a query's result, a
+   `WITHOUT ROWID` table — has no map and stays quiet rather than guessing. `PreviewContent` grew `onSourceReveal`
+   for it, the half of a block click that moves the caret without asking for the keyboard. The empty grid was
+   checked over as well and needed nothing: with no rows the table still fills the room under its header and AppKit
+   draws the alternating stripes across it, which is what "the same table with nothing in it" should look like.
+6-C. **The jump works for a query (done 2026-09-05).** A cell clicked in split walks the editor to the `INSERT`
+   that wrote the row, but only ever for a table's page: a query's result carried no rowid, so after a run the grid
+   was a sheet of values with nothing behind them. It carries one now for the query that is plainly one table's
+   rows. `SQLQueryRewrite` reads the box's last statement — one `SELECT`, one `FROM`, no join, no comma-separated
+   `FROM`, no `GROUP BY`, `DISTINCT`, `UNION`, aggregate call, leading `WITH`, sub-select or positional `ORDER BY` —
+   and splices `<table or alias>.rowid AS "__nota_rowid",` in after the `SELECT` keyword, leaving every other
+   character where the reader wrote it; `SQLDump.Page` grew `rowidTable` so a page says which table its rowids are
+   of, and the pane looks the clicked row up in that rather than in the picked table. The count, a header's sort and
+   the second page are all asked of the rewritten query. Everything else runs exactly as before — a rewrite SQLite
+   refuses is dropped in silence, with no rowids and no alert. The other half of the report was looked into and
+   found to be sound: after a run, a refresh and a page turn, one click still takes the keyboard from the query box
+   and picks the cell out, and in a real window in split it still reaches the editor. Tests pin all three.
+5. **Beautify and Compact a `.json` file (done 2026-09-05).** A JSON file that arrived as one 40 000-character line
+   was unreadable here, and there was nothing to press about it. A `.json` tab now carries one button in the corner
+   slot — `text.alignleft` "Beautify JSON" over a compact file, `arrow.down.right.and.arrow.up.left` "Compact JSON"
+   over a laid-out one — in the segmented control's own small bezel, its symbol quiet in `secondaryLabelColor` and
+   re-resolved with the appearance. One button rather than two: the file is already in one of the two shapes, so the
+   only thing worth offering is the other. Which way it points is read off the text — a newline outside a string
+   literal, the file's own trailing newline not counted — and worked out when the tab arrives and again on the
+   half-second debounce the footer's counts use, never once a keystroke. `JSONFormat.swift` is the whole of the
+   walking and none of it goes through `JSONSerialization`, which would answer by throwing the document away: keys
+   would come back sorted, `1.50` would come back `1.5`, and an author's file would be handed back respelled. Every
+   token — string, number, literal, and every key — is kept as the byte range it occupied in the source and put back
+   down verbatim, so key order, array order, number spelling and every escape survive both directions and a beautify
+   followed by a compact gives back exactly the bytes that were there. Pretty is two-space indent, `"key": value`,
+   one element to a line, an empty `{}` or `[]` left on the line it is on; compact is no whitespace outside a string;
+   the trailing newline is kept if the file had one. Invalid JSON leaves the button in place and disabled, with
+   "Not valid JSON: line N" — the 1-based line the parse stopped at, which is the only thing the reader needs in
+   order to go and look. The click replaces the whole note through `shouldChangeText` / `didChangeText`, the path a
+   line operation uses, so it is one edit: the tab goes dirty, ⌘Z puts the file back, and the save, vim and the
+   footer all see one thing happen. The caret goes to the top, because every line has moved.
+4. **The corner is a slot, not a mode control (done 2026-09-05).** The band across the top of a column was built
+   around the one thing it carried: `ModeControlOverlay` owned an `NSSegmentedControl` and the window asked
+   `setAvailable(_:)` whether the tab was one of the rendered kinds. Everything else about it — the 44pt hover band,
+   the 150ms opacity fade, the `hitTest` that hands every click but the control's own back to the text, the drop of
+   the pill's height plus 6pt out of ⌘F's way — was already general, and none of it cared what was in the corner. The
+   overlay is now that slot: `Content` is `.modeControl`, `.jsonFormat` or `.none`, the band and its behaviour are
+   untouched, and `.none` takes the whole overlay away so the text under an empty band stays as clickable as any
+   other line. The choice is made by asking the note rather than by a list of extensions kept in the overlay —
+   `supportsRenderedPreview` for the mode control, `Note.isJSON` for the button — which is what lets a new
+   `RenderedPreviewKind` arrive in this corner without a line of the overlay changing. The mode control's own surface
+   is exactly as it was, segments, tints, clearance and all, and the JSON button (Done 5) is what the slot was opened
+   for.
+25. **Reveal in Finder (done 2026-09-05).** A tab's context menu gains Reveal in Finder between Bookmark and Close
+   Tab, and File gets the same item at its foot as ⌥⌘R for the front tab. Both hand the file to
+   `NSWorkspace.activateFileViewerSelecting`, through `MainWindowController.fileRevealer` so a test can catch the URL
+   instead of bringing the Finder forward. An untitled note has no file: the context item is greyed (`TabBarItem.hasFile`)
+   and the File item fails validation (`currentTabHasFile`).
+24. **Languages: Malay and Traditional Chinese (done 2026-09-05).** The interface was English or 简体中文 and
+   the code said so — one `usesChinese` flag and one table. `AppLanguage` grew `traditionalChinese` and
+   `malay` (the existing raw values untouched, so a saved preference still decodes) and the flag became
+   `resolved`, which answers with a real language rather than a yes/no: itself for a chosen one, and for
+   `.system` whatever `AppLanguage.resolving(preferredLanguage:)` makes of the Mac's first preferred
+   language — a pure function of the identifier, so the tests can ask without touching the Mac. `L10n.text`
+   picks one of three tables from it, all keyed by the same English strings; `LocalizationTests` checks the
+   key sets against each other, so a string added in English cannot ship translated in only one language.
+   The inline `chinese:` override a few call sites pass still wins, but only for Simplified Chinese — every
+   key it covers is in the other tables too. 繁體中文 is Taiwan/HK vocabulary rather than a character
+   conversion (檔案, 視窗, 儲存, 拷貝, 顯示方式), and Malay leaves "Editor", "Format" and "Serif" as they
+   stand, since those are the Malay words; `L10n.sharedWithEnglish` is that list, so the test can treat any
+   other untranslated entry as a bug. The popup is `AppLanguage.allCases`, so case order is popup order,
+   and nothing about applying a change moved: `AppDelegate` still compares the installed language and
+   rebuilds the menu, and the Settings window relabels itself in place.
 23. **A saved note keeps its pictures beside it (done 2026-09-05).** A note with pictures in it was readable only
    here: the file said `![](nota://3f9a….png)` and the bytes lived under Application Support, so mailing the file,
    putting it in a repository or opening it in any other editor gave prose with holes in it. Saving under a name now
@@ -737,7 +1165,8 @@
    letters and roman numerals, after `.` or `)`, and `- [ ]` boxes handed on fresh and unticked. A lone `i.` or `I.`
    is settled by the item above it at the same indent. All the arithmetic is pure; `NotaTextView.insertNewline`
    applies the answer as one `shouldChangeText` edit. See the Editor section.
-17. **Import `.rtf` and RTFD as plain text (done 2026-09-05).** Nota still refuses to edit an RTF or an RTFD package
+17. **Import `.rtf` and RTFD as plain text (done 2026-09-05; superseded the same day by Done 26, which opens both
+    as viewer tabs instead — the import path described below is gone).** Nota still refuses to edit an RTF or an RTFD package
     as a file, but no longer refuses to open one at all: `MainWindowController.open(url:)` — the single path ⌘O,
     drop, the Dock icon and Open Recent all funnel through — asks `TextFile.rtfPlainText(at:)` first, before the
     sniff or the exclusion below would otherwise refuse it. That reads the document with `NSAttributedString(rtf:

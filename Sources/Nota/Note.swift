@@ -51,10 +51,14 @@ enum PreviewMode: String, Codable, CaseIterable {
 /// Markdown or LaTeX into its reading layout, and HTML is already a page, so
 /// WebKit draws it as it stands.
 enum RenderedPreviewKind {
-    case markdown, latex, html, svg
+    case markdown, latex, html, svg, sql, csv
 
     init?(fileExtension: String) {
-        if fileExtension.caseInsensitiveCompare("md") == .orderedSame {
+        // The spellings the icon already knows (`FileKindIcon`): a file
+        // called `.markdown` is Markdown, and was a bare text note until
+        // 2026-09-06.
+        for spelling in ["md", "markdown", "mdown", "mkd"]
+        where fileExtension.caseInsensitiveCompare(spelling) == .orderedSame {
             self = .markdown
             return
         }
@@ -65,7 +69,7 @@ enum RenderedPreviewKind {
         }
         // The page, not its parts: a `.css` or a `.js` beside it is source
         // with nothing to preview.
-        for spelling in ["html", "htm"]
+        for spelling in ["html", "htm", "xhtml"]
         where fileExtension.caseInsensitiveCompare(spelling) == .orderedSame {
             self = .html
             return
@@ -75,6 +79,19 @@ enum RenderedPreviewKind {
         // it, not one of the pictures Nota opens as a viewer.
         if fileExtension.caseInsensitiveCompare("svg") == .orderedSame {
             self = .svg
+            return
+        }
+        // A dump is a program that builds a database, and the preview beside
+        // it is that database: the only way to know what a `.sql` holds is
+        // to run it.
+        if fileExtension.caseInsensitiveCompare("sql") == .orderedSame {
+            self = .sql
+            return
+        }
+        // A delimited file is a table already: there is nothing to run and
+        // nothing to lay out, only rows to be read as the rows they are.
+        if CSVTable.Separator(fileExtension: fileExtension) != nil {
+            self = .csv
             return
         }
         return nil
@@ -92,12 +109,12 @@ enum RenderedPreviewKind {
     }
 }
 
-/// What a tab is holding. Everything Nota edits is text; a PDF, a picture and
-/// a book are the binaries it opens at all, and they open as viewers — there
-/// is no text storage behind any of them, nothing to save, and nothing to keep
-/// in the cache.
+/// What a tab is holding. Everything Nota edits is text; a PDF, a picture, a
+/// book and a rich-text document are the binaries it opens at all, and they
+/// open as viewers — there is no text storage behind any of them, nothing to
+/// save, and nothing to keep in the cache.
 enum NoteKind {
-    case text, pdf, image, epub
+    case text, pdf, image, epub, rtf
 
     /// Whether the tab is read rather than edited. Everything that follows
     /// from that — locked in reading, never dirty, never cached, never
@@ -166,6 +183,13 @@ final class Note {
     /// the tab is open, and no longer: it is not in `session.json`, since how
     /// close you were reading is not where you were reading.
     var previewZoom: CGFloat = 1
+    /// Where a `.sql` tab was left in its own database: the table the grid
+    /// was showing and whatever was in the query box. Both ride in
+    /// `session.json`, so a dump comes back open at the table it was being
+    /// read at rather than at the first one in the alphabet. Nothing else
+    /// ever sets them.
+    var sqlTable: String?
+    var sqlQuery: String?
     /// What this tab does with its render — editor, split or reading. Per
     /// tab, not per app: ⇧⌘P on a Markdown note must not follow you into the
     /// next ⌘T. The editor until asked for.
@@ -209,6 +233,8 @@ final class Note {
     private var hasLoadedImage = false
     private var loadedBook: EPUBBook?
     private var hasLoadedBook = false
+    private var loadedRichText: NSAttributedString?
+    private var hasLoadedRichText = false
 
     /// The watch on `fileURL`, while there is a file to watch.
     private var watcher: FileWatcher?
@@ -328,6 +354,8 @@ final class Note {
         // into: the next ask unpacks the file as it is now.
         loadedBook = nil
         hasLoadedBook = false
+        loadedRichText = nil
+        hasLoadedRichText = false
     }
 
     /// Fold every character edit into the line table as the storage makes it.
@@ -380,6 +408,16 @@ final class Note {
     /// Whether the tab has a preview beside its source.
     var supportsRenderedPreview: Bool { previewKind != nil }
 
+    /// Whether the tab is a JSON file being edited. There is no render behind
+    /// one — JSON is read as the source it is — but it is the one text file
+    /// with something of its own to put in the corner slot: the Beautify /
+    /// Compact button. Spelled, like every other question about how a file is
+    /// *treated* rather than what it is, by the name its author gave it.
+    var isJSON: Bool {
+        guard kind == .text, let fileURL else { return false }
+        return fileURL.pathExtension.caseInsensitiveCompare("json") == .orderedSame
+    }
+
     /// Whether the footer counts this tab's task items. `- [ ]` is Markdown's
     /// own, so only a `.md` has any — a `.txt` full of them is a `.txt` full
     /// of dashes and brackets.
@@ -416,7 +454,19 @@ final class Note {
         if isPDFFile(url) { return .pdf }
         if isImageFile(url) { return .image }
         if isEPUBFile(url) { return .epub }
+        if isRichTextFile(url) { return .rtf }
         return nil
+    }
+
+    /// Rich text, by name — the same fallback a PDF has, for a file that is
+    /// not there to be sniffed. Both spellings: an RTFD is a package, and a
+    /// package that has gone leaves nothing behind but its name.
+    static func isRichTextFile(_ url: URL) -> Bool {
+        for spelling in ["rtf", "rtfd"]
+        where url.pathExtension.caseInsensitiveCompare(spelling) == .orderedSame {
+            return true
+        }
+        return false
     }
 
     /// A book, by name — the same fallback a PDF has, for a file that is not
@@ -449,23 +499,17 @@ final class Note {
     }
 
     /// Whether a file is one Nota opens in a tab at all. The bytes decide
-    /// first: `FileSniff` says PDF, picture or text and that is the answer,
-    /// whatever the file is named — a `report` with no extension and a `.pdf`
-    /// that is really a log both go by their content. A handful of types stay refused by name even when their
-    /// bytes read as plain text, the same way `TextFile.isTextFile` refuses
-    /// them — an RTF's own markup is ASCII, but it is not a note. Only when
-    /// the bytes cannot say anything — the file is missing, unreadable, or a
-    /// real binary — does the old name-based guess take over.
-    ///
-    /// A real RTF or RTFD is the one exception to the refusal above: it is
-    /// openable after all, since `MainWindowController.open(url:)` imports
-    /// it into a new untitled tab rather than editing the file itself. Asked
-    /// by content, the same check that open(url:) makes, so a `.rtf` that is
-    /// not really RTF still falls through to the ordinary rules.
+    /// first: `FileSniff` says PDF, picture, rich text or plain text and that
+    /// is the answer, whatever the file is named — a `report` with no
+    /// extension and a `.pdf` that is really a log both go by their content.
+    /// A handful of types stay refused by name even when their bytes read as
+    /// plain text, the same way `TextFile.isTextFile` refuses them — an
+    /// archive's own wrapper is ASCII, but it is not a note. Only when the
+    /// bytes cannot say anything — the file is missing, unreadable, or a real
+    /// binary — does the old name-based guess take over.
     static func isOpenable(_ url: URL) -> Bool {
-        if TextFile.rtfPlainText(at: url) != nil { return true }
         switch FileSniff.classify(at: url) {
-        case .pdf, .image, .epub:
+        case .pdf, .image, .epub, .rtf:
             return true
         case .text:
             return !TextFile.isDeliberatelyExcluded(url)
@@ -510,6 +554,28 @@ final class Note {
         return loadedBook
     }
 
+    /// The rich-text document behind an RTF tab, read the first time it is
+    /// asked for and held afterwards, the same way the document, the picture
+    /// and the book are. One call reads both flavours: `NSAttributedString`
+    /// takes an RTFD package by the same URL it takes an `.rtf` file by, and
+    /// brings the pictures inside a package along as attachments. `nil` when
+    /// the file is missing, or holds nothing `NSAttributedString` can parse —
+    /// which is what the pane shows a message for.
+    var richText: NSAttributedString? {
+        guard kind == .rtf else { return nil }
+        if hasLoadedRichText { return loadedRichText }
+        hasLoadedRichText = true
+        loadedRichText = fileURL.flatMap(Note.readRichText)
+        return loadedRichText
+    }
+
+    /// The read itself. `.documentType` is left unsaid on purpose: the option
+    /// is a hint, and letting AppKit decide is what makes one call answer for
+    /// a flat `.rtf` and an `.rtfd` folder both.
+    static func readRichText(at url: URL) -> NSAttributedString? {
+        try? NSAttributedString(url: url, options: [:], documentAttributes: nil)
+    }
+
     /// Whether the editor takes the keyboard for this tab. A scratch tab is
     /// vim's `'nomodifiable'`; a viewer has no text storage worth typing
     /// into.
@@ -539,7 +605,11 @@ final class Note {
             // and a viewer has no encoding or line endings to speak of.
             scroll: scrollFraction == 0 ? nil : scrollFraction,
             format: (fileURL == nil || kind.isViewer) ? nil : format,
-            previewMode: previewMode
+            previewMode: previewMode,
+            // Only a dump has either, and only while it is one: a tab saved
+            // as something else takes its own preview with it.
+            sqlTable: previewKind == .sql ? sqlTable : nil,
+            sqlQuery: previewKind == .sql ? sqlQuery : nil
         )
     }
 }

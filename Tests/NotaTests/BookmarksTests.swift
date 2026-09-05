@@ -178,7 +178,7 @@ final class BookmarksTests: XCTestCase {
         let strip = bench.controller.tabStrip
 
         let menu = try XCTUnwrap(strip.contextMenuForTesting(at: 1))
-        XCTAssertEqual(menu.items.map(\.title), ["Bookmark", "", "Close Tab"])
+        XCTAssertEqual(menu.items.map(\.title), ["Bookmark", "Reveal in Finder", "", "Close Tab"])
 
         menu.performActionForItem(at: 0)
         XCTAssertTrue(bench.controller.currentTabIsBookmarked)
@@ -188,6 +188,33 @@ final class BookmarksTests: XCTestCase {
         XCTAssertEqual(second.items.first?.title, "Remove Bookmark")
         second.performActionForItem(at: 0)
         XCTAssertFalse(bench.controller.currentTabIsBookmarked)
+    }
+
+    /// Right-click on a tab: show its file in the Finder. An untitled note
+    /// has no file, so the item is greyed and does nothing.
+    @MainActor
+    func testATabsContextMenuRevealsItsFileInTheFinder() throws {
+        let bench = try makeController(support: try makeTemporaryDirectory())
+        let file = try makeFile(named: "notes.md", in: try makeTemporaryDirectory())
+        bench.controller.open(url: file)
+        var revealed: [URL] = []
+        bench.controller.fileRevealer = { revealed = $0 }
+        let strip = bench.controller.tabStrip
+
+        let menu = try XCTUnwrap(strip.contextMenuForTesting(at: 1))
+        XCTAssertTrue(menu.items[1].isEnabled)
+        menu.performActionForItem(at: 1)
+        XCTAssertEqual(revealed, [file.standardizedFileURL])
+        XCTAssertTrue(bench.controller.currentTabHasFile)
+
+        // The untitled tab the window opened with: greyed, and no URL goes out.
+        revealed = []
+        let untitled = try XCTUnwrap(strip.contextMenuForTesting(at: 0))
+        XCTAssertFalse(untitled.items[1].isEnabled)
+        bench.controller.revealInFinder(at: 0)
+        XCTAssertEqual(revealed, [])
+        bench.controller.selectTab(at: 0)
+        XCTAssertFalse(bench.controller.currentTabHasFile)
     }
 
     // MARK: - The picker

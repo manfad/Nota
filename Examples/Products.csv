@@ -1,0 +1,42 @@
+id,name,category,price,in_stock,notes
+1,"Ashby Notebook, A5",Stationery,12.50,yes,"Ruled, 96 pages"
+2,Graphite Pencil HB,Stationery,1.20,yes,
+3,"Pen, rollerball, black",Stationery,3.40,yes,Refillable
+4,Desk Lamp,Lighting,44.00,no,"Warm white, dimmable"
+5,"Cable, USB-C to USB-C, 2 m",Cables,9.99,yes,
+6,Cable Tidy,Cables,4.75,yes,Pack of six
+7,Monitor Stand,Furniture,68.00,yes,"Beech veneer"
+8,Footrest,Furniture,32.00,no,
+9,"Chair, adjustable",Furniture,289.00,yes,"Assembly required.
+Two people, twenty minutes."
+10,Standing Desk Mat,Furniture,54.00,yes,
+11,Mechanical Keyboard,Peripherals,119.00,yes,"Tactile, 87 keys"
+12,"Mouse, wireless",Peripherals,39.00,yes,
+13,Trackpad,Peripherals,109.00,no,
+14,Webcam 1080p,Peripherals,58.00,yes,"Privacy shutter"
+15,Headphones,Audio,149.00,yes,"Over-ear, wired"
+16,"Earphones, in-ear",Audio,29.00,yes,
+17,Desk Microphone,Audio,89.00,no,"Cardioid, USB"
+18,Speaker Pair,Audio,210.00,yes,
+19,Laptop Sleeve 14",Bags,26.00,yes,"Felt, grey"
+20,Backpack,Bags,95.00,yes,"Fits a 16"" laptop"
+21,"Pouch, small",Bags,14.00,yes,
+22,Coffee Beans 1 kg,Kitchen,18.50,yes,"Medium roast, whole bean"
+23,Mug,Kitchen,8.00,yes,
+24,"Kettle, 1.7 L",Kitchen,42.00,no,
+25,Water Bottle,Kitchen,16.00,yes,"Steel, 750 ml"
+26,Whiteboard,Office,74.00,yes,"900 × 600 mm"
+27,"Marker set, four colours",Office,7.60,yes,
+28,Paper Ream A4,Office,5.20,yes,"500 sheets, 80 gsm"
+29,Stapler,Office,9.40,yes,
+30,"Shredder, cross-cut",Office,128.00,no,"Takes staples and cards"
+31,Router,Networking,89.00,yes,
+32,"Switch, 8-port",Networking,45.00,yes,"Unmanaged, gigabit"
+33,Patch Cable 3 m,Networking,6.80,yes,
+34,Power Strip,Electrical,21.00,yes,"Six sockets, surge protected"
+35,"Adapter, EU to UK",Electrical,7.00,yes,
+36,Battery Pack,Electrical,49.00,no,"20 000 mAh"
+37,Screen Cleaner,Care,6.50,yes,
+38,"Cloth, microfibre",Care,3.20,yes,Pack of three
+39,Air Duster,Care,11.00,yes,
+40,Desk Plant,Decor,24.00,yes,"Low light, low fuss"

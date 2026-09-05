@@ -234,7 +234,7 @@ final class NotaTests: XCTestCase {
         let language = views().compactMap { $0 as? NSPopUpButton }.first {
             $0.itemTitles.contains("简体中文")
         }
-        XCTAssertEqual(language?.itemTitles, ["System Default", "English", "简体中文"])
+        XCTAssertEqual(language?.itemTitles, ["System Default", "English", "简体中文", "繁體中文", "Bahasa Melayu"])
 
         let theme = views().compactMap { $0 as? NSPopUpButton }.first {
             $0.itemTitles.contains("Dark")
@@ -1051,6 +1051,51 @@ final class NotaTests: XCTestCase {
     }
 
     /// Copying prose stays prose: no image flavours, and still no RTFD.
+    /// The badge belongs to vim only while an editor is in front. A viewer
+    /// says "Read-only" there and a note in reading mode says "Reading",
+    /// with vim on or off; back in the editor the vim word returns, and with
+    /// vim off the badge goes away again.
+    @MainActor
+    func testTheFooterBadgeStandsInForVimOverAViewerAndInReadingMode() throws {
+        let previous = Preferences.shared.vimMode
+        defer { Preferences.shared.vimMode = previous }
+        let directory = try makeTemporaryDirectory()
+        let controller = MainWindowController(store: SessionStore(directory: directory))
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        defer { window.orderOut(nil) }
+        let footer = controller.footerRegions
+
+        Preferences.shared.vimMode = false
+        XCTAssertTrue(footer.badge.isHidden, "no vim, an editor in front: no badge")
+
+        let pdf = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Examples/Book.epub")
+        controller.open(url: pdf)
+        XCTAssertFalse(footer.badge.isHidden, "a viewer wears the badge even with vim off")
+        XCTAssertEqual(controller.footerBadgeTitle, "Read-only")
+
+        let note = directory.appendingPathComponent("reading.md")
+        try "# Hello\n".write(to: note, atomically: true, encoding: .utf8)
+        controller.open(url: note)
+        XCTAssertTrue(footer.badge.isHidden)
+        controller.setPreviewMode(.reading)
+        XCTAssertFalse(footer.badge.isHidden)
+        XCTAssertEqual(controller.footerBadgeTitle, "Reading")
+        controller.setPreviewMode(.split)
+        XCTAssertTrue(footer.badge.isHidden, "split has an editor, so the badge is vim's again — and vim is off")
+
+        Preferences.shared.vimMode = true
+        XCTAssertFalse(footer.badge.isHidden)
+        XCTAssertEqual(controller.footerBadgeTitle, "Normal")
+        controller.setPreviewMode(.reading)
+        XCTAssertEqual(controller.footerBadgeTitle, "Reading", "reading takes the word off vim")
+        XCTAssertTrue(footer.pendingKeys.isHidden)
+        controller.setPreviewMode(.off)
+        XCTAssertEqual(controller.footerBadgeTitle, "Normal")
+    }
+
     @MainActor
     func testAPlainTextSelectionOffersNoImageFlavours() throws {
         _ = NSApplication.shared
@@ -1775,7 +1820,10 @@ final class NotaTests: XCTestCase {
         let content = try XCTUnwrap(window.contentView)
         content.layoutSubtreeIfNeeded()
 
-        let scrollView = try XCTUnwrap(descendant(of: content, ofType: NSScrollView.self))
+        // The editor's own scroll view, by name: the preview column keeps
+        // scroll views of its own (a dump's grid, a table's) that a walk of
+        // the tree may meet first.
+        let scrollView = controller.editorScrolling.scrollView
         let pane = try XCTUnwrap(descendant(of: content, ofType: VimCommandPane.self))
         XCTAssertTrue(pane.isHidden, "nothing to show at rest")
         let editorFrame = scrollView.frame

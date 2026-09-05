@@ -169,6 +169,9 @@ final class MainWindowController: NSWindowController {
     private var previewWorkItem: DispatchWorkItem?
     /// The find bar's own re-scan after an edit, while one is waiting.
     private var findRefreshWorkItem: DispatchWorkItem?
+    /// The `.json` corner button's re-parse after an edit, while one is
+    /// waiting. Same beat as the footer's counts.
+    private var jsonSlotWorkItem: DispatchWorkItem?
     /// The preview's share of the document split, as the divider was last
     /// left. Read on the way out of split and pinned back on the way in.
     private var splitPreviewFraction: CGFloat = 0.5
@@ -785,6 +788,10 @@ final class MainWindowController: NSWindowController {
     /// it.
     private func installModeOverlay(_ overlay: ModeControlOverlay, over container: NSView) {
         overlay.translatesAutoresizingMaskIntoConstraints = false
+        // The other thing the slot can hold. Only the editor column ever does
+        // — a `.json` tab has no preview column — but the wiring costs a
+        // closure, and a slot that could not answer would be the odder shape.
+        overlay.onJSONFormat = { [weak self] action in self?.applyJSONFormat(action) }
         container.addSubview(overlay)
         // The band's height is the overlay's own: it grows while that
         // column's find bar is up, so the whole top of the column is still
@@ -851,6 +858,9 @@ final class MainWindowController: NSWindowController {
         previewColumn.onTaskToggle = { [weak self] source in
             self?.toggleTask(inSource: source)
         }
+        previewColumn.onSourceReveal = { [weak self] source in
+            self?.revealSource(source)
+        }
         // ⌘F in reading mode opens a bar over the content, in the corner the
         // column's own mode control floats in.
         previewColumn.onFindBarVisibilityChange = { [weak self] _ in
@@ -865,6 +875,12 @@ final class MainWindowController: NSWindowController {
         }
         previewColumn.onZoomChange = { [weak self] zoom in
             self?.previewZoomDidChange(zoom)
+        }
+        // The content wrote something on the note itself — the table a dump
+        // is open at, the query beside it. Nothing to apply here; the note
+        // already holds it, and all that is left is the session.
+        previewColumn.onStateChange = { [weak self] in
+            self?.scheduleSave()
         }
         previewColumn.onDropFiles = { [weak self] urls in
             self?.openDroppedFiles(urls)
@@ -1564,6 +1580,10 @@ final class MainWindowController: NSWindowController {
         // A session written before the mode was per-tab says nothing, and
         // those tabs come back in the editor.
         note.previewMode = tab.previewMode ?? .off
+        // Where a dump was left in its own database. Nothing checks them
+        // here: the pane asks the file whether the table is still there.
+        note.sqlTable = tab.sqlTable
+        note.sqlQuery = tab.sqlQuery
         return note
     }
 
@@ -1578,6 +1598,7 @@ final class MainWindowController: NSWindowController {
         case .pdf: NoteKind.pdf
         case .image: NoteKind.image
         case .epub: NoteKind.epub
+        case .rtf: NoteKind.rtf
         case .unreadable: Note.viewerKind(url)
         case .text, .binary: nil
         }
@@ -1702,7 +1723,8 @@ final class MainWindowController: NSWindowController {
                 TabBarItem(title: $0.title, isDirty: $0.isDirty,
                            hasExternalChange: $0.isDirty && $0.hasExternalChange,
                            symbolName: FileKindIcon.symbolName(for: $0.fileURL),
-                           isBookmarked: $0.fileURL.map(bookmarks.contains) ?? false)
+                           isBookmarked: $0.fileURL.map(bookmarks.contains) ?? false,
+                           hasFile: $0.fileURL != nil)
             },
             selectedIndex: selectedIndex
         )
@@ -1750,6 +1772,7 @@ final class MainWindowController: NSWindowController {
         updateCountsLabel()
         updateCursorPosition()
         updateFormatLabel()
+        applyFooterVisibility()
     }
 
     /// The note's own shape, at the right of the counts: `UTF-8` and `LF`,
@@ -2109,11 +2132,17 @@ final class MainWindowController: NSWindowController {
     private func applyFooterVisibility() {
         let hidesStatusBar = isZenMode || !preferences.showsStatusBar
         let isVim = preferences.vimMode
-        countsLeadingToEdge?.isActive = !isVim
-        countsLeadingToVim?.isActive = isVim
-        modeBadge.isHidden = hidesStatusBar || !isVim
+        // A tab with no editor in front has no vim mode to show, whether vim
+        // is on or not: the badge says what the tab is instead — "Read-only"
+        // for a viewer, "Reading" for a note read rather than edited — and
+        // the keys typed so far mean nothing there.
+        modeBadge.setStandIn(footerStandIn)
+        let showsBadge = isVim || footerStandIn != nil
+        countsLeadingToEdge?.isActive = !showsBadge
+        countsLeadingToVim?.isActive = showsBadge
+        modeBadge.isHidden = hidesStatusBar || !showsBadge
         pendingKeysLabel.isHidden =
-            hidesStatusBar || !isVim || pendingKeysLabel.stringValue.isEmpty
+            hidesStatusBar || !isVim || footerStandIn != nil || pendingKeysLabel.stringValue.isEmpty
         cursorLabel.isHidden = hidesStatusBar || !preferences.footerShowsCursorPosition
         formatEncodingLabel.isHidden = hidesStatusBar || !preferences.footerShowsEncoding
         formatLineEndingLabel.isHidden = hidesStatusBar || !preferences.footerShowsLineEndings
@@ -2126,6 +2155,17 @@ final class MainWindowController: NSWindowController {
         statusLabel.isHidden = hidesStatusBar || preferences.footerSegments.isEmpty
         statusSeparator.isHidden = hidesStatusBar
     }
+
+    /// The word the badge wears in place of the vim mode, or nothing while
+    /// an editor is in front.
+    private var footerStandIn: String? {
+        guard let note = currentNote else { return nil }
+        if note.kind.isViewer { return "Read-only" }
+        return note.previewMode == .reading ? "Reading" : nil
+    }
+
+    /// For the tests: what the footer's badge says right now.
+    var footerBadgeTitle: String { modeBadge.title }
 
     private func applyStatusBarLayout() {
         let hidesStatusBar = isZenMode || !preferences.showsStatusBar
@@ -2350,6 +2390,17 @@ final class MainWindowController: NSWindowController {
         // for Don't Save in a save-changes sheet.
         dontSave.keyEquivalent = "d"
         dontSave.keyEquivalentModifierMask = [.command]
+        // And the key that put the prompt up: ⌘W pressed again on the sheet
+        // is Don't Save, so a tab is closed by two strokes of the same key
+        // and no reach for the mouse. Whatever Close Tab is bound to.
+        let closeCombo = preferences.combo(for: .closeTab)
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.window === alert.window,
+                  KeyCombo.recorded(from: event) == closeCombo else { return event }
+            dontSave.performClick(nil)
+            return nil
+        }
+        defer { if let monitor { NSEvent.removeMonitor(monitor) } }
         return alert.runModal()
     }
 
@@ -2546,18 +2597,46 @@ final class MainWindowController: NSWindowController {
     /// The Format row that goes in the save panel's `accessoryView`: a label
     /// and the editable extension combo, apart from the panel's own name
     /// field so a typed extension there is never mistaken for the combo's.
+    /// One more row of the panel's own form, under "Save As:" and "Tags:":
+    /// the label right-aligned into the same column theirs stand in, the
+    /// combo starting where the name field starts. The panel centres an
+    /// accessory in its width, so the row is built to the panel's own width
+    /// with the label column measured to match the system's.
     private static func saveFormatAccessory(combo: NSComboBox) -> NSView {
-        let label = NSTextField(labelWithString: L10n.text("Format", chinese: "格式"))
+        let label = NSTextField(labelWithString: L10n.text("Format", chinese: "格式") + ":")
+        label.alignment = .right
+        label.translatesAutoresizingMaskIntoConstraints = false
         combo.translatesAutoresizingMaskIntoConstraints = false
-        combo.widthAnchor.constraint(equalToConstant: 120).isActive = true
 
-        let row = NSStackView(views: [label, combo])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 8
-        row.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 12, right: 16)
+        let row = NSView()
         row.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(label)
+        row.addSubview(combo)
+        NSLayoutConstraint.activate([
+            row.widthAnchor.constraint(equalToConstant: SavePanelForm.width),
+            row.heightAnchor.constraint(equalToConstant: SavePanelForm.rowHeight),
+            label.trailingAnchor.constraint(equalTo: row.centerXAnchor,
+                                            constant: -SavePanelForm.labelColumn),
+            label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            combo.leadingAnchor.constraint(equalTo: row.centerXAnchor,
+                                           constant: -SavePanelForm.fieldColumn),
+            combo.widthAnchor.constraint(equalToConstant: 120),
+            combo.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+        ])
         return row
+    }
+
+    /// Where the system save panel puts its own form, so the Format row can
+    /// stand in it: the right edge of "Save As:" and the left edge of the
+    /// name field, both measured leftwards from the panel's centre line —
+    /// the panel centres its form and the accessory alike, so an offset from
+    /// the centre holds whether the panel is collapsed or expanded. Measured
+    /// on macOS 15 (2026-09-06).
+    enum SavePanelForm {
+        static let width: CGFloat = 480
+        static let rowHeight: CGFloat = 36
+        static let labelColumn: CGFloat = 100
+        static let fieldColumn: CGFloat = 91
     }
 
     /// No type filter: Notepad++ opens whatever you point it at, and the
@@ -2588,22 +2667,9 @@ final class MainWindowController: NSWindowController {
             selectTab(at: index)
             return
         }
-        // An RTF or an RTFD is not a document Nota edits, but its plain text
-        // is worth keeping: imported into a brand-new untitled tab rather
-        // than opened as the file itself, so it never gets a chance to sit
-        // in Open Recent or the session as a file, and ⌘S always asks where
-        // to put it rather than overwriting the rich document with plain
-        // text. Asked before the sniff below, and before the exclusion it
-        // would otherwise hit, since this is decided by the bytes actually
-        // parsing as RTF — one that does not isn't RTF at all, and falls
-        // through to the ordinary rules just below.
-        if let text = TextFile.rtfPlainText(at: target) {
-            importRTF(text: text, named: target.deletingPathExtension().lastPathComponent)
-            return
-        }
         // The bytes decide what the file is before its name gets a say: a
-        // PDF opens as one, a picture as one, and text opens as text,
-        // whatever any of them is called.
+        // PDF opens as one, a picture as one, a rich-text document as one,
+        // and text opens as text, whatever any of them is called.
         switch FileSniff.classify(at: target) {
         case .pdf:
             noteRecentDocument(target)
@@ -2614,6 +2680,9 @@ final class MainWindowController: NSWindowController {
         case .epub:
             noteRecentDocument(target)
             addTab(fileURL: target, kind: .epub)
+        case .rtf:
+            noteRecentDocument(target)
+            addTab(fileURL: target, kind: .rtf)
         case .text:
             openAsText(target)
         case .binary:
@@ -2652,33 +2721,6 @@ final class MainWindowController: NSWindowController {
         if preferences.opensMarkdownInReadingMode, Note.supportsRenderedPreview(target) {
             setPreviewMode(.reading)
         }
-    }
-
-    /// An RTF or an RTFD, imported rather than opened: a brand-new untitled
-    /// tab holding its plain text, formatting and any pictures dropped.
-    /// `fileURL` stays `nil` — `addTab`'s untitled path takes no text of its
-    /// own, so this builds the note directly the same way `makeUntitledNote`
-    /// does — and the tab starts dirty, since it holds text that exists
-    /// nowhere on disk yet. Its title is the document's own base name rather
-    /// than the usual `Untitled`, so the reader knows where it came from;
-    /// `untitledName` already takes any string, so nothing else needed to
-    /// change for that.
-    private func importRTF(text: String, named baseName: String) {
-        let note = Note(id: UUID(), fileURL: nil, untitledName: baseName, text: text,
-                         attributes: defaultAttributes, assets: store.assets)
-        note.isDirty = true
-        watchFile(of: note)
-        notes.insert(note, at: min(selectedIndex + 1, notes.count))
-        selectedIndex = notes.firstIndex { $0 === note } ?? notes.count - 1
-        if BigFile.isBig(length: note.storage.length) {
-            openedText = (note.id, text)
-        }
-        writeCache(note)
-        installCurrentNote()
-        refreshTabs()
-        updateStatus()
-        refreshImages(force: true)
-        flush()
     }
 
     /// File › Open Recent's list, kept by `NSDocumentController` rather than
@@ -3050,6 +3092,25 @@ final class MainWindowController: NSWindowController {
     /// menu greys its two items out by. A PDF is read, never written.
     var currentTabIsSavable: Bool { currentNote?.kind == .text }
 
+    /// File › Reveal in Finder is offered only when there is a file to show.
+    var currentTabHasFile: Bool { currentNote?.fileURL != nil }
+
+    /// What "Reveal in Finder" actually does with the file. The Finder is
+    /// the default; a test puts its own hand here and reads what arrived,
+    /// since bringing the Finder forward is not a thing a test should do.
+    var fileRevealer: ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
+
+    /// Shows the tab's file in a Finder window, selected. Nothing for an
+    /// untitled note: there is no file, and the menu item was greyed.
+    func revealInFinder(at index: Int) {
+        guard notes.indices.contains(index), let url = notes[index].fileURL else { return }
+        fileRevealer([url])
+    }
+
+    func revealCurrentTabInFinder() {
+        revealInFinder(at: selectedIndex)
+    }
+
     // MARK: Bookmarks
 
     /// Whether the tab in front is bookmarked — the title File › Bookmarks ▸
@@ -3199,6 +3260,21 @@ private final class PaneView: NSView {
 final class DocumentSplitViewController: NSSplitViewController {
     var hidesDivider: () -> Bool = { false }
 
+    /// The split's own view, swapped in before the controller loads its
+    /// default one, so the divider can be told not to draw. The delegate's
+    /// `shouldHideDividerAt` alone is not enough: the controller lays the
+    /// divider out regardless and draws it, a 1pt dark line down the window's
+    /// edge — right beside the sidebar's own divider when there is one, so
+    /// the seam reads as two lines.
+    override func loadView() {
+        let split = DocumentSplitView()
+        split.isVertical = true
+        split.dividerStyle = .thin
+        split.hidesDivider = { [weak self] in self?.hidesDivider() ?? false }
+        splitView = split
+        super.loadView()
+    }
+
     override func splitView(
         _ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int
     ) -> Bool {
@@ -3214,6 +3290,16 @@ final class DocumentSplitViewController: NSSplitViewController {
             splitView, effectiveRect: proposedEffectiveRect,
             forDrawnRect: drawnRect, ofDividerAt: dividerIndex
         )
+    }
+}
+
+/// The document split's view: a divider that is hidden is not drawn.
+final class DocumentSplitView: NSSplitView {
+    var hidesDivider: () -> Bool = { false }
+
+    override func drawDivider(in rect: NSRect) {
+        guard !hidesDivider() else { return }
+        super.drawDivider(in: rect)
     }
 }
 
@@ -3475,6 +3561,14 @@ private final class VimModeBadge: NSView {
 
     private let label = NSTextField(labelWithString: "")
     private var mode: VimMode = .normal
+    /// A word that stands in for the vim mode while the tab in front has no
+    /// editor to be in a mode of: "Read-only" over a PDF, a picture, a book
+    /// or an RTF, "Reading" over a note in reading mode. `nil` gives the
+    /// badge back to vim.
+    private(set) var standIn: String?
+
+    /// What the badge is showing, for the tests.
+    var title: String { label.stringValue }
 
     init() {
         super.init(frame: .zero)
@@ -3530,8 +3624,16 @@ private final class VimModeBadge: NSView {
         })
     }
 
+    /// Puts a word in the vim mode's place, or takes it away again. No
+    /// cross-fade: this changes with the tab, and the tab is already a cut.
+    func setStandIn(_ word: String?) {
+        guard word != standIn else { return }
+        standIn = word
+        applyMode()
+    }
+
     private func applyMode() {
-        label.stringValue = mode.badgeTitle
+        label.stringValue = standIn ?? mode.badgeTitle
         label.alphaValue = 1
         needsDisplay = true
     }
@@ -3727,6 +3829,9 @@ extension MainWindowController {
         refreshPreviewContent()
         updatePreviewModeControl()
         updateModeControlOverlays()
+        // The badge says "Reading" while the editor is away, and the vim
+        // word again the moment it is back.
+        applyFooterVisibility()
         flush()
         focusForPreviewMode()
     }
@@ -4025,6 +4130,13 @@ extension MainWindowController {
     /// suite already destructures by name.
     var currentTabScroll: Double { currentNote?.scrollFraction ?? 0 }
 
+    /// Where the front tab was left inside its own database — the table the
+    /// grid was showing and the question beside it. Here for the same reason
+    /// `currentTabScroll` is: a session field a test has no other way to see.
+    var currentTabDatabase: (table: String?, query: String?) {
+        (currentNote?.sqlTable, currentNote?.sqlQuery)
+    }
+
     var currentTabState: (kind: NoteKind, isDirty: Bool, selection: Int) {
         let note = currentNote
         return (note?.kind ?? .text, note?.isDirty ?? false, note?.selectionLocation ?? 0)
@@ -4069,28 +4181,132 @@ extension MainWindowController {
         }
     }
 
-    /// Which columns carry a control, and how far down their column it sits.
+    /// What the front tab puts in the corner, asked of the note rather than of
+    /// a list of extensions kept here. A tab with a render gets the mode
+    /// control; a `.json` tab gets its Beautify / Compact button; everything
+    /// else — a `.txt`, an untitled note, a PDF, a picture, a book — gets
+    /// nothing, and zen gets nothing whatever the tab is.
     ///
-    /// Only a tab with a render has one at all, and zen has none. Beyond that
-    /// it is simply whether the column is on screen: the editor's goes in
-    /// reading, the preview's is there in split and reading.
+    /// The order matters only in that a rendered tab wins: nothing is spelled
+    /// both ways today, and if something ever is, its render is the bigger
+    /// thing to offer.
+    private var cornerSlotContent: ModeControlOverlay.Content {
+        guard !isZenMode, let note = currentNote else { return .none }
+        if note.supportsRenderedPreview { return .modeControl }
+        if note.isJSON { return .jsonFormat }
+        return .none
+    }
+
+    /// Which columns carry a slot, what is in it, and how far down their
+    /// column it sits.
+    ///
+    /// The mode control is per column: the editor's goes in reading, the
+    /// preview's is there in split and reading. The JSON button is the editor
+    /// column's alone — a `.json` tab has no render, so there is no second
+    /// column for it to stand in.
     ///
     /// A ⌘F bar takes its column's corner but not its control. The control
     /// drops the height of the pill and goes on working underneath it, which
     /// is how the mode stays one hover away while a search is up.
     fileprivate func updateModeControlOverlays() {
-        let available = canShowRenderedPreview && !isZenMode
-        editorModeOverlay.setAvailable(available && installedPreviewMode != .reading)
+        let content = cornerSlotContent
+        // In reading the editor column is collapsed, so its slot is empty
+        // however the tab would otherwise have filled it.
+        editorModeOverlay.setContent(
+            installedPreviewMode == .reading && content == .modeControl ? .none : content
+        )
+        // Worked out on the spot — a tab arriving in front, a file reloaded
+        // off disk — unless a re-parse is already on its way, which is what
+        // keeps a burst of typing to one walk over the text.
+        if content == .jsonFormat, jsonSlotWorkItem == nil { refreshJSONSlotState() }
         // Whichever pill stack is standing in the editor's corner — ⌘F's one
         // or two, or ⌘L's one — is what the control clears.
         let editorStack: CGFloat = findSession.isVisible ? findBar.stackHeight
             : (goToLineSession.isVisible ? PillView.height : 0)
         editorModeOverlay.findBarClearance = editorStack > 0
             ? ModeControlOverlay.drop(forFindBarOfHeight: editorStack) : 0
-        previewModeOverlay.setAvailable(available && installedPreviewMode != .off)
+        previewModeOverlay.setContent(
+            content == .modeControl && installedPreviewMode != .off ? .modeControl : .none
+        )
         let preview = previewColumn.current
         previewModeOverlay.findBarClearance = preview.isFindBarVisible
             ? ModeControlOverlay.drop(forFindBarOfHeight: preview.findBarHeight) : 0
+    }
+
+    /// Both slots' contents, for the tests.
+    var cornerSlotContents: (
+        editor: ModeControlOverlay.Content, preview: ModeControlOverlay.Content
+    ) {
+        (editorModeOverlay.content, previewModeOverlay.content)
+    }
+
+    /// Work the corner out again from the front tab — what a tab switch, a
+    /// save under a new name or the debounce after typing all come back to.
+    func refreshCornerSlot() {
+        updateModeControlOverlays()
+    }
+
+    // MARK: - JSON in the corner
+
+    /// Which way round the `.json` button points, or the line the parse gave
+    /// up on. One linear walk over the text, so it is asked when the tab
+    /// changes and on the debounce after typing, never per keystroke.
+    private func refreshJSONSlotState() {
+        jsonSlotWorkItem?.cancel()
+        jsonSlotWorkItem = nil
+        guard let note = currentNote, note.isJSON else { return }
+        let text = note.storage.string
+        let state: ModeControlOverlay.JSONState
+        if let line = JSONFormat.errorLine(in: text) {
+            state = .invalid(line: line)
+        } else {
+            // The button offers the shape the file is *not* in.
+            state = .action(JSONFormat.isPretty(text) ? .compact : .beautify)
+        }
+        editorModeOverlay.setJSONState(state)
+    }
+
+    /// Typing debounces, on the beat the footer's own counts use: a burst of
+    /// keystrokes re-parses once, about half a second after it stops, rather
+    /// than once a key.
+    private func scheduleJSONSlotRefresh() {
+        guard case .jsonFormat = editorModeOverlay.content else { return }
+        jsonSlotWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.refreshJSONSlotState() }
+        jsonSlotWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+    }
+
+    /// The button was pressed. The whole note is replaced through the editor's
+    /// own undoable path — `shouldChangeText` / `didChangeText`, the way a
+    /// line operation replaces its lines — so the tab goes dirty, ⌘Z puts the
+    /// file back exactly as it was, and the save, vim and the footer all see
+    /// one edit rather than a document swapped out from under them.
+    ///
+    /// The caret goes to the top: every line has moved, so the place it was
+    /// no longer means anything, and the top is where a reader starts reading
+    /// a file that has just been laid out.
+    private func applyJSONFormat(_ action: ModeControlOverlay.JSONAction) {
+        guard let note = currentNote, note.isJSON,
+              let storage = textView.textStorage, storage === note.storage
+        else { return }
+        let text = storage.string
+        let style: JSONFormat.Style = action == .beautify ? .pretty : .compact
+        guard let formatted = try? JSONFormat.reformat(text, as: style), formatted != text
+        else { return }
+        let whole = NSRange(location: 0, length: storage.length)
+        guard textView.shouldChangeText(in: whole, replacementString: formatted) else { return }
+        storage.replaceCharacters(
+            in: whole, with: NSAttributedString(string: formatted, attributes: defaultAttributes)
+        )
+        // Put the caret down before `didChangeText`, which is where the window
+        // writes the selection into the note.
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.didChangeText()
+        textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        // The file is now in the other shape, so the button is the other way
+        // round — at once, not half a second later: this one was a click.
+        refreshJSONSlotState()
     }
 
     /// The matches have moved under an open find bar. Debounced like the
@@ -4211,6 +4427,20 @@ extension MainWindowController {
         revealInEditor(textView.selectedRange())
         // The pane is read, not typed in.
         focusEditor()
+    }
+
+    /// The content pointed at a place in the source without asking for the
+    /// keyboard — a row of a dump clicked, which stands over the `INSERT`
+    /// that wrote it. The caret goes there and the line is brought into view,
+    /// and that is all: the grid keeps the focus, so the arrows go on walking
+    /// its cells. Split only, since the editor is only on screen there.
+    private func revealSource(_ source: NSRange) {
+        guard let note = currentNote, installedPreviewMode == .split else { return }
+        let location = max(0, min(source.location, note.storage.length))
+        if preferences.vimMode, vimEngine.mode != .normal { vimEngine.enterNormalMode() }
+        textView.setSelectedRange(NSRange(location: location, length: 0))
+        if preferences.vimMode { vimEngine.clampCaret() }
+        revealInEditor(textView.selectedRange())
     }
 
     /// A heading chosen from the ⌘P switcher's `@` list (Todo 9): the caret
@@ -4638,6 +4868,10 @@ extension MainWindowController: TabBarViewDelegate {
         toggleBookmark(at: index)
     }
 
+    func tabBar(_ bar: TabBarView, didRequestRevealAt index: Int) {
+        revealInFinder(at: index)
+    }
+
     func tabBar(_ bar: TabBarView, didDropFiles urls: [URL]) {
         openDroppedFiles(urls)
     }
@@ -4742,6 +4976,10 @@ extension MainWindowController: TabBarViewDelegate {
 extension MainWindowController: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         guard let note = currentNote else { return }
+        // First, so that everything below which works the corner out again —
+        // `refreshTabs` on the way to dirty, for one — finds a re-parse
+        // already on its way and leaves it to the debounce.
+        scheduleJSONSlotRefresh()
         if !note.isDirty {
             note.isDirty = true
             refreshTabs()

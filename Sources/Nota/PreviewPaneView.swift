@@ -26,9 +26,15 @@ final class PreviewPaneView: NSView {
         let pdf: PDFPreviewView
         let image: ImagePreviewView
         let epub: EPUBPreviewView
+        let sql: SQLPreviewView
+        let csv: CSVPreviewView
+        let rtf: RTFPreviewView
         let kind: PreviewContentKind
         var showsPDF: Bool { kind == .pdf }
         var showsBook: Bool { kind == .epub }
+        var showsDatabase: Bool { kind == .sql }
+        var showsTable: Bool { kind == .csv }
+        var showsRichText: Bool { kind == .rtf }
     }
 
     private let markdownContent = MarkdownPreviewView()
@@ -37,6 +43,9 @@ final class PreviewPaneView: NSView {
     private let pdfContent = PDFPreviewView()
     private let imageContent = ImagePreviewView()
     private let epubContent = EPUBPreviewView()
+    private let sqlContent = SQLPreviewView()
+    private let csvContent = CSVPreviewView()
+    private let rtfContent = RTFPreviewView()
     private var currentKind: PreviewContentKind = .markdown
 
     /// The content on screen.
@@ -60,10 +69,14 @@ final class PreviewPaneView: NSView {
     /// the column's.
     var onWidthChange: (() -> Void)?
     var onBlockClick: ((NSRange) -> Void)?
+    /// A place in the source the content is pointing at without asking for
+    /// the keyboard — a dump's row click.
+    var onSourceReveal: ((NSRange) -> Void)?
     var onTaskToggle: ((NSRange) -> Void)?
     var onFindBarVisibilityChange: ((Bool) -> Void)?
     var onPositionChange: ((Int) -> Void)?
     var onZoomChange: ((CGFloat) -> Void)?
+    var onStateChange: (() -> Void)?
 
     /// Files let go anywhere over the column — on the render, on the page, on
     /// the document, on the picture, and on the drag band the column carries
@@ -179,6 +192,10 @@ final class PreviewPaneView: NSView {
             guard let self, isInFront(content) else { return }
             onTaskToggle?(source)
         }
+        content.onSourceReveal = { [weak self, weak content] source in
+            guard let self, isInFront(content) else { return }
+            onSourceReveal?(source)
+        }
         content.onFindBarVisibilityChange = { [weak self, weak content] isVisible in
             guard let self, isInFront(content) else { return }
             onFindBarVisibilityChange?(isVisible)
@@ -190,6 +207,10 @@ final class PreviewPaneView: NSView {
         content.onZoomChange = { [weak self, weak content] zoom in
             guard let self, isInFront(content) else { return }
             onZoomChange?(zoom)
+        }
+        content.onStateChange = { [weak self, weak content] in
+            guard let self, isInFront(content) else { return }
+            onStateChange?()
         }
         contentContainer.addSubview(content)
         NSLayoutConstraint.activate([
@@ -216,6 +237,9 @@ final class PreviewPaneView: NSView {
         case .pdf: pdfContent
         case .image: imageContent
         case .epub: epubContent
+        case .sql: sqlContent
+        case .csv: csvContent
+        case .rtf: rtfContent
         }
     }
 
@@ -283,6 +307,7 @@ final class PreviewPaneView: NSView {
 
     var panes: Panes {
         Panes(markdown: markdownContent, latex: latexContent, html: htmlContent,
-              pdf: pdfContent, image: imageContent, epub: epubContent, kind: currentKind)
+              pdf: pdfContent, image: imageContent, epub: epubContent, sql: sqlContent,
+              csv: csvContent, rtf: rtfContent, kind: currentKind)
     }
 }
