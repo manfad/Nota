@@ -724,13 +724,10 @@ final class TabBarView: NSView {
         // strip brings its own ground and a hairline to stand on.
         // The editor's own ground, not the window's: the strip normally sits
         // over the document with nothing painted behind it, and the
-        // revealed one must look the same, with only the hairline saying
-        // it is floating.
+        // revealed one must look exactly the same — no hairline either.
         if drawsOpaqueBackground {
             NSColor.textBackgroundColor.setFill()
             NSBezierPath(rect: bounds).fill()
-            NSColor.separatorColor.setFill()
-            NSBezierPath(rect: NSRect(x: 0, y: 0, width: bounds.width, height: 1)).fill()
         }
         super.draw(dirtyRect)
 
