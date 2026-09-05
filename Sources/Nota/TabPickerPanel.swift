@@ -13,6 +13,11 @@ protocol TabPickerPanelDelegate: AnyObject {
     func tabPicker(_ picker: TabPickerPanel, didChooseBookmark path: String)
     /// ⌘⌫ on a bookmark row: it stops being a bookmark. The panel stays up.
     func tabPicker(_ picker: TabPickerPanel, didRemoveBookmark path: String)
+    /// ⇧⌘F: a hit in some tab's text was chosen. `query` is what was typed,
+    /// so the find pasteboard can carry on from there.
+    func tabPicker(
+        _ picker: TabPickerPanel, didChooseSearchMatch match: NoteSearchMatch, query: String
+    )
 }
 
 /// ⌘P: a small centred panel in the shape of Xcode's Open Quickly — a search
@@ -29,9 +34,16 @@ protocol TabPickerPanelDelegate: AnyObject {
 /// tab's bookmark toggle, ⌘D by another door. It is a one-row table of its
 /// own, sharing the list's cell view and table style, so it is drawn as a list
 /// row rather than as something that only looks like one.
+///
+/// ⇧⌘F opens the same panel in `.search` mode: the query runs over every open
+/// tab's text through `NoteSearch`, and each row is a hit — the tab's title
+/// over the line it sits on, with the matched characters in bold. That mode
+/// has no fixed row above the field; there is nothing it would mean.
 final class TabPickerPanel: NSObject {
     private static let panelWidth: CGFloat = 420
     private static let rowHeight: CGFloat = 26
+    /// A search hit needs two lines — the tab it is in over the line itself.
+    private static let searchRowHeight: CGFloat = 40
     private static let maximumVisibleRows = 10
     /// Room under the last row, so the list does not sit on the panel's edge.
     private static let bottomInset: CGFloat = 8
@@ -45,6 +57,8 @@ final class TabPickerPanel: NSObject {
         case headings
         /// The bookmark button in the strip: every bookmark, nothing else.
         case bookmarks
+        /// ⇧⌘F: hits in the text of every open tab.
+        case search
     }
 
     /// One row of the list in `.tabs` and `.bookmarks`. ⌘P shows the open
@@ -77,6 +91,14 @@ final class TabPickerPanel: NSObject {
     private var missingBookmarks: Set<String> = []
     /// The list as it stands after the query, top to bottom.
     private var rows: [(row: Row, result: FuzzyMatch.Result)] = []
+    /// The haystack `.search` runs over: one entry per open tab, its title and
+    /// its storage string, in tab order.
+    private var searchNotes: [(title: String, text: String)] = []
+    /// What the query found in it, top to bottom.
+    private var searchMatches: [NoteSearchMatch] = []
+    /// The fixed row's height, taken to nothing in `.search`, which has no
+    /// fixed row.
+    private var topRowHeight: NSLayoutConstraint!
 
     private var mode: Mode = .tabs
     /// What the top row has to say about the tab in front, in `.bookmarks`:
@@ -93,7 +115,8 @@ final class TabPickerPanel: NSObject {
 
     var isVisible: Bool { panel.isVisible }
 
-    /// The rows on screen right now, top to bottom — for the tests.
+    /// The rows on screen right now, top to bottom — for the tests. A search
+    /// row is read by its snippet, which is the line the hit sits on.
     var visibleRowTexts: [String] {
         switch mode {
         case .tabs, .bookmarks:
@@ -101,31 +124,46 @@ final class TabPickerPanel: NSObject {
         case .headings:
             guard let headings else { return [] }
             return rankedHeadings.map { headings[$0.index].text }
+        case .search:
+            return searchMatches.map(\.snippet)
         }
     }
 
     /// The SF Symbol each row on screen draws, top to bottom — for the tests.
     /// Headings show no icon, so that mode answers with nothing.
     var visibleRowSymbolNames: [String] {
-        mode == .headings ? [] : rows.map { symbolName(of: $0.row) ?? "" }
+        switch mode {
+        case .headings: return []
+        case .search: return searchMatches.map { symbolName(at: $0.tabIndex) }
+        case .tabs, .bookmarks: return rows.map { symbolName(of: $0.row) ?? "" }
+        }
     }
 
     /// Which rows are bookmarks rather than open tabs — for the tests.
     var visibleRowIsBookmark: [Bool] {
-        mode == .headings ? [] : rows.map { if case .bookmark = $0.row { true } else { false } }
+        listsRows ? rows.map { if case .bookmark = $0.row { true } else { false } } : []
     }
 
     /// Which rows name a file that is no longer there — for the tests. Only
     /// a bookmark can be missing; an open tab is open.
     var visibleRowIsMissing: [Bool] {
-        mode == .headings ? [] : rows.map(\.row).map(isMissing)
+        listsRows ? rows.map(\.row).map(isMissing) : []
     }
+
+    /// The hits on screen right now, top to bottom — for the tests.
+    var visibleSearchMatches: [NoteSearchMatch] { searchMatches }
 
     /// Whether `@` has switched the list to headings — for the tests.
     var isShowingHeadings: Bool { mode == .headings }
 
     /// Whether the panel is listing bookmarks alone — for the tests.
     var isShowingBookmarks: Bool { mode == .bookmarks }
+
+    /// Whether ⇧⌘F has it searching every tab's text — for the tests.
+    var isShowingSearch: Bool { mode == .search }
+
+    /// The two modes whose list is built out of `rows`.
+    private var listsRows: Bool { mode == .tabs || mode == .bookmarks }
 
     /// Whether the fixed row above the field holds the selection rather than
     /// any list row.
@@ -250,11 +288,13 @@ final class TabPickerPanel: NSObject {
         scrollView.borderType = .noBorder
         background.addSubview(scrollView)
 
+        topRowHeight = topRowScrollView.heightAnchor.constraint(equalToConstant: Self.rowHeight)
+
         NSLayoutConstraint.activate([
             topRowScrollView.topAnchor.constraint(equalTo: background.topAnchor, constant: 6),
             topRowScrollView.leadingAnchor.constraint(equalTo: background.leadingAnchor),
             topRowScrollView.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            topRowScrollView.heightAnchor.constraint(equalToConstant: Self.rowHeight),
+            topRowHeight,
 
             searchField.topAnchor.constraint(equalTo: topRowScrollView.bottomAnchor, constant: 6),
             searchField.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 14),
@@ -305,10 +345,38 @@ final class TabPickerPanel: NSObject {
         isLoadingHeadings = false
         headingsGeneration += 1
         frontTab = (canBookmark: false, isBookmarked: false)
+        searchNotes = []
+        searchMatches = []
         mode = .tabs
         searchField.placeholderString = L10n.text("Go to tab")
         searchField.stringValue = ""
         reload(preferring: selectedIndex)
+        present(over: window)
+    }
+
+    /// ⇧⌘F: the same panel over every open tab's text. `notes` is each tab's
+    /// title and its *storage* string, so a hit's range lines up with the text
+    /// view it will be selected in; `symbolNames` is the kind icon per tab,
+    /// in the same order.
+    func showSearch(
+        notes: [(title: String, text: String)], symbolNames: [String] = [],
+        over window: NSWindow
+    ) {
+        titles = notes.map(\.title)
+        self.symbolNames = symbolNames
+        searchNotes = notes
+        searchMatches = []
+        bookmarkPaths = []
+        missingBookmarks = []
+        frontTab = (canBookmark: false, isBookmarked: false)
+        loadHeadings = nil
+        headings = nil
+        isLoadingHeadings = false
+        headingsGeneration += 1
+        mode = .search
+        searchField.placeholderString = L10n.text("Search all notes")
+        searchField.stringValue = ""
+        reload()
         present(over: window)
     }
 
@@ -327,6 +395,8 @@ final class TabPickerPanel: NSObject {
         headings = nil
         isLoadingHeadings = false
         headingsGeneration += 1
+        searchNotes = []
+        searchMatches = []
         mode = .bookmarks
         searchField.placeholderString = L10n.text("Go to bookmark")
         searchField.stringValue = ""
@@ -492,27 +562,44 @@ final class TabPickerPanel: NSObject {
         switch mode {
         case .tabs, .bookmarks: return rows.count
         case .headings: return rankedHeadings.count
+        case .search: return searchMatches.count
         }
     }
 
-    /// The list, plus the fixed row above the field, plus the inset under
-    /// the last row.
+    /// A search hit is two lines; every other row is one.
+    private var listRowHeight: CGFloat {
+        mode == .search ? Self.searchRowHeight : Self.rowHeight
+    }
+
+    /// The list, plus the fixed row above the field where there is one, plus
+    /// the inset under the last row.
     private var panelHeight: CGFloat {
         let rows = max(1, min(max(activeRowCount, 1), Self.maximumVisibleRows))
-        return CGFloat(rows) * Self.rowHeight + Self.rowHeight + 52 + Self.bottomInset
+        let topRow = mode == .search ? 0 : Self.rowHeight
+        return CGFloat(rows) * listRowHeight + topRow + 52 + Self.bottomInset
     }
 
     private func reload(preferring selectedIndex: Int = -1) {
         let query = searchField.stringValue
-        if mode == .bookmarks {
+        switch mode {
+        case .search:
+            reloadSearch(query: query)
+        case .bookmarks:
             reloadBookmarks(query: query)
-        } else if query.hasPrefix("@") {
-            mode = .headings
-            reloadHeadings(query: String(query.dropFirst()))
-        } else {
-            mode = .tabs
-            reloadTabs(query: query)
+        case .tabs, .headings:
+            if query.hasPrefix("@") {
+                mode = .headings
+                reloadHeadings(query: String(query.dropFirst()))
+            } else {
+                mode = .tabs
+                reloadTabs(query: query)
+            }
         }
+        // `.search` has no fixed row above the field: it is taken to no height
+        // at all rather than left as a blank strip.
+        topRowHeight.constant = mode == .search ? 0 : Self.rowHeight
+        topRowScrollView.isHidden = mode == .search
+        tableView.rowHeight = listRowHeight
         tableView.reloadData()
         topRowTable.reloadData()
 
@@ -565,6 +652,13 @@ final class TabPickerPanel: NSObject {
     private func reloadBookmarks(query: String) {
         rows = rank(query, in: bookmarkPaths.map(Bookmarks.name(of:)))
             .map { (row: Row.bookmark($0.index), result: $0.result) }
+    }
+
+    /// ⇧⌘F's list: every hit `NoteSearch` finds in the open tabs, in tab
+    /// order, capped at `NoteSearch.resultLimit`. An empty query lists
+    /// nothing — there is no "all of every note" worth showing.
+    private func reloadSearch(query: String) {
+        searchMatches = NoteSearch.matches(query: query, in: searchNotes)
     }
 
     /// An empty query keeps the list in its own order rather than ranking it.
@@ -643,6 +737,12 @@ final class TabPickerPanel: NSObject {
             let heading = headings[rankedHeadings[row].index]
             hide()
             delegate?.tabPicker(self, didChooseHeading: heading)
+        case .search:
+            guard searchMatches.indices.contains(row) else { return }
+            let match = searchMatches[row]
+            let query = searchField.stringValue
+            hide()
+            delegate?.tabPicker(self, didChooseSearchMatch: match, query: query)
         }
     }
 
@@ -651,6 +751,11 @@ final class TabPickerPanel: NSObject {
         case .tabs: return L10n.text("No tabs")
         case .headings: return L10n.text("No headings")
         case .bookmarks: return L10n.text("No bookmarks")
+        case .search:
+            // Nothing typed yet is not "no results"; say what the field is for.
+            return searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? L10n.text("Type to search all notes")
+                : L10n.text("No results")
         }
     }
 
@@ -709,8 +814,15 @@ final class TabPickerPanel: NSObject {
     }
 
     /// With no tab to bookmark the row has nothing to do: it is drawn greyed
-    /// and takes no selection, the way a missing bookmark's row is inert.
-    private var isTopRowEnabled: Bool { mode == .bookmarks ? frontTab.canBookmark : true }
+    /// and takes no selection, the way a missing bookmark's row is inert. In
+    /// `.search` there is no row at all, so nothing can land on it either.
+    private var isTopRowEnabled: Bool {
+        switch mode {
+        case .bookmarks: return frontTab.canBookmark
+        case .search: return false
+        case .tabs, .headings: return true
+        }
+    }
 
     /// The row is seen through a window exactly one row tall onto a table
     /// that is taller than it: the inset style pads its content above and
@@ -852,8 +964,43 @@ extension TabPickerPanel: NSTableViewDataSource, NSTableViewDelegate {
                 attributedRow(heading.text, matched: entry.result.matchedIndices, indent: indent),
                 symbolName: nil
             )
+        case .search:
+            guard searchMatches.indices.contains(row) else { return cell }
+            let match = searchMatches[row]
+            cell.configure(
+                NSAttributedString(
+                    string: match.tabTitle,
+                    attributes: [
+                        .font: NSFont.systemFont(ofSize: 11),
+                        .foregroundColor: NSColor.secondaryLabelColor,
+                    ]
+                ),
+                symbolName: symbolName(at: match.tabIndex),
+                snippet: snippetRow(match)
+            )
         }
         return cell
+    }
+
+    /// The line a hit sits on, with the matched characters in bold. An image
+    /// is one object-replacement character in the storage; it is drawn as a
+    /// space rather than a hollow box, which keeps the match's range valid.
+    private func snippetRow(_ match: NoteSearchMatch) -> NSAttributedString {
+        let text = match.snippet.replacingOccurrences(of: "\u{FFFC}", with: " ")
+        let attributed = NSMutableAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.labelColor,
+            ]
+        )
+        let range = match.rangeInSnippet
+        if range.length > 0, NSMaxRange(range) <= attributed.length {
+            attributed.addAttribute(
+                .font, value: NSFont.boldSystemFont(ofSize: 13), range: range
+            )
+        }
+        return attributed
     }
 
     /// `indent` is plain leading spaces in the row's own string, so the
@@ -945,16 +1092,25 @@ private final class HoverTrackingTableView: NSTableView {
 /// A list row: the file-kind icon, then the title. A heading row passes no
 /// symbol and keeps the bare indent it always had, so the outline still reads
 /// as an outline rather than a second list of files.
+///
+/// A ⇧⌘F row is the two-line shape: the tab's title small on top, the line the
+/// hit sits on under it. Both lines hang off the same icon, so a search row
+/// and a tab row line their text up at the same x.
 private final class TabPickerRowView: NSTableCellView {
     static let iconSize: CGFloat = 16
     static let leadingMargin: CGFloat = 14
     static let iconTitleGap: CGFloat = 6
 
     private let icon = NSImageView()
+    private let snippetField = NSTextField(labelWithString: "")
     /// The title sits after the icon, or at the margin when there is none;
     /// only one of the two is ever on.
     private var titleAfterIcon: NSLayoutConstraint!
     private var titleAtMargin: NSLayoutConstraint!
+    /// One line centres the title; two stack it over the snippet. Again, only
+    /// one of the pair is ever on.
+    private var titleCentred: NSLayoutConstraint!
+    private var titleAboveSnippet: NSLayoutConstraint!
 
     init() {
         super.init(frame: .zero)
@@ -970,12 +1126,21 @@ private final class TabPickerRowView: NSTableCellView {
         addSubview(field)
         textField = field
 
+        snippetField.translatesAutoresizingMaskIntoConstraints = false
+        snippetField.lineBreakMode = .byTruncatingTail
+        snippetField.maximumNumberOfLines = 1
+        snippetField.cell?.truncatesLastVisibleLine = true
+        snippetField.isHidden = true
+        addSubview(snippetField)
+
         titleAfterIcon = field.leadingAnchor.constraint(
             equalTo: icon.trailingAnchor, constant: Self.iconTitleGap
         )
         titleAtMargin = field.leadingAnchor.constraint(
             equalTo: leadingAnchor, constant: Self.leadingMargin
         )
+        titleCentred = field.centerYAnchor.constraint(equalTo: centerYAnchor)
+        titleAboveSnippet = field.topAnchor.constraint(equalTo: topAnchor, constant: 5)
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.leadingMargin),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -984,7 +1149,11 @@ private final class TabPickerRowView: NSTableCellView {
 
             titleAfterIcon,
             field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            field.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleCentred,
+
+            snippetField.leadingAnchor.constraint(equalTo: field.leadingAnchor),
+            snippetField.trailingAnchor.constraint(equalTo: field.trailingAnchor),
+            snippetField.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 1),
         ])
     }
 
@@ -997,9 +1166,23 @@ private final class TabPickerRowView: NSTableCellView {
         return (convert(icon.frame, to: nil).minX, convert(textField.frame, to: nil).minX)
     }
 
-    func configure(_ text: NSAttributedString, symbolName: String?, isDimmed: Bool = false) {
+    func configure(
+        _ text: NSAttributedString, symbolName: String?, isDimmed: Bool = false,
+        snippet: NSAttributedString? = nil
+    ) {
         textField?.attributedStringValue = text
         icon.contentTintColor = isDimmed ? .tertiaryLabelColor : .secondaryLabelColor
+        if let snippet {
+            snippetField.attributedStringValue = snippet
+            snippetField.isHidden = false
+            titleCentred.isActive = false
+            titleAboveSnippet.isActive = true
+        } else {
+            snippetField.attributedStringValue = NSAttributedString()
+            snippetField.isHidden = true
+            titleAboveSnippet.isActive = false
+            titleCentred.isActive = true
+        }
         if let symbolName {
             icon.image = FileKindIcon.image(named: symbolName, pointSize: Self.iconSize)
             icon.isHidden = false

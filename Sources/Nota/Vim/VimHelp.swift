@@ -52,6 +52,15 @@ enum VimHelp {
             Entry("H M L", "top, middle and bottom of the screen"),
             Entry("3w  d2j", "counts go before, or between, the keys"),
         ]),
+        Section("The Mac's cursor keys", [
+            Entry("← ↓ ↑ →", "h j k l"),
+            Entry("⌥← ⌥→", "by words, as b and w"),
+            Entry("⌥↑ ⌥↓", "by paragraphs, as { and }"),
+            Entry("Home End", "the start of the line, its end — 0 and $"),
+            Entry("Page Up/Down", "a page up, down — ⌃B and ⌃F"),
+            Entry("⌘← ⌘→ ⌘↑ ⌘↓", "the Mac's own, line and note"),
+            Entry("d⌥→  v⌥→", "operators and visual mode take them all"),
+        ]),
         Section("Scrolling", [
             Entry("⌃D ⌃U", "half a page down, up"),
             Entry("⌃F ⌃B", "a page down, up"),

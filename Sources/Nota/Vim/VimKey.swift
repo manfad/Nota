@@ -10,6 +10,9 @@ struct VimKey: Equatable, Hashable {
         case character(Character)
         case escape, enter, tab, backspace
         case up, down, left, right
+        /// The Mac's own cursor keys, which vim never had names for but a
+        /// Mac keyboard has always had.
+        case home, end, pageUp, pageDown
     }
 
     var base: Base
@@ -59,6 +62,10 @@ extension VimKey {
         case 124: self = VimKey(base: .right, control: control, option: option); return
         case 125: self = VimKey(base: .down, control: control, option: option); return
         case 126: self = VimKey(base: .up, control: control, option: option); return
+        case 115: self = VimKey(base: .home, control: control, option: option); return
+        case 119: self = VimKey(base: .end, control: control, option: option); return
+        case 116: self = VimKey(base: .pageUp, control: control, option: option); return
+        case 121: self = VimKey(base: .pageDown, control: control, option: option); return
         default: break
         }
 
@@ -122,6 +129,10 @@ extension VimKey {
         case "down": return [VimKey(base: .down)]
         case "left": return [VimKey(base: .left)]
         case "right": return [VimKey(base: .right)]
+        case "home": return [VimKey(base: .home)]
+        case "end": return [VimKey(base: .end)]
+        case "pageup": return [VimKey(base: .pageUp)]
+        case "pagedown": return [VimKey(base: .pageDown)]
         case "lt": return [.char("<")]
         case "leader": return parse(leader, leader: "\\")
         case "nop": return []

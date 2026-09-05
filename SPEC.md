@@ -58,7 +58,8 @@
 - Closing the last window = hide (app stays alive). Closing any other window really closes it, and its tabs go to the
   end of the window that was in front before it, so nothing is lost and nothing is asked. Quit never prompts;
   everything restores.
-- Search: ⌘F opens Nota's own find bar (in note), ⌥⌘F opens it with the replace pill too; ⇧⌘F across all open tabs.
+- Search: ⌘F opens Nota's own find bar (in note), ⌥⌘F opens it with the replace pill too; ⇧⌘F opens the search
+  dialog across all open tabs (see Tabs).
   In vim mode `/` `?` are vim's own search, typed in the command pane (see Vim mode); `n` `N` `*` `#` repeat it;
   `:noh` clears highlights. ⌘F is the same bar in every mode, and closing it hands the highlights back to vim.
 - The find bar is a pill floating in the top-trailing corner of the column, over the text, with that column's mode
@@ -142,7 +143,7 @@
   in a group of its own, then one group per menu the commands live in — File, Window, Find, Edit, View,
   Nota — each under a small caption, one row per command. The page scrolls; the rest of the window does not.
   Adjustable: New Tab ⌘T, New Window ⇧⌘N, Open… ⌘O, Close Tab ⌘W, Save ⌘S, Save As… ⇧⌘S, Bookmark This
-  Tab ⌘D, Show Bookmarks… ⇧⌘D, Go to Tab… ⌘P, Next Tab ⌃Tab, Previous Tab ⌃⇧Tab, Find… ⌘F, Find Next ⌘G,
+  Tab ⌘D, Show Bookmarks… ⇧⌘D, Tabs Dialog ⌘P, Next Tab ⌃Tab, Previous Tab ⌃⇧Tab, Find… ⌘F, Find Next ⌘G,
   Find Previous ⇧⌘G, Search All Notes… ⇧⌘F, Go to Line… ⌘L, Toggle Comment ⌘/, Indent ⌘], Outdent ⌘[,
   Increase Font Size ⌘+, Decrease Font Size ⌘-, Actual Size ⌘0, Image Gallery ⌘B, Mode Toggle ⇧⌘P,
   Reading Mode ⌥⇧⌘P, Zen Mode ⌥⌘Z, Settings… ⌘,. The system-standard items are not adjustable and are
@@ -181,7 +182,8 @@
   indent the block shares — `#` for py sh bash zsh rb yaml yml toml ini cfg conf, `//` for js ts jsx tsx swift c h cpp
   hpp java kt go rs cs scala php, `--` for sql lua hs, `%` for tex latex, `;` for lisp clj el, and nothing (a disabled
   item) for md txt html css json and anything Nota does not know; Tab / ⇧Tab indent and outdent a multi-line selection
-  by a tab, single-line Tab still being AppKit's own tab, and ⌘] / ⌘[ do the same on one line as on many.
+  by a tab, single-line Tab still being AppKit's own tab while single-line ⇧Tab outdents the caret's line, and
+  ⌘] / ⌘[ do the same on one line as on many.
   Every one is a single `shouldChangeText` / `didChangeText` edit — one undo step, one dirty flag, one thing for vim
   and the save to see — and every one asks the note's `LineIndex` which lines it is about, so ⌥↓ in a 100 MB log costs
   the two lines it swaps. Hard lines throughout: word wrap moves nothing. The items are nil-targeted, so they arrive
@@ -526,6 +528,15 @@
   disabled in the menu, and Return on it does nothing; it goes when it is removed by hand or by Remove Missing
   Bookmarks. Choosing one selects the tab if this window has the file open, and otherwise opens it, which is also what
   puts it in Open Recent.
+- **Search all notes** (Done 19). ⇧⌘F opens that same panel a third way: the field reads "Search all notes" and the
+  query runs over every open tab's text through `NoteSearch`, live as it is typed and capped at
+  `NoteSearch.resultLimit`. A row is one hit — the tab's title small on top with that tab's kind icon, the line the
+  hit sits on under it with the matched characters in bold — so the rows are two lines tall rather than the list's
+  usual one. There is no fixed row above the field in this mode: nothing it could mean, so ↑ from the top of the list
+  stays put. An empty query lists nothing and says "Type to search all notes"; a query with no hits says "No results".
+  ↑↓ and the pointer move the selection, Return or a click switches to that hit's tab, selects the match and scrolls
+  it into view, and the query goes onto the find pasteboard so ⌘G carries on from there. Esc closes. The per-note find
+  bar (⌘F) is untouched.
 - A tab can move to another window: the note keeps its id, text, unsaved edits, caret and undo history, its cached
   text is never deleted on the way, and the window it left selects the neighbour (or keeps one untitled tab if it was
   the last). Dragging a tab out of the strip is that same move by hand: 40pt clear of the strip the tab becomes a
@@ -549,6 +560,8 @@
 - Ex commands: :w [name], :q (closes the tab), :q!, :wq, :x, :N, :s / :%s with g i flags, :noh,
   :tabnew, :tabn, :tabp, :e path. Unknown → "Not an editor command" in the status bar.
 - ⌘ shortcuts keep working in every mode.
+- Mac cursor keys in normal and visual mode: ⌥←/→ by word (w/b), ⌥↑/↓ by paragraph, Home/End line start/end,
+  Page Up/Down as ⌃b/⌃f, ⌘-arrows as the Mac has them; insert mode was always the Mac's.
 - Config file `~/.config/nota/vimrc` (vimscript subset): `map`/`noremap` and the n/i/v/o variants,
   `unmap`, `let mapleader`, `<leader>`, `<C-x>` `<S-x>` `<A-x>` `<CR>` `<Esc>` `<Space>` key notation,
   `set`/`set no` for ignorecase smartcase incsearch hlsearch wrap number relativenumber scrolloff tabstop shiftwidth expandtab,
@@ -587,6 +600,25 @@
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+20. **The Mac's cursor keys in vim's normal and visual mode (done 2026-09-05).** A Mac keyboard's own navigation keys
+   used to do nothing useful once vim was on: ⌥-arrows arrived as plain arrows, and Home, End, Page Up and Page Down
+   fell through as function-key characters `handleCommand` quietly swallowed. `VimKey.Base` now has `.home`, `.end`,
+   `.pageUp` and `.pageDown` — key codes 115, 119, 116, 121, and `<Home>` / `<End>` / `<PageUp>` / `<PageDown>` in the
+   notation, so a vimrc can map them and `@a` writes them back out — and `handleNormal`'s arrow branch routes each key
+   to the motion its letter uses: ⌥→ is `w`, ⌥← is `b`, ⌥↓ is `}`, ⌥↑ is `{`, Home is `0`, End is `$`, the page keys
+   are `⌃f` and `⌃b`. One motion, so counts, operators (`d⌥→`) and visual mode all follow with no extra code — visual
+   borrows normal mode's machinery for any key that is not a plain character. ⌘-arrows stay the Mac's: `NSTextView`
+   does the moving in `handleCommandCursor`, and vim only adds afterwards what it adds after a click — the caret
+   pulled off the end of the line, and the column the next `j` aims for. ⇧⌘ and every other ⌘ key is untouched, as is
+   insert mode, which was always the Mac's.
+19. **Search All Notes is a dialog (done 2026-09-05).** ⇧⌘F used to reveal a small `NSSearchField` in the strip's
+   trailing corner with a drop-down of results hanging under it — a second piece of chrome, in a second shape, doing
+   what the ⌘P panel already does. It is now that panel's third mode: `TabPickerPanel.showSearch(notes:…)` alongside
+   `.tabs` / `.headings` / `.bookmarks`, same chrome, same field, same ↑↓ / hover / Return / Esc handling. Only the
+   rows differ — two lines rather than one, the tab's title over the line the hit sits on — and the fixed row above
+   the field is taken to no height at all, since a search has nothing to put there. `NoteSearch` is untouched and
+   still pure; `SearchResultsPanel.swift`, the field, its constraints and the window-move repositioning are gone, and
+   the strip's trailing constraint no longer has a second, wider variant to switch to. See the Tabs section.
 18. **Lists continue themselves on Return (done 2026-09-05).** `ListContinuation.swift` reads the line the caret is
    on and says what Return means: the same marker stepped on once, with the indent, the delimiter and the case kept,
    or — on an item with nothing typed on it — the marker taken off and the list ended. Bullets, arabic numbers,
@@ -705,8 +737,8 @@
       the widths still until the pointer leaves the strip, and a drag near either edge reveals one hidden slot at a
       time. The overflow chevron for the tabs the window is not showing is Todo 3.
     - **B. The + follows the tabs (done 2026-09-03).** `plusX = min(lastVisibleTab.maxX + 4, bounds.width − 24)`: it
-      rides after the last tab and pins at the trailing edge once the strip is full. The ⇧⌘F field already narrows the
-      bar's bounds, and nothing subtracts it twice.
+      rides after the last tab and pins at the trailing edge once the strip is full. The buttons pinned in the
+      trailing corner already narrow the bar's bounds, and nothing subtracts them twice.
     - **D. Tear-off (multi-window, done 2026-09-03).** Not `NSWindow.performDrag(with:)` (a modal window move: no further mouse events, so
       no drop target can highlight) and not `NSDraggingSession` (wrong look). Chromium-on-Mac's way: the same
       `NSApp.nextEvent` loop watches y; past ~40pt out of the strip it spawns a `MainWindowController`, moves the note

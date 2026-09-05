@@ -2357,6 +2357,134 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(picker.visibleRowSymbolNames.isEmpty)
     }
 
+    // MARK: - Search all notes
+
+    /// ⇧⌘F is the same panel as ⌘P, in a mode of its own: no fixed row above
+    /// the field, and nothing listed until something is typed.
+    @MainActor
+    func testSearchAllNotesOpensThePickerInSearchMode() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let picker = controller.tabPickerPanel
+        defer { picker.hide() }
+
+        controller.beginSearchAllNotes()
+
+        XCTAssertTrue(picker.isVisible)
+        XCTAssertTrue(picker.isShowingSearch)
+        XCTAssertFalse(picker.isShowingHeadings)
+        XCTAssertFalse(picker.isShowingBookmarks)
+        XCTAssertTrue(picker.visibleRowTexts.isEmpty, "an empty query lists nothing")
+        XCTAssertFalse(picker.topRowIsEnabled, "there is no fixed row to land on")
+
+        // ↑ from the field therefore has nowhere to go.
+        picker.moveSelectionUp()
+        XCTAssertFalse(picker.isTopRowSelected)
+    }
+
+    /// Typing lists the hits from every open tab, each row the line the hit
+    /// sits on under the tab it came from, with that tab's kind icon.
+    @MainActor
+    func testTypingListsMatchesFromEveryOpenTab() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let directory = try makeTemporaryDirectory()
+        let alpha = directory.appendingPathComponent("alpha.md")
+        try "first line\nneedle in alpha\n".write(to: alpha, atomically: true, encoding: .utf8)
+        let beta = directory.appendingPathComponent("beta.md")
+        try "another needle here\n".write(to: beta, atomically: true, encoding: .utf8)
+        controller.open(url: alpha)
+        controller.open(url: beta)
+
+        let picker = controller.tabPickerPanel
+        defer { picker.hide() }
+        controller.beginSearchAllNotes()
+        picker.query = "needle"
+
+        XCTAssertEqual(picker.visibleRowTexts, ["needle in alpha", "another needle here"])
+        XCTAssertEqual(picker.visibleSearchMatches.map(\.tabTitle), ["alpha.md", "beta.md"])
+        XCTAssertEqual(picker.visibleSearchMatches.map(\.tabIndex), [1, 2])
+        XCTAssertEqual(
+            picker.visibleRowSymbolNames,
+            [FileKindIcon.symbolName(forTitle: "alpha.md"),
+             FileKindIcon.symbolName(forTitle: "beta.md")],
+            "each row carries its own tab's kind icon"
+        )
+
+        // The bolded characters are the match itself, in the row's own text.
+        for match in picker.visibleSearchMatches {
+            XCTAssertEqual(
+                (match.snippet as NSString).substring(with: match.rangeInSnippet).lowercased(),
+                "needle"
+            )
+        }
+
+        picker.query = "absent"
+        XCTAssertTrue(picker.visibleRowTexts.isEmpty)
+    }
+
+    /// Return on a row switches to that tab, selects the match and leaves the
+    /// query on the find pasteboard so ⌘G carries on from there.
+    @MainActor
+    func testReturnOnASearchRowSwitchesTabAndSelectsTheMatch() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let directory = try makeTemporaryDirectory()
+        let alpha = directory.appendingPathComponent("alpha.md")
+        try "nothing here\n".write(to: alpha, atomically: true, encoding: .utf8)
+        let beta = directory.appendingPathComponent("beta.md")
+        let text = "one\nthe needle line\n"
+        try text.write(to: beta, atomically: true, encoding: .utf8)
+        controller.open(url: alpha)
+        controller.open(url: beta)
+        controller.selectTab(at: 0)
+
+        let picker = controller.tabPickerPanel
+        controller.beginSearchAllNotes()
+        picker.query = "needle"
+        XCTAssertEqual(picker.visibleSearchMatches.count, 1)
+
+        send(#selector(NSResponder.insertNewline(_:)), to: picker)
+
+        XCTAssertFalse(picker.isVisible, "choosing closes the panel")
+        XCTAssertEqual(controller.selectedTabIndex, 2, "the hit's tab came forward")
+        XCTAssertEqual(
+            controller.editorScrolling.textView.selectedRange(),
+            (text as NSString).range(of: "needle"),
+            "the match itself is selected"
+        )
+        XCTAssertEqual(NSPasteboard(name: .find).string(forType: .string), "needle")
+    }
+
+    /// ↓ walks the list, and Esc closes without choosing anything.
+    @MainActor
+    func testArrowsWalkTheSearchListAndEscCloses() throws {
+        _ = NSApplication.shared
+        let controller = try makeController()
+        let directory = try makeTemporaryDirectory()
+        let file = directory.appendingPathComponent("hits.md")
+        try "needle one\nneedle two\n".write(to: file, atomically: true, encoding: .utf8)
+        controller.open(url: file)
+
+        let picker = controller.tabPickerPanel
+        controller.beginSearchAllNotes()
+        picker.query = "needle"
+        XCTAssertEqual(picker.visibleRowTexts, ["needle one", "needle two"])
+
+        picker.moveSelectionDown()
+        send(#selector(NSResponder.cancelOperation(_:)), to: picker)
+
+        XCTAssertFalse(picker.isVisible, "Esc closes it")
+        XCTAssertEqual(controller.selectedTabIndex, 1, "and chose nothing")
+    }
+
+    /// The key the panel's field would hand its delegate — the tests have no
+    /// window server to press one with.
+    @MainActor
+    private func send(_ command: Selector, to picker: TabPickerPanel) {
+        _ = picker.control(NSTextField(), textView: NSTextView(), doCommandBy: command)
+    }
+
     // MARK: - Reading mode
 
     /// ⌥⇧⌘P is the shortcut for the render on its own: straight to it from
@@ -2987,27 +3115,6 @@ final class MarkdownPreviewTests: XCTestCase {
         let dark = try XCTUnwrap(fill.backgroundColor)
 
         XCTAssertNotEqual(light, dark, "the fill must not keep the light-mode colour")
-    }
-
-    /// The ⇧⌘F field is in the strip and the control is under it, so the two
-    /// have nothing to argue about.
-    @MainActor
-    func testTheSearchFieldAndTheModeControlNeverOverlap() throws {
-        _ = NSApplication.shared
-        let controller = try makeController()
-        let window = try XCTUnwrap(controller.window)
-        let content = try XCTUnwrap(window.contentView)
-        controller.beginSearchAllNotes()
-        window.layoutIfNeeded()
-
-        let overlay = controller.visibleModeControlOverlay
-        try hover(overlay, entering: true)
-        let search = try XCTUnwrap(descendant(of: content, ofType: NSSearchField.self))
-        XCTAssertFalse(search.isHidden)
-        let control = overlay.modeControl.convert(overlay.modeControl.bounds, to: content)
-        let field = search.convert(search.bounds, to: content)
-        XCTAssertFalse(control.intersects(field))
-        XCTAssertLessThanOrEqual(control.maxY, field.minY)
     }
 
     /// The rule is the file: a saved `.md` gets the control, and nothing else

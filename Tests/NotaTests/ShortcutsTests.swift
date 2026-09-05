@@ -116,14 +116,14 @@ final class ShortcutsTests: XCTestCase {
 
         let delegate = try makeDelegate()
         delegate.buildMenu()
-        let before = try XCTUnwrap(item(titled: "Go to Tab…"))
+        let before = try XCTUnwrap(item(titled: "Tabs Dialog"))
         XCTAssertEqual(before.keyEquivalent, "p")
         XCTAssertEqual(before.keyEquivalentModifierMask, [.command])
 
         Preferences.shared.shortcuts = [.goToTab: KeyCombo("j", [.command, .option])]
         delegate.perform(Selector(("preferencesChanged")))
 
-        let after = try XCTUnwrap(item(titled: "Go to Tab…"))
+        let after = try XCTUnwrap(item(titled: "Tabs Dialog"))
         XCTAssertEqual(after.keyEquivalent, "j")
         XCTAssertEqual(after.keyEquivalentModifierMask, [.command, .option])
         XCTAssertEqual(try XCTUnwrap(item(titled: "Save")).keyEquivalent, "s",

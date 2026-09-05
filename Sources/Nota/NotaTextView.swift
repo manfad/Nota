@@ -245,8 +245,11 @@ final class NotaTextView: NSTextView {
         indentLines(sender)
     }
 
+    /// ⇧Tab outdents the caret's line even with nothing selected — the
+    /// mirror of a Tab at the line's start — since a backtab has nothing
+    /// else it could mean; a selection across lines outdents them all.
     override func insertBacktab(_ sender: Any?) {
-        guard lineOperationsEnabled, selectionSpansLines else {
+        guard lineOperationsEnabled else {
             super.insertBacktab(sender)
             return
         }

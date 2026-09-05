@@ -18,7 +18,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | Anything in the main window: footer, split, modes, tabs, opening files, saving | `MainWindowController.swift` (see its sections below) |
 | The save panel's Format combo, or the extensions it offers | `SaveNameComposer.swift` (pure logic), `MainWindowController.presentSavePanel` (the panel itself) |
 | The tab strip (drawing, drag, close, +, tear-off) | `TabBarView.swift`, geometry in `TabStripLayout.swift` |
-| ⌘P switcher, `@` headings, bookmarks dialog, hover/arrow selection | `TabPickerPanel.swift`, ranking in `FuzzyMatch.swift` |
+| ⌘P switcher, `@` headings, bookmarks dialog, ⇧⌘F search dialog, hover/arrow selection | `TabPickerPanel.swift`, ranking in `FuzzyMatch.swift` |
 | Settings window (draft + Save, sidebar pages) | `SettingsWindowController.swift`, values in `Preferences.swift` |
 | A new preference | `Preferences.swift` (key + property + `announce()`), then Settings UI |
 | A user-visible string / Chinese translation | `Localization.swift` (`L10n.text`) |
@@ -39,7 +39,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | Bookmarks | `Bookmarks.swift` (store), `BookmarksMenu.swift` (File › Bookmarks) |
 | Open Recent | `RecentDocumentsMenu.swift` |
 | File changed on disk | `FileWatcher.swift`, handling in `MainWindowController` "External changes" |
-| Search all notes (⇧⌘F) | `NoteSearch.swift`, `SearchResultsPanel.swift` |
+| Search all notes (⇧⌘F) | `NoteSearch.swift` (the search itself), dialog in `TabPickerPanel.swift` |
 | Global summon hotkey | `GlobalHotKey.swift`, recorder `ShortcutRecorderField.swift` |
 | Vim | `Vim/` (see below) |
 | Big files, spell check | `BigFile.swift`, `SpellCheckPolicy.swift` |
@@ -65,18 +65,17 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `GlobalHotKey.swift` (~170) — Carbon hotkey; `KeyCodeNames` (key code / key-equivalent display names).
 
 ### Main window
-- `MainWindowController.swift` (~4350) — the whole window. Sections by `MARK`:
-  Setup (303) · Text attributes (990) · Session restore (1215) · Tabs (1356) · Encoding and line endings (1493) · Vim footer (1748) · Files (2070, open/save/close, sniff → viewer kinds, `importRTF` for `.rtf`/RTFD) · External changes (2246) · Persistence (2387) · Font size and zoom (2495) · Menu actions (2576) · Bookmarks (2591) · Zen mode (2659) · Tab picker (3045, `@` headings incl. EPUB contents) · Markdown preview (3152, modes, split, footer status of viewers) · Images: chips and sidebar (3761) · Search across tabs (3887) · Delegates / Vim's window (3998) · Tear-off (4136) · Background (4318) · Quick Look (4331).
+- `MainWindowController.swift` (~4730) — the whole window. Sections by `MARK`:
+  Setup (332) · Text attributes (1029) · Auto-hidden tab strip (1338) · Session restore (1461) · Tabs (1602) · Encoding and line endings (1739) · Vim footer (1994) · Files (2316, open/save/close, sniff → viewer kinds, `importRTF` for `.rtf`/RTFD) · External changes (2646) · Persistence (2787) · Font size and zoom (2895) · Menu actions (2976) · Zen mode (3059) · Tab picker (3496, `@` headings incl. EPUB contents) · Markdown preview (3610, modes, split, footer status of viewers) · Images: chips and sidebar (4219) · Search across tabs (4345, `beginSearchAllNotes` opens the picker in `.search`) · Delegates / Vim's window (4383) · Background (4698) · Quick Look (4711).
   Footer regions: `statusLabel` (counts, `updateCountsLabel` / `availableCountsWidth`), `footerTrailingStack` (encoding · line ending · cursor), `modeBadge` (vim).
 - `TabBarView.swift` (~1600) — the strip: `TabBarItem`, `TabItemView` (icon, dot, ✕, bookmark badge), drag/reorder, tear-off, + button, bookmark and Settings-gear buttons at the trailing edge, context menu.
 - `TabStripLayout.swift` (~200) — pure width arithmetic for the strip.
-- `TabPickerPanel.swift` (~1000) — ⌘P panel: modes `.tabs` / `.headings` (`@`) / `.bookmarks`; top fixed row; arrow keys and hover selection (`HoverTrackingTableView`); `TabPickerRowView`.
+- `TabPickerPanel.swift` (~1200) — ⌘P panel: modes `.tabs` / `.headings` (`@`) / `.bookmarks` / `.search` (⇧⌘F, two-line hit rows, no top row); top fixed row; arrow keys and hover selection (`HoverTrackingTableView`); `TabPickerRowView`.
 - `FuzzyMatch.swift` (~80) — subsequence scoring for the picker.
 - `ModeControlOverlay.swift` (~260) — Editor · Split · Reading floating control.
 - `ImageSidebarView.swift` (~330) — thumbnail column (no utility strip any more).
 - `ChipHighlight.swift` (~50) — which thumbnails match the caret/selection.
-- `SearchResultsPanel.swift` (~250) — ⇧⌘F drop-down list.
-- `NoteSearch.swift` (~100) — the search itself, `NoteSearchMatch`.
+- `NoteSearch.swift` (~100) — the search itself, `NoteSearchMatch`; the panel's `.search` mode draws what it returns.
 
 ### Notes, files, session
 - `Note.swift` (~530) — `PreviewMode`, `RenderedPreviewKind`, `NoteKind` (`text`/`pdf`/`image`/`epub`), `Note` (storage, file, dirty, watcher, cached PDF/image/book, `sessionTab()`).
@@ -135,7 +134,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 `swift test --filter <ClassName>` or `--filter <testName>`.
 
 - `NotaTests.swift` (~100) — the grab bag: editor, footer, Settings window, find bands, ⌘P hover, session.
-- `MarkdownPreviewTests.swift` (~140) — preview modes, split, picker rows, sidebar.
+- `MarkdownPreviewTests.swift` (~140) — preview modes, split, picker rows, the ⇧⌘F search dialog, sidebar.
 - `HTMLPreviewTests.swift`, `PDFTests.swift`, `ImageTests.swift`, `EPUBTests.swift` — the viewer tabs.
 - `LaTeXTests.swift`, `MathTests.swift`, `MarkdownMathTests.swift`, `MarkdownHeadingsTests.swift`, `TaskListTests.swift` — renderers.
 - `TextFileTests.swift`, `FileSniffTests.swift`, `FileKindIconTests.swift`, `LineIndexTests.swift`, `LineOperationsTests.swift`, `ListContinuationTests.swift` — files and editor logic.

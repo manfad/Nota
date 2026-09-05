@@ -421,6 +421,20 @@ final class LineOperationsTests: XCTestCase {
         XCTAssertEqual(harness.string, "a\t\tc")
     }
 
+    /// A backtab has nothing else it could mean on one line, so it outdents
+    /// the caret's line the way ⌘[ does — and does nothing to a line that
+    /// has no indent to take.
+    func testShiftTabOutdentsTheCaretLineWithNothingSelected() {
+        let harness = makeHarness("\tabc\n\tdef")
+        harness.select(2)
+        harness.view.insertBacktab(nil)
+        XCTAssertEqual(harness.string, "abc\n\tdef")
+        XCTAssertEqual(harness.caret, 1)
+
+        harness.view.insertBacktab(nil)
+        XCTAssertEqual(harness.string, "abc\n\tdef", "nothing left to outdent")
+    }
+
     func testCommandBracketIndentsAndOutdentsASingleLine() {
         let harness = makeHarness("abc\ndef")
         harness.select(1)

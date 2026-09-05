@@ -280,10 +280,51 @@ final class VimEngine {
     // MARK: - Entry points
 
     /// `true` when the key was ours. ⌘ combinations never are, so every menu
-    /// shortcut keeps working in every mode.
+    /// shortcut keeps working in every mode — bar the four cursor keys, which
+    /// no menu has and which `handleCommandCursor` only borrows.
     func handle(_ event: NSEvent) -> Bool {
-        guard isEnabled, let key = VimKey(event: event) else { return false }
+        guard isEnabled else { return false }
+        if handleCommandCursor(event) { return true }
+        guard let key = VimKey(event: event) else { return false }
         return handle(key)
+    }
+
+    /// ⌘←/→/↑/↓ in normal and visual mode.
+    ///
+    /// The Mac's own line and document keys, and they stay the Mac's:
+    /// `NSTextView` does the moving, so they land exactly where they land in
+    /// every other editor here. All vim adds is what it adds after a click —
+    /// the caret pulled back off the end of the line, which normal mode never
+    /// sits past, and the column the next `j` or `k` aims for. ⇧⌘ and the
+    /// rest are left alone entirely.
+    private func handleCommandCursor(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags
+        guard flags.contains(.command),
+              !flags.contains(.shift), !flags.contains(.control), !flags.contains(.option),
+              mode == .normal || mode == .visual || mode == .visualLine,
+              let textView
+        else { return false }
+
+        let command: Selector
+        switch event.keyCode {
+        case 123: command = #selector(NSTextView.moveToBeginningOfLine(_:))
+        case 124: command = #selector(NSTextView.moveToEndOfLine(_:))
+        case 125: command = #selector(NSTextView.moveToEndOfDocument(_:))
+        case 126: command = #selector(NSTextView.moveToBeginningOfDocument(_:))
+        default: return false
+        }
+
+        textView.doCommand(by: command)
+        let landed = textView.selectedRange().location
+        if visual != nil {
+            // The head is vim's, not the text view's: it follows the caret
+            // and the selection is drawn from it again.
+            moveCaret(to: landed)
+        } else {
+            clampCaret()
+            desiredColumn = VimMotions.column(text, at: caret)
+        }
+        return true
     }
 
     @discardableResult
@@ -401,12 +442,33 @@ final class VimEngine {
             return handleControl(key)
         }
         guard let character = key.plainCharacter else {
-            // Arrow keys move the way h/j/k/l do.
+            // Arrow keys move the way h/j/k/l do — and the Mac's own cursor
+            // keys move the way they do in every other editor on the Mac:
+            // ⌥ by word and paragraph, Home and End to the ends of the line,
+            // the page keys as ⌃F and ⌃B. Vim's own motions do the moving,
+            // so ⌥→ is `w` down to the last edge case, and an operator
+            // waiting in front of it takes the same range `dw` would.
             switch key.base {
-            case .left: applyMotion(VimMotions.left(text, from: caret, count: takeCount()))
-            case .right: applyMotion(VimMotions.right(text, from: caret, count: takeCount()))
-            case .down: applyMotion(VimMotions.down(text, from: caret, count: takeCount(), column: desiredColumn))
-            case .up: applyMotion(VimMotions.up(text, from: caret, count: takeCount(), column: desiredColumn))
+            case .left:
+                applyMotion(key.option
+                    ? VimMotions.wordBackward(text, from: caret, count: takeCount(), big: false)
+                    : VimMotions.left(text, from: caret, count: takeCount()))
+            case .right:
+                applyMotion(key.option
+                    ? VimMotions.wordForward(text, from: caret, count: takeCount(), big: false)
+                    : VimMotions.right(text, from: caret, count: takeCount()))
+            case .down:
+                applyMotion(key.option
+                    ? VimMotions.paragraphForward(text, from: caret, count: takeCount())
+                    : VimMotions.down(text, from: caret, count: takeCount(), column: desiredColumn))
+            case .up:
+                applyMotion(key.option
+                    ? VimMotions.paragraphBackward(text, from: caret, count: takeCount())
+                    : VimMotions.up(text, from: caret, count: takeCount(), column: desiredColumn))
+            case .home: applyMotion(VimMotions.startOfLine(text, from: caret))
+            case .end: applyMotion(VimMotions.endOfLine(text, from: caret, count: takeCount()))
+            case .pageDown: return handleControl(.char("f", control: true))
+            case .pageUp: return handleControl(.char("b", control: true))
             case .enter: applyMotion(VimMotions.lineOffset(text, from: caret, lines: takeCount()))
             default: return true
             }

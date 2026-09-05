@@ -46,6 +46,36 @@ final class VimTests: XCTestCase {
         func insert(_ text: String) {
             view.insertText(text, replacementRange: view.selectedRange())
         }
+
+        /// A key struck on the keyboard, through `NotaTextView.keyDown` — so
+        /// what vim declines, AppKit still gets. The only way to test the
+        /// keys that are deliberately not the engine's, like ⌘→.
+        func press(keyCode: UInt16, flags: NSEvent.ModifierFlags = [], characters: String = "") {
+            guard let event = NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                windowNumber: view.window?.windowNumber ?? 0, context: nil,
+                characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: false, keyCode: keyCode
+            ) else { return }
+            view.keyDown(with: event)
+        }
+    }
+
+    /// The key codes the Mac's cursor keys arrive with.
+    private enum Cursor {
+        static let left: UInt16 = 123
+        static let right: UInt16 = 124
+        static let down: UInt16 = 125
+        static let up: UInt16 = 126
+        static let home: UInt16 = 115
+        static let pageUp: UInt16 = 116
+        static let end: UInt16 = 119
+        static let pageDown: UInt16 = 121
+
+        static let leftCharacter = String(UnicodeScalar(NSLeftArrowFunctionKey)!)
+        static let rightCharacter = String(UnicodeScalar(NSRightArrowFunctionKey)!)
+        static let downCharacter = String(UnicodeScalar(NSDownArrowFunctionKey)!)
+        static let upCharacter = String(UnicodeScalar(NSUpArrowFunctionKey)!)
     }
 
     private func makeHarness(_ text: String = "", enabled: Bool = true) throws -> Harness {
@@ -227,6 +257,168 @@ final class VimTests: XCTestCase {
         XCTAssertEqual(harness.caret, 3)
         harness.type("h")
         XCTAssertEqual(harness.caret, 1)
+    }
+
+    // MARK: - The Mac's cursor keys
+
+    func testKeyNotationNamesTheMacsOwnCursorKeys() {
+        XCTAssertEqual(VimKey.parse("<Home>"), [VimKey(base: .home)])
+        XCTAssertEqual(VimKey.parse("<End>"), [VimKey(base: .end)])
+        XCTAssertEqual(VimKey.parse("<PageUp>"), [VimKey(base: .pageUp)])
+        XCTAssertEqual(VimKey.parse("<PageDown>"), [VimKey(base: .pageDown)])
+        XCTAssertEqual(VimKey.parse("<home>"), VimKey.parse("<Home>"))
+        // A vimrc can put a modifier on one, the way it can on <Tab>.
+        XCTAssertEqual(VimKey.parse("<A-Right>"), [VimKey(base: .right, option: true)])
+    }
+
+    func testTheCursorKeysArriveFromTheKeyboardAsThemselves() throws {
+        func event(_ keyCode: UInt16, _ flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                windowNumber: 0, context: nil, characters: "",
+                charactersIgnoringModifiers: "", isARepeat: false, keyCode: keyCode
+            ))
+        }
+
+        XCTAssertEqual(VimKey(event: try event(Cursor.home)), VimKey(base: .home))
+        XCTAssertEqual(VimKey(event: try event(Cursor.end)), VimKey(base: .end))
+        XCTAssertEqual(VimKey(event: try event(Cursor.pageUp)), VimKey(base: .pageUp))
+        XCTAssertEqual(VimKey(event: try event(Cursor.pageDown)), VimKey(base: .pageDown))
+        XCTAssertEqual(
+            VimKey(event: try event(Cursor.right, .option)),
+            VimKey(base: .right, option: true)
+        )
+        // ⌘ still belongs to the Mac, arrows included.
+        XCTAssertNil(VimKey(event: try event(Cursor.right, .command)))
+    }
+
+    func testOptionArrowsMoveByWordAndParagraphInNormalMode() throws {
+        let harness = try makeHarness("alpha beta gamma\nsecond line here\nthird")
+
+        harness.type("<A-Right>")
+        XCTAssertEqual(harness.caret, 6)        // beta, exactly as `w` lands
+        harness.type("2<A-Right>")
+        XCTAssertEqual(harness.caret, 17)       // second, on the next line
+        harness.type("<A-Left>")
+        XCTAssertEqual(harness.caret, 11)       // back to gamma, as `b` does
+        harness.type("2<A-Left>")
+        XCTAssertEqual(harness.caret, 0)
+
+        // A plain arrow is still h/j/k/l.
+        harness.type("<Right>")
+        XCTAssertEqual(harness.caret, 1)
+        harness.type("<Down>")
+        XCTAssertEqual(harness.caret, 18)
+        harness.type("<Up><Left>")
+        XCTAssertEqual(harness.caret, 0)
+    }
+
+    func testOptionUpAndDownMoveByParagraph() throws {
+        let harness = try makeHarness("one\n\ntwo\n\nthree")
+
+        harness.type("<A-Down>")
+        XCTAssertEqual(harness.caret, 4)        // the blank line, as `}` lands
+        harness.type("<A-Down>")
+        XCTAssertEqual(harness.caret, 9)
+        harness.type("2<A-Up>")
+        XCTAssertEqual(harness.caret, 0)
+    }
+
+    func testAnOperatorTakesAnOptionArrowAsItsMotion() throws {
+        let harness = try makeHarness("alpha beta gamma")
+
+        harness.type("d<A-Right>")
+        XCTAssertEqual(harness.string, "beta gamma")
+        harness.type("$d<A-Left>")
+        XCTAssertEqual(harness.string, "beta a")
+    }
+
+    func testHomeAndEndGoToTheEndsOfTheLine() throws {
+        let harness = try makeHarness("    alpha beta\nsecond")
+
+        harness.type("<End>")
+        XCTAssertEqual(harness.caret, 13)       // on the last character, as `$`
+        harness.type("<Home>")
+        XCTAssertEqual(harness.caret, 0)        // the line's start, as `0` — not `^`
+
+        harness.type("j<End>")
+        XCTAssertEqual(harness.caret, 20)
+        harness.type("<Home>")
+        XCTAssertEqual(harness.caret, 15)
+
+        // And an operator takes them: `d<End>` is `d$`.
+        harness.type("<Home>d<End>")
+        XCTAssertEqual(harness.string, "    alpha beta\n")
+    }
+
+    func testThePageKeysMoveTheWayControlFAndControlBDo() throws {
+        let lines = (1...40).map { "line \($0)" }.joined(separator: "\n")
+        let paged = try makeHarness(lines)
+        let control = try makeHarness(lines)
+
+        paged.type("<PageDown>")
+        control.type("<C-f>")
+        XCTAssertEqual(paged.caret, control.caret)
+        XCTAssertGreaterThan(paged.caret, 0)
+
+        paged.type("<PageUp>")
+        control.type("<C-b>")
+        XCTAssertEqual(paged.caret, control.caret)
+        XCTAssertEqual(paged.caret, 0)
+    }
+
+    func testTheMacsCursorKeysExtendAVisualSelection() throws {
+        let harness = try makeHarness("alpha beta gamma\nsecond line here")
+
+        harness.type("v<A-Right>")
+        XCTAssertEqual(harness.view.selectedRange(), NSRange(location: 0, length: 7))
+        harness.type("<End>")
+        XCTAssertEqual(harness.view.selectedRange(), NSRange(location: 0, length: 16))
+        harness.type("<Home>")
+        XCTAssertEqual(harness.view.selectedRange(), NSRange(location: 0, length: 1))
+        harness.type("<Esc>")
+
+        // Linewise visual takes them too: ⌥↓ is `}`.
+        let lined = try makeHarness("one\ntwo\n\nthree")
+        lined.type("V<A-Down>")
+        XCTAssertEqual(lined.view.selectedRange(), NSRange(location: 0, length: 9))
+        lined.type("d")
+        XCTAssertEqual(lined.string, "three")
+    }
+
+    /// ⌘-arrows are never the engine's: it declines them and `NSTextView`
+    /// does what it does everywhere else on the Mac. What vim has to add is
+    /// only the clamp — normal mode never sits past the last character — and
+    /// the column the next `j` aims for.
+    func testCommandArrowsStayTheMacsAndLeaveTheCaretWhereVimCanUseIt() throws {
+        let harness = try makeHarness("alpha beta\nsecond line here\nthird one")
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView?.addSubview(harness.view)
+        window.makeFirstResponder(harness.view)
+        window.makeKeyAndOrderFrontOffscreen()
+        defer { window.orderOut(nil) }
+
+        harness.type("j")                       // the middle line, at 11
+        harness.press(keyCode: Cursor.right, flags: .command, characters: Cursor.rightCharacter)
+        XCTAssertEqual(harness.caret, 26, "⌘→ sits on the line's last character")
+
+        harness.press(keyCode: Cursor.left, flags: .command, characters: Cursor.leftCharacter)
+        XCTAssertEqual(harness.caret, 11, "⌘← the line's start")
+
+        // The column the caret was left in is the one `j` and `k` aim for.
+        harness.press(keyCode: Cursor.right, flags: .command, characters: Cursor.rightCharacter)
+        harness.type("k")
+        XCTAssertEqual(harness.caret, 9, "the short line's last column, not its first")
+        harness.type("j")
+        XCTAssertEqual(harness.caret, 26)
+
+        harness.press(keyCode: Cursor.down, flags: .command, characters: Cursor.downCharacter)
+        XCTAssertEqual(harness.caret, 36, "⌘↓ the end of the note")
+        harness.press(keyCode: Cursor.up, flags: .command, characters: Cursor.upCharacter)
+        XCTAssertEqual(harness.caret, 0, "⌘↑ the start of it")
     }
 
     // MARK: - Editing

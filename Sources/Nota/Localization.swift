@@ -131,7 +131,7 @@ enum L10n {
         "Window": "窗口",
         "Minimize": "最小化",
         "Zoom": "缩放",
-        "Go to Tab…": "跳转到标签页…",
+        "Tabs Dialog": "标签页对话框",
         "Next Tab": "下一个标签页",
         "Previous Tab": "上一个标签页",
         "Add new tab": "添加新标签页",
@@ -142,6 +142,9 @@ enum L10n {
         "No tabs": "没有标签页",
         "No headings": "没有标题",
         "No bookmarks": "没有书签",
+        "Search all notes": "搜索所有笔记",
+        "Type to search all notes": "输入以搜索所有笔记",
+        "No results": "没有结果",
         "Find in note": "在笔记中查找",
     ]
 }

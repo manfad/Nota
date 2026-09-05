@@ -24,6 +24,10 @@ extension VimKey {
         case .down: body = "Down"
         case .left: body = "Left"
         case .right: body = "Right"
+        case .home: body = "Home"
+        case .end: body = "End"
+        case .pageUp: body = "PageUp"
+        case .pageDown: body = "PageDown"
         }
         var modifiers = ""
         if control { modifiers += "C-" }

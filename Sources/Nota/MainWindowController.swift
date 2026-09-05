@@ -246,11 +246,6 @@ final class MainWindowController: NSWindowController {
     private lazy var installedSidebarSide: SidebarSide = preferences.sidebarSide
 
     private let tabPicker = TabPickerPanel()
-    private let searchField = NSSearchField()
-    private let searchResults = SearchResultsPanel()
-    private var searchWorkItem: DispatchWorkItem?
-    private var tabBarTrailingToEdge: NSLayoutConstraint?
-    private var tabBarTrailingToSearch: NSLayoutConstraint?
 
     /// The footer, lualine style: the vim badge and its pending keys on the
     /// left, the counts centred, the caret's line:col on the right.
@@ -494,16 +489,6 @@ final class MainWindowController: NSWindowController {
         tabBar.onPointerExited = { [weak self] in self?.scheduleTabBarOverlayHide() }
         workspace.addSubview(tabBar)
 
-        searchField.translatesAutoresizingMaskIntoConstraints = false
-        searchField.controlSize = .small
-        searchField.font = .systemFont(ofSize: 11)
-        searchField.placeholderString = "Search all notes"
-        searchField.delegate = self
-        searchField.isHidden = true
-        searchField.sendsWholeSearchString = false
-        searchField.sendsSearchStringImmediately = false
-        workspace.addSubview(searchField)
-        searchResults.delegate = self
         tabPicker.delegate = self
 
         configureTextView()
@@ -602,10 +587,6 @@ final class MainWindowController: NSWindowController {
             tabBarHotZone.trailingAnchor.constraint(equalTo: workspace.trailingAnchor),
             tabBarHotZone.heightAnchor.constraint(equalToConstant: Layout.zenTopInset),
 
-            searchField.trailingAnchor.constraint(equalTo: workspace.trailingAnchor, constant: -12),
-            searchField.centerYAnchor.constraint(equalTo: tabBar.centerYAnchor),
-            searchField.widthAnchor.constraint(equalToConstant: 220),
-
             workspaceSplit.leadingAnchor.constraint(equalTo: workspace.leadingAnchor),
             workspaceSplit.trailingAnchor.constraint(equalTo: workspace.trailingAnchor),
             scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -669,13 +650,9 @@ final class MainWindowController: NSWindowController {
         )
         applyFooterVisibility()
 
-        tabBarTrailingToEdge = tabBar.trailingAnchor.constraint(
+        tabBar.trailingAnchor.constraint(
             equalTo: workspace.trailingAnchor, constant: -8
-        )
-        tabBarTrailingToSearch = tabBar.trailingAnchor.constraint(
-            equalTo: searchField.leadingAnchor, constant: -8
-        )
-        tabBarTrailingToEdge?.isActive = true
+        ).isActive = true
 
         tabBarLeading = tabBar.leadingAnchor.constraint(
             equalTo: workspace.leadingAnchor, constant: Layout.trafficLightInset
@@ -3104,8 +3081,6 @@ extension MainWindowController {
         // not — `:` has to work in zen mode.
         applyTopChrome()
 
-        if enabled, !searchField.isHidden { endSearchAllNotes() }
-
         // The gutter comes and goes with zen, and the margins with it — every
         // tab's paragraph style carries the right margin, so restyle them all.
         preferencesChanged()
@@ -3622,6 +3597,13 @@ extension MainWindowController: TabPickerPanelDelegate {
 
     func tabPicker(_ picker: TabPickerPanel, didRemoveBookmark path: String) {
         removeBookmark(path: path)
+    }
+
+    /// ⇧⌘F's list: the hit's tab comes forward with the match selected.
+    func tabPicker(
+        _ picker: TabPickerPanel, didChooseSearchMatch match: NoteSearchMatch, query: String
+    ) {
+        reveal(match, query: query)
     }
 }
 
@@ -4364,66 +4346,25 @@ extension MainWindowController: ImageSidebarViewDelegate {
 
 extension MainWindowController {
 
-    /// ⇧⌘F. The per-note find bar (⌘F) is untouched.
+    /// ⇧⌘F. The ⌘P panel again, in its search mode: the query runs over every
+    /// open tab's text and each row is a hit. The per-note find bar (⌘F) is
+    /// untouched.
     func beginSearchAllNotes() {
+        guard let window else { return }
         showWindow(nil)
-        searchField.isHidden = false
-        tabBarTrailingToEdge?.isActive = false
-        tabBarTrailingToSearch?.isActive = true
-        window?.makeFirstResponder(searchField)
-        searchField.currentEditor()?.selectAll(nil)
-        runSearch()
-    }
-
-    func endSearchAllNotes() {
-        searchWorkItem?.cancel()
-        searchWorkItem = nil
-        searchResults.hide()
-        searchField.stringValue = ""
-        searchField.isHidden = true
-        tabBarTrailingToSearch?.isActive = false
-        tabBarTrailingToEdge?.isActive = true
-        focusEditor()
-    }
-
-    fileprivate func scheduleSearch() {
-        searchWorkItem?.cancel()
-        let item = DispatchWorkItem { [weak self] in self?.runSearch() }
-        searchWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: item)
-    }
-
-    fileprivate func runSearch() {
-        guard let window, !searchField.isHidden else { return }
-        let query = searchField.stringValue
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            searchResults.hide()
-            return
-        }
         // The storage string, not the serialized text: an image is one
         // character there, so every range lines up with the text view.
-        let haystack = notes.map { (title: $0.title, text: $0.storage.string) }
-        searchResults.show(
-            matches: NoteSearch.matches(query: query, in: haystack),
-            below: searchField,
-            in: window
+        tabPicker.showSearch(
+            notes: notes.map { (title: $0.title, text: $0.storage.string) },
+            symbolNames: notes.map { FileKindIcon.symbolName(for: $0.fileURL) },
+            over: window
         )
     }
 
-    fileprivate func moveSearchSelection(by delta: Int) {
-        searchResults.moveSelection(by: delta)
-    }
-
-    fileprivate func commitSearchSelection() {
-        guard let match = searchResults.selectedMatch else { return }
-        reveal(match)
-    }
-
-    fileprivate func reveal(_ match: NoteSearchMatch) {
-        let query = searchField.stringValue
-        endSearchAllNotes()
-
+    /// Choosing a hit: switch to its tab, select the match and scroll it in.
+    fileprivate func reveal(_ match: NoteSearchMatch, query: String) {
         selectTab(at: match.tabIndex)
+        focusEditor()
         guard let storage = textView.textStorage else { return }
         let location = min(match.rangeInText.location, storage.length)
         let length = min(match.rangeInText.length, storage.length - location)
@@ -4434,40 +4375,6 @@ extension MainWindowController {
         let findBoard = NSPasteboard(name: .find)
         findBoard.clearContents()
         findBoard.setString(query, forType: .string)
-    }
-}
-
-extension MainWindowController: SearchResultsPanelDelegate {
-    func searchResultsPanel(_ panel: SearchResultsPanel, didChoose match: NoteSearchMatch) {
-        reveal(match)
-    }
-}
-
-extension MainWindowController: NSSearchFieldDelegate {
-    func controlTextDidChange(_ obj: Notification) {
-        scheduleSearch()
-    }
-
-    /// Arrow keys drive the list while the field keeps focus.
-    func control(
-        _ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector
-    ) -> Bool {
-        switch commandSelector {
-        case #selector(NSResponder.moveDown(_:)):
-            moveSearchSelection(by: 1)
-            return true
-        case #selector(NSResponder.moveUp(_:)):
-            moveSearchSelection(by: -1)
-            return true
-        case #selector(NSResponder.insertNewline(_:)):
-            commitSearchSelection()
-            return true
-        case #selector(NSResponder.cancelOperation(_:)):
-            endSearchAllNotes()
-            return true
-        default:
-            return false
-        }
     }
 }
 
@@ -4785,19 +4692,6 @@ extension MainWindowController: NSWindowDelegate {
 
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
         currentNote?.undoManager
-    }
-
-    func windowDidResize(_ notification: Notification) {
-        repositionSearchResults()
-    }
-
-    func windowDidMove(_ notification: Notification) {
-        repositionSearchResults()
-    }
-
-    private func repositionSearchResults() {
-        guard searchResults.isVisible, let window, !searchField.isHidden else { return }
-        searchResults.position(below: searchField, in: window)
     }
 }
 

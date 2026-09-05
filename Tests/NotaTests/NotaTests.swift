@@ -3792,6 +3792,9 @@ private final class RecordingHoverDelegate: TabPickerPanelDelegate {
     func tabPickerDidRequestBookmarkCurrentTab(_ picker: TabPickerPanel) {}
     func tabPicker(_ picker: TabPickerPanel, didChooseBookmark path: String) {}
     func tabPicker(_ picker: TabPickerPanel, didRemoveBookmark path: String) {}
+    func tabPicker(
+        _ picker: TabPickerPanel, didChooseSearchMatch match: NoteSearchMatch, query: String
+    ) {}
 }
 
 /// Sets up a real `NSWindow` around a tab strip so `TabItemView.mouseDown`

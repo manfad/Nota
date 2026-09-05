@@ -479,13 +479,16 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         hotKeyStack.spacing = 6
 
         let summon = row("Summon", control: hotKeyField, trailing: hotKeyStack)
+        // Settings… shares the top group with Summon: a group of its own
+        // would be headed "Nota", which reads as nothing on a Nota page.
+        let settings = row(ShortcutAction.settings.titleKey, control: recorder(for: .settings))
         var blocks: [NSView] = [
-            groupBox([summon]),
+            groupBox([summon, settings]),
             footnote("Summon brings Nota to the front from any app, even while it is hidden."),
             hotKeyWarning,
         ]
-        var rows = [summon]
-        for group in ShortcutAction.Group.allCases {
+        var rows = [summon, settings]
+        for group in ShortcutAction.Group.allCases where group != .nota {
             let commands = group.actions.map { action in
                 row(action.titleKey, control: recorder(for: action))
             }

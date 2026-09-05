@@ -108,7 +108,7 @@ enum ShortcutAction: String, CaseIterable, Codable {
         case .saveAs: "Save As…"
         case .bookmarkTab: "Bookmark This Tab"
         case .showBookmarks: "Show Bookmarks…"
-        case .goToTab: "Go to Tab…"
+        case .goToTab: "Tabs Dialog"
         case .nextTab: "Next Tab"
         case .previousTab: "Previous Tab"
         case .find: "Find…"
