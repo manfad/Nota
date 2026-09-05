@@ -722,8 +722,12 @@ final class TabBarView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         // Overlaying the document rather than sitting in the title bar: the
         // strip brings its own ground and a hairline to stand on.
+        // The editor's own ground, not the window's: the strip normally sits
+        // over the document with nothing painted behind it, and the
+        // revealed one must look the same, with only the hairline saying
+        // it is floating.
         if drawsOpaqueBackground {
-            NSColor.windowBackgroundColor.setFill()
+            NSColor.textBackgroundColor.setFill()
             NSBezierPath(rect: bounds).fill()
             NSColor.separatorColor.setFill()
             NSBezierPath(rect: NSRect(x: 0, y: 0, width: bounds.width, height: 1)).fill()

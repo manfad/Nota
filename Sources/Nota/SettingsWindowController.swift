@@ -449,9 +449,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             blocks: [
                 groupBox(master),
                 groupBox(parts),
-                footnote(
-                    "The keys — ⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W — all keep working even with the tab bar and its buttons hidden. Auto-hide brings the strip back when the pointer reaches the window's top edge."
-                ),
             ],
             rows: master + parts
         )

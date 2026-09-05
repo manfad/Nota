@@ -2619,6 +2619,18 @@ final class NotaTests: XCTestCase {
     @MainActor
     func testZenModeTogglesAndRestores() throws {
         _ = NSApplication.shared
+        // The chrome must be up to begin with, whatever an interrupted run
+        // left in the test defaults.
+        let prefs = Preferences.shared
+        let originals = (prefs.hidesTabBar, prefs.autoHidesTabBar, prefs.hidesTrafficLights)
+        defer {
+            prefs.hidesTabBar = originals.0
+            prefs.autoHidesTabBar = originals.1
+            prefs.hidesTrafficLights = originals.2
+        }
+        prefs.hidesTabBar = false
+        prefs.autoHidesTabBar = false
+        prefs.hidesTrafficLights = false
         let directory = try makeTemporaryDirectory()
         let controller = MainWindowController(store: SessionStore(directory: directory))
         let window = try XCTUnwrap(controller.window)

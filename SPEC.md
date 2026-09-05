@@ -107,9 +107,9 @@
   `NSSwitch` rather than a checkbox, and a quiet footnote under the group where one is owed. **General**
   — language, theme ("System Default follows the Mac."). **Appearance** — font family, size, line
   spacing, editor padding. **Tab bar** — a first group of "Show tab bar" and "Auto-hide tab bar", then a
-  second group for what the strip shows: Traffic lights, Bookmark button, Settings button, under a
-  footnote saying the keys (⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W) all keep working even with the tab bar and its
-  buttons hidden, and what auto-hide does. "Auto-hide tab bar" and "Traffic lights" are both greyed while
+  second group for what the strip shows: Traffic lights, Bookmark button, Settings button; no footnote —
+  the keys (⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W) all keep working with the strip and its buttons hidden, but the page
+  does not say so. "Auto-hide tab bar" and "Traffic lights" are both greyed while
   "Show tab bar" is off — turning the strip off already takes the lights with it, the way zen does, so
   there is nothing left for either row to do. Whenever the lights are gone from their corner, the strip
   takes their slot, starting at the same 12pt inset it uses beside a left sidebar; a tab torn off from it
@@ -122,8 +122,9 @@
 - **Auto-hide tab bar** (Settings › Tab bar, default off): the strip and the traffic lights
   leave the layout exactly as "Hide tab bar" takes them — the split runs to the top of the window and the
   editor keeps the same 28pt drag band — but the top 28pt of the window is a hot zone. The pointer reaching
-  it slides the strip in over the split (0.15s, alpha and a slide down from its own height), opaque, with a
-  `separatorColor` hairline along its bottom edge; nothing is pushed down for it. The traffic lights come
+  it slides the strip in over the split (0.15s, alpha and a slide down from its own height), opaque in the
+  editor's own `textBackgroundColor` so it looks exactly like the strip in its normal place, with only a
+  `separatorColor` hairline along its bottom edge to say it is floating; nothing is pushed down for it. The traffic lights come
   back with it, plain show, and the strip's leading inset switches from 12pt back to 82pt to clear them —
   unless "Hide traffic lights" is also on, in which case the lights stay off and the strip keeps the 12pt
   inset through the reveal. The pointer leaving the strip or the band starts a 0.3s grace period, after
