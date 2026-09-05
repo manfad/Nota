@@ -60,7 +60,7 @@ final class HTMLPreviewTests: XCTestCase {
         XCTAssertEqual(PreviewContentKind(makeNote(named: "notes.md", text: "")), .markdown)
         XCTAssertEqual(PreviewContentKind(makeNote(named: "paper.tex", text: "")), .latex)
 
-        let column = PreviewPaneView(zenTopInset: 28)
+        let column = PreviewPaneView(dragBandHeight: 12)
         column.bringForward(makeNote(named: "page.html", text: ""))
         XCTAssertEqual(column.panes.kind, .html)
         XCTAssertFalse(column.panes.html.isHidden)
@@ -431,7 +431,7 @@ final class HTMLPreviewTests: XCTestCase {
         XCTAssertNil(Note.viewerKind(URL(fileURLWithPath: "/tmp/logo.svg")),
                      "and never a picture tab, whatever the system files it under")
 
-        let column = PreviewPaneView(zenTopInset: 28)
+        let column = PreviewPaneView(dragBandHeight: 12)
         column.bringForward(drawing)
         XCTAssertEqual(column.panes.kind, .html)
     }

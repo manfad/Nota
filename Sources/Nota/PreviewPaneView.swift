@@ -47,7 +47,7 @@ final class PreviewPaneView: NSView {
     /// constraints, whatever the column happens to be holding.
     private let contentContainer = NSView()
     private let zenDragRegion = DragRegionView()
-    private let zenTopInset: CGFloat
+    private let dragBandHeight: CGFloat
     private var contentTopToPane: NSLayoutConstraint?
     private var contentTopToZenInset: NSLayoutConstraint?
 
@@ -100,8 +100,8 @@ final class PreviewPaneView: NSView {
     }
 
     /// Zen keeps the split, so in zen the column's top edge is the window's
-    /// own: it takes the same drop clear of the traffic lights the editor
-    /// beside it takes, and carries a drag strip there.
+    /// own: the content runs right up to it, as the editor beside it does,
+    /// and a thin drag strip lies over the top of it.
     var isZenMode = false {
         didSet {
             guard isZenMode != oldValue else { return }
@@ -113,8 +113,8 @@ final class PreviewPaneView: NSView {
 
     // MARK: - Building
 
-    init(zenTopInset: CGFloat) {
-        self.zenTopInset = zenTopInset
+    init(dragBandHeight: CGFloat) {
+        self.dragBandHeight = dragBandHeight
         super.init(frame: .zero)
 
         contentContainer.translatesAutoresizingMaskIntoConstraints = false
@@ -134,15 +134,13 @@ final class PreviewPaneView: NSView {
             zenDragRegion.topAnchor.constraint(equalTo: topAnchor),
             zenDragRegion.leadingAnchor.constraint(equalTo: leadingAnchor),
             zenDragRegion.trailingAnchor.constraint(equalTo: trailingAnchor),
-            zenDragRegion.heightAnchor.constraint(equalToConstant: zenTopInset),
+            zenDragRegion.heightAnchor.constraint(equalToConstant: dragBandHeight),
         ])
 
-        // Under the tab strip normally; clear of the traffic-light zone in
-        // zen, where there is no strip and the column runs to the frame.
+        // Under the tab strip normally, and at the very top in zen, where
+        // there is no strip and the column runs to the frame.
         contentTopToPane = contentContainer.topAnchor.constraint(equalTo: topAnchor)
-        contentTopToZenInset = contentContainer.topAnchor.constraint(
-            equalTo: topAnchor, constant: zenTopInset
-        )
+        contentTopToZenInset = contentContainer.topAnchor.constraint(equalTo: topAnchor)
         contentTopToPane?.isActive = true
 
         forEachContent { $0.isHidden = $0 !== markdownContent }

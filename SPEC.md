@@ -122,7 +122,7 @@
   is the page it opens on next time, for the life of the window.
 - **Auto-hide tab bar** (Settings › Tab bar, default off): the strip and the traffic lights
   leave the layout exactly as "Hide tab bar" takes them — the split runs to the top of the window and the
-  editor keeps the same 28pt drag band — but the top 28pt of the window is a hot zone. The pointer reaching
+  document with it, a 12pt drag band lying over its top padding — but the top 28pt of the window is a hot zone. The pointer reaching
   it slides the strip in over the split (0.15s, alpha and a slide down from its own height), opaque in the
   editor's own `textBackgroundColor` and with no hairline under it, so it looks exactly like the strip in its
   normal place; nothing is pushed down for it. The traffic lights come
@@ -228,8 +228,8 @@
 - Zen takes the chrome and leaves the columns: the tab strip, status bar, gutter, image sidebar and both mode controls
   go, and the mode the tab is in does not change. Split keeps both panes side by side, at the divider they were left at;
   the editor mode is the text alone; reading is the render alone. In split each column's top edge is then the window's
-  own, so both take the same 28pt drop clear of the traffic-light zone, both carry a drag strip there, and both use zen's
-  wider 40pt margin, so the two bodies of text line up. Coming out of zen brings the chrome back and nothing else.
+  own: nothing is held back for the traffic lights (they are gone), a 12pt drag band lies over each column's top
+  padding, and both use zen's wider 40pt margin, so the two bodies of text line up. Coming out of zen brings the chrome back and nothing else.
 - Per tab, not per app: ⇧⌘P sets the mode of the tab in front only, and switching tabs lays out for the tab you land on —
   a new ⌘T tab and a freshly opened file start in the editor. The mode rides in `session.json`, so each tab comes back the
   way it was left (a session written when the pane was a yes/no comes back split where it was open).

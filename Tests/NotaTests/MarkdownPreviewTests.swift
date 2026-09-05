@@ -2894,10 +2894,10 @@ final class MarkdownPreviewTests: XCTestCase {
     }
 
     /// Zen keeps the split, so the render column is now a column whose top
-    /// edge is the window's own. It takes the same drop the editor takes, so
-    /// the page does not start under the traffic-light zone and the two
-    /// columns' text lines up, and it gets a drag band of its own so the
-    /// window can still be moved by that edge.
+    /// edge is the window's own. It runs right up to it, as the editor
+    /// beside it does — nothing is held back for the traffic lights, which
+    /// zen takes away — and it gets a thin drag band of its own over its
+    /// padding so the window can still be moved by that edge.
     @MainActor
     func testZenGivesTheRenderColumnTheSameTopBandAsTheEditor() throws {
         _ = NSApplication.shared
@@ -2907,12 +2907,13 @@ final class MarkdownPreviewTests: XCTestCase {
         let pane = try XCTUnwrap(previewItem(of: controller)?.viewController.view)
         window.layoutIfNeeded()
 
-        // 28pt is the zen top inset; nothing else in the column is that tall.
+        // 12pt is the drag band; nothing else in the column is that short.
         let bands = pane.subviews.filter {
-            abs($0.frame.height - 28) < 0.5 && $0.mouseDownCanMoveWindow
+            abs($0.frame.height - 12) < 0.5 && $0.mouseDownCanMoveWindow
         }
         XCTAssertEqual(bands.count, 1, "one drag band over the render column")
-        XCTAssertTrue(bands[0].isHidden, "away while there is a tab strip to drag by")
+        let band = try XCTUnwrap(bands.first)
+        XCTAssertTrue(band.isHidden, "away while there is a tab strip to drag by")
 
         controller.toggleZenMode()
         window.layoutIfNeeded()
@@ -2923,9 +2924,9 @@ final class MarkdownPreviewTests: XCTestCase {
         let previewTop = preview.convert(preview.bounds, to: content).maxY
         XCTAssertEqual(previewTop, editorTop, accuracy: 0.5,
                        "both columns start on the same line in zen")
-        XCTAssertEqual(content.bounds.maxY - previewTop, 28, accuracy: 0.5,
-                       "and clear of the traffic-light zone, not hard against the frame")
-        XCTAssertFalse(bands[0].isHidden, "the window still drags by the render's top edge")
+        XCTAssertEqual(content.bounds.maxY - previewTop, 0, accuracy: 0.5,
+                       "hard against the frame: the document takes the whole window")
+        XCTAssertFalse(band.isHidden, "the window still drags by the render's top edge")
         XCTAssertEqual(controller.previewHorizontalInset, controller.horizontalTextInset,
                        "the margins match, so the two bodies of text line up")
 
@@ -2935,7 +2936,7 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(preview.convert(preview.bounds, to: content).maxY,
                        strip.convert(strip.bounds, to: content).minY, accuracy: 0.5,
                        "and back under the strip when the chrome returns")
-        XCTAssertTrue(bands[0].isHidden)
+        XCTAssertTrue(band.isHidden)
     }
 
     /// Zen in reading mode is the render on its own — the chrome goes, the

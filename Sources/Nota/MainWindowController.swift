@@ -16,9 +16,14 @@ final class MainWindowController: NSWindowController {
         static let statusInset: CGFloat = 16
         static let editorTrailingGap: CGFloat = 4
         static let statusBarHeight: CGFloat = 26
-        /// Keeps zen-mode text clear of the traffic-light zone. An
-        /// auto-hiding strip watches this same band for the pointer.
+        /// The band along the top of the window an auto-hiding strip
+        /// watches for the pointer.
         static let zenTopInset: CGFloat = 28
+        /// With the strip gone the document runs to the very top of the
+        /// window — nothing is held back for the traffic lights, which are
+        /// gone too — and this thin band over the editor's own padding is
+        /// what the window is still dragged by.
+        static let hiddenStripDragBand: CGFloat = 12
         /// How long an auto-hidden strip takes to slide in or out, and how
         /// long it waits after the pointer leaves before it starts.
         static let tabBarOverlaySlide: TimeInterval = 0.15
@@ -154,7 +159,7 @@ final class MainWindowController: NSWindowController {
     /// The preview column itself: one host holding one content view at a time
     /// — the render for a Markdown tab, the document for a PDF, and whatever
     /// comes after them. Nothing out here knows which.
-    private let previewColumn = PreviewPaneView(zenTopInset: Layout.zenTopInset)
+    private let previewColumn = PreviewPaneView(dragBandHeight: Layout.hiddenStripDragBand)
     private var previewItem: NSSplitViewItem?
     private var editorItem: NSSplitViewItem?
     private var previewWorkItem: DispatchWorkItem?
@@ -594,7 +599,7 @@ final class MainWindowController: NSWindowController {
             zenDragRegion.topAnchor.constraint(equalTo: content.topAnchor),
             zenDragRegion.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             zenDragRegion.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            zenDragRegion.heightAnchor.constraint(equalToConstant: Layout.zenTopInset),
+            zenDragRegion.heightAnchor.constraint(equalToConstant: Layout.hiddenStripDragBand),
 
             separator.leadingAnchor.constraint(equalTo: workspace.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: workspace.trailingAnchor),
@@ -680,9 +685,10 @@ final class MainWindowController: NSWindowController {
         workspaceSplitTopToTabBar?.isActive = true
 
         editorTopToContent = scrollView.topAnchor.constraint(equalTo: content.topAnchor)
-        editorTopToZenInset = scrollView.topAnchor.constraint(
-            equalTo: content.topAnchor, constant: Layout.zenTopInset
-        )
+        // The same edge as with the strip: the document takes the whole
+        // window once the strip is gone, and the drag band lies over its
+        // padding rather than pushing it down.
+        editorTopToZenInset = scrollView.topAnchor.constraint(equalTo: content.topAnchor)
         scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor).isActive = true
         editorTopToContent?.isActive = true
         applyStatusBarLayout()
