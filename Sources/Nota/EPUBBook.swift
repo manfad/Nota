@@ -293,19 +293,20 @@ final class EPUBBook {
         return lines
     }
 
-    // MARK: - What the switcher lists
+    // MARK: - What the sidebar lists
 
-    /// The contents as the ⌘P switcher's `@` list wants them: a heading per
-    /// line, the nesting as the level, and the entry's own place in the list
-    /// as the location — which is what comes back when one is chosen, since a
-    /// book has no text for a location to be an offset into.
-    var tocHeadings: [MarkdownHeadings.Heading] {
+    /// The contents as the sidebar's list wants them: a line per entry, the
+    /// nesting as the level, and the entry's own place in the list as the
+    /// line — which is what comes back when one is chosen, since a book has
+    /// no text for an offset to point into. An entry the contents left
+    /// unnamed is called after the file it points at rather than nothing.
+    var contentsEntries: [ContentsEntry] {
         contents.enumerated().map { entry in
-            MarkdownHeadings.Heading(
+            ContentsEntry(
                 level: max(1, entry.element.level),
-                text: entry.element.title.isEmpty
+                title: entry.element.title.isEmpty
                     ? entry.element.url.lastPathComponent : entry.element.title,
-                location: entry.offset
+                line: entry.offset
             )
         }
     }
@@ -318,6 +319,16 @@ final class EPUBBook {
               let chapter = contents[index].chapterIndex
         else { return nil }
         return (chapter, contents[index].fragment)
+    }
+
+    /// Which line of the contents names a chapter — the first entry pointing
+    /// at it, which is the chapter's own line rather than a section inside
+    /// it. That is the line the sidebar rings while the chapter is on screen.
+    /// `nil` for a chapter the contents never mention, which a book with a
+    /// partial table of contents has: nothing is rung rather than the wrong
+    /// thing.
+    func contentsLine(ofChapter index: Int) -> Int? {
+        contents.firstIndex { $0.chapterIndex == index }
     }
 
     // MARK: - XML

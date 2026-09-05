@@ -126,6 +126,26 @@ class RenderedPreviewView: NSView, PreviewContent {
         }
     }
 
+    /// Files let go on the render, on its own margins, or on the scroller
+    /// beside it. All three land in the same place, since all three are the
+    /// column and the column is a tab target.
+    var onDropFiles: (([URL]) -> Void)? {
+        get { textView.onDropFiles }
+        set { textView.onDropFiles = newValue }
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        PreviewFileDrop.accept(sender, by: onDropFiles)
+    }
+
     private static let verticalInset: CGFloat = 14
 
     override init(frame frameRect: NSRect) {
@@ -170,6 +190,12 @@ class RenderedPreviewView: NSView, PreviewContent {
         ]
         textView.onClick = { [weak self] index in self?.clicked(at: index) }
         textView.onCheckboxClick = { [weak self] index in self?.tickedTask(at: index) }
+        // A file let go on the render is a tab, not something to put in the
+        // text: the render is a view of the note, never a second place to
+        // edit it. The text view is what the drag actually lands on, so it is
+        // registered as well as the pane around it.
+        textView.registerForDraggedTypes(PreviewFileDrop.types)
+        registerForDraggedTypes(PreviewFileDrop.types)
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
@@ -456,6 +482,10 @@ private final class PreviewTextView: NSTextView {
     /// click is a jump to source, false in Reading, where it is an ordinary
     /// click in an ordinary text view.
     var sendsBlockClicks = true
+    /// Files let go on the render. It is the pane's business what happens to
+    /// them, not this view's: nothing goes into a render, since a render is
+    /// not a note.
+    var onDropFiles: (([URL]) -> Void)?
 
     /// The rendered range of the block being pointed at, if any.
     var highlightedRange: NSRange? {
@@ -480,6 +510,30 @@ private final class PreviewTextView: NSTextView {
         }
         guard let action = NSTextFinder.Action(rawValue: item.tag) else { return false }
         return TextFindSession.handles(action)
+    }
+
+    // MARK: - Dropped files
+
+    /// A drag carrying files is the column's, whatever the text view would
+    /// otherwise make of it; anything else is still the text view's own.
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let operation = PreviewFileDrop.operation(for: sender)
+        return operation.isEmpty ? super.draggingEntered(sender) : operation
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let operation = PreviewFileDrop.operation(for: sender)
+        return operation.isEmpty ? super.draggingUpdated(sender) : operation
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        PreviewFileDrop.operation(for: sender).isEmpty
+            ? super.prepareForDragOperation(sender) : true
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        PreviewFileDrop.accept(sender, by: onDropFiles) || super.performDragOperation(sender)
     }
 
     override func mouseDown(with event: NSEvent) {

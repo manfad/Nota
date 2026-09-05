@@ -31,9 +31,27 @@ final class ImagePreviewView: NSView, PreviewContent {
     /// reading the bytes again would be reading them for nothing.
     private var shownPath: String?
 
+    /// Files let go on the picture. A picture tab has no text to put one in,
+    /// so a picture dropped here is a picture tab of its own — the same thing
+    /// the strip does with it.
+    var onDropFiles: (([URL]) -> Void)?
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        PreviewFileDrop.accept(sender, by: onDropFiles)
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        registerForDraggedTypes(PreviewFileDrop.types)
 
         // Pinned edge to edge, unlike the Markdown render's own margins. The
         // picture already has whatever margin its author drew into it, and a
@@ -56,6 +74,10 @@ final class ImagePreviewView: NSView, PreviewContent {
         // first frame.
         imageView.animates = true
         imageView.isEditable = false
+        // An image view takes a dropped picture as its own new content; this
+        // one is a view of a file and nothing else, so the drag goes past it
+        // to the pane, which opens the file as a tab.
+        imageView.unregisterDraggedTypes()
         canvas.addSubview(imageView)
         scrollView.documentView = canvas
 

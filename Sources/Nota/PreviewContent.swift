@@ -47,6 +47,24 @@ struct PreviewFooterStatus {
     let position: String?
 }
 
+/// One line of a document's own table of contents: a chapter of a book, an
+/// entry of a PDF's outline.
+///
+/// Flattened, with the nesting kept as a level rather than as a tree, because
+/// that is the shape the sidebar lists — an indent per level. Where the line
+/// goes is not written down here: `line` is the entry's own place in the
+/// list, and the content view it came from is the only thing that knows what
+/// that means. A book turns to a chapter and an anchor; a PDF goes to a
+/// destination on a page. The sidebar hands the number back and asks no
+/// questions about it.
+struct ContentsEntry: Equatable {
+    /// 1 for a top-level entry, 2 for one nested inside it, and so on.
+    let level: Int
+    let title: String
+    /// This entry's own index in the list it came in.
+    let line: Int
+}
+
 /// What the window hands a content view along with the note: the editor's own
 /// font, so a render matches the text beside it, the store its pictures come
 /// from, and whether the column is on screen at all — a render nobody can see
@@ -184,6 +202,63 @@ protocol PreviewContent: NSView {
     /// What the footer says instead of the editor's counts, when the content
     /// has something of its own to say.
     var footerStatus: PreviewFooterStatus? { get }
+
+    /// The content's own table of contents, flattened — a book's chapters, a
+    /// PDF's outline. Empty for content that has none, which is every kind
+    /// the reader can also edit: a note's outline is its headings, and those
+    /// are read off its text rather than out of the file.
+    var contentsEntries: [ContentsEntry] { get }
+
+    /// Which of those lines names what is on screen right now, so the sidebar
+    /// can ring it and follow along as the reader moves. `nil` when the
+    /// contents say nothing about where they are.
+    var currentContentsLine: Int? { get }
+
+    /// Goes where a line of those contents points. A line naming somewhere
+    /// the content cannot go is not gone to: the reader stays where they are
+    /// rather than landing somewhere arbitrary.
+    func goToContentsLine(_ line: Int)
+
+    /// Files let go on the content from the Finder. Every kind takes them and
+    /// every kind does the same thing with them — hands them straight up, to
+    /// be opened as tabs — so this is a requirement rather than something a
+    /// view may leave out: the whole render column is a tab target, and a new
+    /// kind of content that forgot would be a hole in it.
+    var onDropFiles: (([URL]) -> Void)? { get set }
+}
+
+// MARK: - Files let go on the column
+
+/// What every view in the render column does with a drag from the Finder.
+///
+/// The column is a tab target the way the strip is: a file let go anywhere
+/// over it opens as a tab, whatever is being read underneath. Nothing is
+/// filtered — `open(url:)` alone decides what each file becomes — and nothing
+/// lands *in* the content: there is no text here to put a picture in.
+///
+/// It is written once here because the views that have to answer are of five
+/// different superclasses — a text view, a web view, a PDF view and two plain
+/// ones — and each has to say it in an override of its own. The web view and
+/// the PDF view answer for these themselves otherwise, and both would take
+/// the file: WebKit by navigating away from the page, PDFKit by swapping the
+/// document. Neither may happen, so those two never see the drag at all.
+enum PreviewFileDrop {
+    /// The types a drop target in the column registers for.
+    static let types: [NSPasteboard.PasteboardType] = [.fileURL]
+
+    /// `.copy` for a drag carrying files, and nothing for any other drag —
+    /// which leaves the view free to answer for it as it always did.
+    static func operation(for sender: NSDraggingInfo) -> NSDragOperation {
+        sender.draggingPasteboard.draggedFileURLs.isEmpty ? [] : .copy
+    }
+
+    /// Hands the files over, and says whether there were any to hand over.
+    static func accept(_ sender: NSDraggingInfo, by handler: (([URL]) -> Void)?) -> Bool {
+        let urls = sender.draggingPasteboard.draggedFileURLs
+        guard !urls.isEmpty, let handler else { return false }
+        handler(urls)
+        return true
+    }
 }
 
 // MARK: - What a content view may leave out
@@ -266,4 +341,10 @@ extension PreviewContent {
     var rememberedScroll: Double? { nil }
 
     var footerStatus: PreviewFooterStatus? { nil }
+
+    var contentsEntries: [ContentsEntry] { [] }
+
+    var currentContentsLine: Int? { nil }
+
+    func goToContentsLine(_ line: Int) { }
 }

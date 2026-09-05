@@ -222,17 +222,32 @@ final class Note {
     /// than one window open, only that window reacts.
     var onFileChanged: (() -> Void)?
 
+    /// For each chip that came from an ordinary relative Markdown link in the
+    /// file — `![](pics/a.png)`, the sidecar's own links included — the path
+    /// the file spelled it with. Saving writes that same link back, so a
+    /// picture is never quietly moved out of the folder its author chose.
+    /// A chip with nothing here goes into `<name>.assets/` on the next save.
+    var sidecarPaths: [String: String] = [:]
+    /// The folder those paths are relative to. Saving anywhere else makes
+    /// every one of them meaningless, so Save As out of the folder starts a
+    /// sidecar of its own.
+    var sidecarBaseDirectory: URL?
+
     init(id: UUID = UUID(), fileURL: URL?, untitledName: String?, text: String,
          attributes: [NSAttributedString.Key: Any], assets: AssetStore?,
-         format: TextFileFormat = .default, kind: NoteKind = .text) {
+         format: TextFileFormat = .default, kind: NoteKind = .text,
+         importing: NoteText.RelativeImporter? = nil) {
         self.id = id
         self.fileURL = fileURL
         self.untitledName = untitledName
         self.format = format
         self.kind = kind
-        self.storage = NSTextStorage(
-            attributedString: NoteText.render(text, attributes: attributes, assets: assets)
+        let rendered = NoteText.render(
+            text, attributes: attributes, assets: assets, importing: importing
         )
+        self.storage = NSTextStorage(attributedString: rendered.text)
+        self.sidecarPaths = rendered.relativePaths
+        self.sidecarBaseDirectory = fileURL?.deletingLastPathComponent()
         // Read through `mutableString`, the storage's own live view of its
         // characters. Bridging `storage.string` would copy the file — two
         // hundred megabytes for a hundred-megabyte log — to scan it once.
@@ -428,9 +443,9 @@ final class Note {
     /// system files it under images all the same, so it is refused here by
     /// name and by type both.
     static func isImageFile(_ url: URL) -> Bool {
-        if url.pathExtension.caseInsensitiveCompare("svg") == .orderedSame { return false }
+        if TextFile.isDrawing(url) { return false }
         guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
-        return type.conforms(to: .image) && !type.conforms(to: .svg)
+        return type.conforms(to: .image)
     }
 
     /// Whether a file is one Nota opens in a tab at all. The bytes decide

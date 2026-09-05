@@ -65,12 +65,20 @@ final class PreviewPaneView: NSView {
     var onPositionChange: ((Int) -> Void)?
     var onZoomChange: ((CGFloat) -> Void)?
 
-    /// Files let go on the drag band the column carries in zen. Nothing to
-    /// do with the content in it, so the column only passes them on: the
-    /// window opens each one as a tab, the same as on the strip.
+    /// Files let go anywhere over the column — on the render, on the page, on
+    /// the document, on the picture, and on the drag band the column carries
+    /// in zen. Nothing to do with the content under them, so the column only
+    /// passes them on: the window opens each one as a tab, the same as on the
+    /// strip, and nothing is filtered on the way.
+    ///
+    /// It goes to every content view rather than the one in front, for the
+    /// reason the insets do: a view waiting behind another must already be
+    /// right when it comes forward.
     var onDropFiles: (([URL]) -> Void)? {
-        get { zenDragRegion.onDropFiles }
-        set { zenDragRegion.onDropFiles = newValue }
+        didSet {
+            zenDragRegion.onDropFiles = onDropFiles
+            forEachContent { $0.onDropFiles = onDropFiles }
+        }
     }
 
     // MARK: - What is true of the column
@@ -154,6 +162,7 @@ final class PreviewPaneView: NSView {
     private func install(_ content: any PreviewContent) {
         content.translatesAutoresizingMaskIntoConstraints = false
         content.horizontalInset = horizontalInset
+        content.onDropFiles = onDropFiles
         content.takesKeyboard = takesKeyboard
         content.sendsBlockClicks = sendsBlockClicks
         // A view behind the one in front has nothing to report: it is not on

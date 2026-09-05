@@ -25,6 +25,39 @@ enum NoteText {
         try? NSRegularExpression(pattern: pattern)
     }()
 
+    /// Any Markdown image at all — alt text and a target — for the one job
+    /// the strict token pattern cannot do: reading a file's own relative
+    /// links back as chips. A target holding `)` or a quote is not a plain
+    /// path and is left alone, which is also what keeps `![](a.png "title")`
+    /// out of it.
+    private static let linkPattern = "!\\[([^\\]\\n]*)\\]\\(([^)\"\\n]*)\\)"
+
+    private static let linkRegex: NSRegularExpression? = {
+        try? NSRegularExpression(pattern: linkPattern)
+    }()
+
+    /// What an ordinary relative image link in a file turns into, decided by
+    /// whoever owns the disk — `Sidecar.importer(forFileAt:assets:)`. Handed
+    /// in as a closure so this file stays pure and testable: it takes the
+    /// link target as the file spelled it and answers with the asset the
+    /// picture was imported as, plus the path that actually resolved, which
+    /// the note remembers so its next save writes the same link back.
+    typealias RelativeImporter = (_ linkTarget: String) -> (id: String, path: String)?
+
+    /// What one file's text became: the editor's attributed string, and the
+    /// relative path behind each chip that came from an ordinary link.
+    struct Rendered {
+        let text: NSAttributedString
+        /// Asset id → the relative path the file named it with.
+        let relativePaths: [String: String]
+    }
+
+    /// One picture found in the text: where it is, and which asset it is.
+    private struct ImageSpot {
+        let range: NSRange
+        let assetID: String
+    }
+
     static func token(for assetID: String) -> String {
         "![](\(scheme)\(assetID))"
     }
@@ -78,26 +111,52 @@ enum NoteText {
         attributes: [NSAttributedString.Key: Any],
         assets: AssetStore?
     ) -> NSAttributedString {
-        guard mayHoldToken(plain) else {
-            return NSAttributedString(string: plain, attributes: attributes)
+        render(plain, attributes: attributes, assets: assets, importing: nil).text
+    }
+
+    /// The same, for text that came out of a file the reader named.
+    ///
+    /// With an importer in hand, an ordinary relative Markdown link —
+    /// `![](pics/a.png)`, with any alt text or none — that resolves to a real
+    /// picture beside the file becomes a chip too, and the path it was
+    /// spelled with comes back in `relativePaths`. That is what makes a
+    /// Markdown file written anywhere else show its pictures here, and what
+    /// keeps them where their author put them on the way back out.
+    ///
+    /// Without one — an untitled note, the cache, a paste — nothing changes:
+    /// only `nota://` tokens are chips, exactly as before.
+    static func render(
+        _ plain: String,
+        attributes: [NSAttributedString.Key: Any],
+        assets: AssetStore?,
+        importing: RelativeImporter?
+    ) -> Rendered {
+        let plainResult = { Rendered(
+            text: NSAttributedString(string: plain, attributes: attributes),
+            relativePaths: [:]
+        ) }
+        guard mayHoldToken(plain) || (importing != nil && mayHoldLink(plain)) else {
+            return plainResult()
         }
+        let (spots, relativePaths) = imageSpots(in: plain, importing: importing)
+        guard !spots.isEmpty else { return plainResult() }
+
         let result = NSMutableAttributedString()
         let source = plain as NSString
         let font = attributes[.font] as? NSFont ?? .systemFont(ofSize: 13)
         var cursor = 0
         var imageNumber = 1
 
-        for match in matches(in: plain) {
-            if match.range.location > cursor {
-                let range = NSRange(location: cursor, length: match.range.location - cursor)
+        for spot in spots {
+            if spot.range.location > cursor {
+                let range = NSRange(location: cursor, length: spot.range.location - cursor)
                 result.append(NSAttributedString(
                     string: source.substring(with: range), attributes: attributes
                 ))
             }
-            let assetID = source.substring(with: match.range(at: 1))
             let attachment = NotaImageAttachment(
-                assetID: assetID,
-                isMissing: !(assets?.exists(assetID) ?? false),
+                assetID: spot.assetID,
+                isMissing: !(assets?.exists(spot.assetID) ?? false),
                 font: font,
                 index: imageNumber
             )
@@ -106,7 +165,7 @@ enum NoteText {
             // Keep the paragraph style so line spacing applies to image lines too.
             piece.addAttributes(attributes, range: NSRange(location: 0, length: piece.length))
             result.append(piece)
-            cursor = match.range.location + match.range.length
+            cursor = spot.range.location + spot.range.length
         }
 
         if cursor < source.length {
@@ -115,7 +174,65 @@ enum NoteText {
                 string: source.substring(with: range), attributes: attributes
             ))
         }
-        return result
+        return Rendered(text: result, relativePaths: relativePaths)
+    }
+
+    /// Every picture in the text, in document order.
+    ///
+    /// With no importer this is just the strict token matches, so the whole
+    /// of the old behaviour is the same code path it always was. With one,
+    /// the general image pattern is run instead and each match classified: an
+    /// empty alt over a `nota://` address is a token exactly as the strict
+    /// pattern reads it, an ordinary relative link is whatever the importer
+    /// makes of it, and everything else — a remote URL, a missing file — is
+    /// left as the text it is.
+    private static func imageSpots(
+        in plain: String, importing: RelativeImporter?
+    ) -> (spots: [ImageSpot], relativePaths: [String: String]) {
+        let source = plain as NSString
+        guard let importing, let linkRegex, mayHoldLink(plain) else {
+            return (matches(in: plain).map {
+                ImageSpot(range: $0.range, assetID: source.substring(with: $0.range(at: 1)))
+            }, [:])
+        }
+        var spots: [ImageSpot] = []
+        var relativePaths: [String: String] = [:]
+        let whole = NSRange(location: 0, length: source.length)
+
+        for match in linkRegex.matches(in: plain, range: whole) {
+            let alt = source.substring(with: match.range(at: 1))
+            let target = source.substring(with: match.range(at: 2))
+            if alt.isEmpty, let assetID = tokenAssetID(target) {
+                spots.append(ImageSpot(range: match.range, assetID: assetID))
+                continue
+            }
+            guard let found = importing(target) else { continue }
+            relativePaths[found.id] = found.path
+            spots.append(ImageSpot(range: match.range, assetID: found.id))
+        }
+        return (spots, relativePaths)
+    }
+
+    /// A link target that is a token's address and nothing else, read as
+    /// strictly as `pattern` reads the whole token.
+    private static func tokenAssetID(_ target: String) -> String? {
+        guard let id = assetID(fromTokenURL: target),
+              let assetIDRegex,
+              assetIDRegex.firstMatch(
+                  in: id, range: NSRange(location: 0, length: (id as NSString).length)
+              ) != nil
+        else { return nil }
+        return id
+    }
+
+    private static let assetIDRegex: NSRegularExpression? = {
+        try? NSRegularExpression(pattern: "^[A-Za-z0-9-]+\\.[A-Za-z0-9]+$")
+    }()
+
+    /// The cheap sweep `mayHoldToken` is, for the general pattern: no `![`
+    /// anywhere means no image link anywhere.
+    private static func mayHoldLink(_ plain: String) -> Bool {
+        plain.range(of: "![") != nil
     }
 
     // MARK: Attributed -> plain text
@@ -124,6 +241,21 @@ enum NoteText {
     /// An attachment Nota does not recognise is dropped rather than leaving a
     /// stray U+FFFC in the file.
     static func serialize(_ attributed: NSAttributedString) -> String {
+        serialize(attributed, sidecar: nil)
+    }
+
+    /// One chip's fate on the way into a named file: the link target to write
+    /// for it, or `nil` to leave the `nota://` token as it stands. Handed in
+    /// as a closure — `Sidecar.Writer.link(forAssetID:)` — so this file still
+    /// touches no disk.
+    typealias SidecarResolver = (_ assetID: String) -> String?
+
+    /// The same, for a note going into a file the reader named: each chip
+    /// becomes the ordinary relative link the resolver gives it, and the
+    /// resolver has put the picture there on the way past. An untitled note
+    /// and the cache pass no resolver and keep writing tokens, which is what
+    /// makes the store the truth until ⌘S.
+    static func serialize(_ attributed: NSAttributedString, sidecar: SidecarResolver?) -> String {
         // Nothing attached anywhere means the text *is* the file, so hand it
         // over rather than copying it out run by run. Bridging a text
         // storage's string takes a snapshot of it, so what comes back is not
@@ -134,7 +266,11 @@ enum NoteText {
 
         attributed.forEachAttachmentRun { value, range, _ in
             if let attachment = value as? NotaImageAttachment {
-                result += token(for: attachment.assetID)
+                if let link = sidecar?(attachment.assetID) {
+                    result += "![](\(link))"
+                } else {
+                    result += token(for: attachment.assetID)
+                }
             } else if value == nil {
                 result += source.substring(with: range)
             }

@@ -22,11 +22,6 @@ final class EPUBPreviewView: NSView, PreviewContent {
     /// apart into one — deleted while the tab was open, truncated, or missing
     /// by the time the session comes back.
     private let missingLabel = NSTextField(labelWithString: "")
-    /// Which chapter is being read, and the two ways to the neighbouring
-    /// ones. In the column's bottom-trailing corner, clear of the find pill's
-    /// stack at the top.
-    private let chapterBar = ChapterPill()
-
     /// The book behind the tab in front, and which tab that is — the page
     /// keeps its scroll under the tab's id, and a book is one tab however
     /// many chapters it has.
@@ -54,9 +49,29 @@ final class EPUBPreviewView: NSView, PreviewContent {
     var onPositionChange: ((Int) -> Void)?
     var onFindBarVisibilityChange: ((Bool) -> Void)?
 
+    /// Files let go on the chapter. The page below takes most of them, since
+    /// it fills the column; this answers for the rest of it — the corners the
+    /// find pill leaves clear, and the message where there is no book.
+    var onDropFiles: (([URL]) -> Void)? {
+        didSet { page.onDropFiles = onDropFiles }
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        PreviewFileDrop.accept(sender, by: onDropFiles)
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        registerForDraggedTypes(PreviewFileDrop.types)
 
         // Edge to edge, the same as the page it holds: a chapter lays out to
         // the viewport it is given, and its own body margin is already the
@@ -85,15 +100,6 @@ final class EPUBPreviewView: NSView, PreviewContent {
                 greaterThanOrEqualTo: leadingAnchor, constant: 20
             ),
         ])
-
-        // The other corner from ⌘F's stack, the one the external-change offer
-        // stands in: a chapter control is not a tool the reader opened, and it
-        // has to be able to stand there while a search is open.
-        chapterBar.floatBottom(
-            in: self, above: bottomAnchor, gap: PillView.gap * 2,
-            trailingInset: ModeControlOverlay.controlInset
-        )
-        chapterBar.onStep = { [weak self] step in self?.stepChapter(by: step) }
 
         // The page reports the keys a book is turned by rather than acting on
         // them: only this view knows what a chapter is.
@@ -162,14 +168,10 @@ final class EPUBPreviewView: NSView, PreviewContent {
         }
         missingLabel.isHidden = true
         page.isHidden = false
-        chapterBar.show(
-            title: chapter.title, index: chapterIndex, total: book.chapters.count
-        )
     }
 
     private func showMissing() {
         page.isHidden = true
-        chapterBar.setShown(false, animated: false)
         missingLabel.isHidden = false
         missingLabel.font = Preferences.shared.font()
         missingLabel.stringValue = missingName.map { "Couldn’t open “\($0)”." } ?? ""
@@ -184,7 +186,7 @@ final class EPUBPreviewView: NSView, PreviewContent {
     /// How many chapters there are, and none at all when there is no book.
     var chapterCount: Int { book?.chapters.count ?? 0 }
 
-    /// What the chapter on screen is called, for the tests and for the bar.
+    /// What the chapter on screen is called, for the footer and the tests.
     var chapterTitle: String? {
         guard let book, book.chapters.indices.contains(chapterIndex) else { return nil }
         return book.chapters[chapterIndex].title
@@ -206,19 +208,28 @@ final class EPUBPreviewView: NSView, PreviewContent {
         onPositionChange?(chapterIndex)
     }
 
-    /// The next chapter or the one before it — the chapter bar's two glyphs,
-    /// and `→` / `←` and a page key at the end of a chapter, which the page
-    /// reports rather than swallows. The ends of the book are the ends: there
-    /// is nothing before the first chapter or after the last.
+    /// The next chapter or the one before it — `→` / `←` and a page key at
+    /// the end of a chapter, which the page reports rather than swallows. The
+    /// ends of the book are the ends: there is nothing before the first
+    /// chapter or after the last.
     func stepChapter(by step: Int) {
         goToChapter(chapterIndex + step)
     }
 
-    /// A line of the book's own contents, chosen from `@` in the ⌘P switcher.
-    /// A line pointing at something the spine does not hold has nowhere to
-    /// go, and nothing happens.
-    func goToContentsLine(_ index: Int) {
-        guard let book, let destination = book.destination(ofContentsLine: index) else {
+    // MARK: - The book's own contents
+
+    /// What the sidebar lists for a book: its table of contents, flattened.
+    var contentsEntries: [ContentsEntry] { book?.contentsEntries ?? [] }
+
+    /// Which line names the chapter on screen — the chapter's own line rather
+    /// than a section inside it.
+    var currentContentsLine: Int? { book?.contentsLine(ofChapter: chapterIndex) }
+
+    /// A line of the book's own contents, chosen in the sidebar. A line
+    /// pointing at something the spine does not hold has nowhere to go, and
+    /// nothing happens.
+    func goToContentsLine(_ line: Int) {
+        guard let book, let destination = book.destination(ofContentsLine: line) else {
             return
         }
         goToChapter(destination.chapter, fragment: destination.fragment)
@@ -279,10 +290,9 @@ final class EPUBPreviewView: NSView, PreviewContent {
         set { page.zoom = newValue }
     }
 
-    /// The pane the chapter is drawn in, and the bar that turns them — for
-    /// the tests, which have no other way to ask a web view what it holds.
+    /// The pane the chapter is drawn in — for the tests, which have no other
+    /// way to ask a web view what it holds.
     var chapterPage: HTMLPreviewView { page }
-    var chapterControl: ChapterPill { chapterBar }
 
     var missingMessage: String? {
         missingLabel.isHidden ? nil : missingLabel.stringValue
@@ -297,112 +307,4 @@ final class EPUBPreviewView: NSView, PreviewContent {
             layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
         }
     }
-}
-
-// MARK: - The chapter bar
-
-/// Which chapter is being read, and the way to the ones on either side of it.
-///
-/// The same chrome every other floating bar in Nota is made of, in the
-/// column's bottom-trailing corner — the external-change offer's corner rather
-/// than ⌘F's, so a search and a book being read can stand at once.
-final class ChapterPill: PillView {
-
-    /// Run with `1` for the next chapter and `-1` for the one before.
-    var onStep: ((Int) -> Void)?
-
-    private static let backSymbol = "chevron.left"
-    private static let forwardSymbol = "chevron.right"
-
-    private let back: NSButton
-    private let forward: NSButton
-    private let title = NSTextField(labelWithString: "")
-    private let ordinal = NSTextField(labelWithString: "")
-
-    override init() {
-        back = NSButton()
-        forward = NSButton()
-        super.init()
-
-        for (button, symbol, tip, action) in [
-            (back, Self.backSymbol, L10n.text("Previous chapter"), #selector(goBack)),
-            (forward, Self.forwardSymbol, L10n.text("Next chapter"), #selector(goForward)),
-        ] as [(NSButton, String, String, Selector)] {
-            button.translatesAutoresizingMaskIntoConstraints = false
-            button.isBordered = false
-            button.bezelStyle = .shadowlessSquare
-            button.imagePosition = .imageOnly
-            button.title = ""
-            button.toolTip = tip
-            button.target = self
-            button.action = action
-            button.focusRingType = .none
-            button.image = PillView.symbol(symbol, pointSize: 12, label: tip)
-            NSLayoutConstraint.activate([
-                button.widthAnchor.constraint(equalToConstant: 24),
-                button.heightAnchor.constraint(equalToConstant: 24),
-            ])
-        }
-
-        title.translatesAutoresizingMaskIntoConstraints = false
-        title.font = .systemFont(ofSize: 11)
-        title.textColor = .secondaryLabelColor
-        title.alignment = .center
-        title.lineBreakMode = .byTruncatingTail
-        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        ordinal.translatesAutoresizingMaskIntoConstraints = false
-        ordinal.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        ordinal.textColor = .tertiaryLabelColor
-        ordinal.setContentHuggingPriority(.required, for: .horizontal)
-        ordinal.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        for view in [back, title, ordinal, forward] as [NSView] { addSubview(view) }
-
-        NSLayoutConstraint.activate([
-            back.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            back.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            title.leadingAnchor.constraint(equalTo: back.trailingAnchor, constant: 6),
-            title.centerYAnchor.constraint(equalTo: centerYAnchor),
-            title.trailingAnchor.constraint(equalTo: ordinal.leadingAnchor, constant: -8),
-
-            ordinal.centerYAnchor.constraint(equalTo: centerYAnchor),
-            ordinal.trailingAnchor.constraint(equalTo: forward.leadingAnchor, constant: -6),
-
-            forward.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            forward.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    /// Says which chapter this is and brings the bar up. A book of one
-    /// chapter has nowhere to go, so it keeps the bar down.
-    func show(title chapterTitle: String, index: Int, total: Int) {
-        title.stringValue = chapterTitle
-        ordinal.stringValue = "\(index + 1) / \(total)"
-        back.isEnabled = index > 0
-        forward.isEnabled = index + 1 < total
-        setShown(total > 1, animated: false)
-    }
-
-    /// The glyphs are coloured rather than templated, so they are laid on
-    /// again when light and dark swap.
-    override func applySymbols() {
-        back.image = PillView.symbol(
-            Self.backSymbol, pointSize: 12, label: L10n.text("Previous chapter")
-        )
-        forward.image = PillView.symbol(
-            Self.forwardSymbol, pointSize: 12, label: L10n.text("Next chapter")
-        )
-    }
-
-    @objc private func goBack() { onStep?(-1) }
-    @objc private func goForward() { onStep?(1) }
-
-    /// What the bar is saying, and its two glyphs — for the tests, which
-    /// press them without a mouse.
-    var readout: (title: String, ordinal: String) { (title.stringValue, ordinal.stringValue) }
-    var glyphsForTesting: (back: NSButton, forward: NSButton) { (back, forward) }
 }

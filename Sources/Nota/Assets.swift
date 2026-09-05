@@ -1,5 +1,4 @@
 import AppKit
-import UniformTypeIdentifiers
 
 /// The attachment Nota puts in a text storage for `![](nota://<id>)`.
 ///
@@ -215,6 +214,38 @@ final class AssetStore {
         return importImageData(data, preferredExtension: url.pathExtension)
     }
 
+    /// Takes in a picture that already lives beside a note's file — a
+    /// sidecar's, or any other relative link the file draws — reusing an
+    /// asset that already holds exactly these bytes.
+    ///
+    /// Those pictures are read again every time the file naming them is
+    /// opened, and assets are never deleted, so without this the store would
+    /// grow another copy of every one of them on every open. Bytes decide,
+    /// not names: two files with the same content are the same picture.
+    func importFileDeduplicating(at url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        if let existing = existingAsset(matching: data) { return existing }
+        return importImageData(data, preferredExtension: url.pathExtension)
+    }
+
+    /// The id of an asset holding exactly these bytes, if the store has one.
+    /// Only files of the same length are read at all, so the usual answer
+    /// costs one directory listing and nothing else.
+    func existingAsset(matching data: Data) -> String? {
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        for candidate in contents {
+            guard (try? candidate.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+                    == data.count,
+                  let bytes = try? Data(contentsOf: candidate), bytes == data
+            else { continue }
+            return candidate.lastPathComponent
+        }
+        return nil
+    }
+
     /// Pulls the bytes out of an attachment that came from another app.
     func importForeignAttachment(_ attachment: NSTextAttachment) -> String? {
         if let wrapper = attachment.fileWrapper, let data = wrapper.regularFileContents {
@@ -239,8 +270,18 @@ final class AssetStore {
 
     // MARK: Helpers
 
+    /// Whether a file is a picture the store would take in — which is the
+    /// same question `Note.isImageFile` asks of a tab, and deliberately the
+    /// same answer.
+    ///
+    /// The two must agree, because between them they decide what a file let
+    /// go on the editor becomes: a picture is a chip in the text, and
+    /// everything else opens as a tab beside it. A file both refused would
+    /// land nowhere. That is what an `.svg` used to be — the system files it
+    /// under images, so it was claimed here as a chip, and then the store
+    /// could not read a drawing's bytes as a picture and it vanished. It is
+    /// text that opens in a tab, and it is refused here for that reason.
     static func isImageFile(_ url: URL) -> Bool {
-        guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
-        return type.conforms(to: .image)
+        Note.isImageFile(url)
     }
 }

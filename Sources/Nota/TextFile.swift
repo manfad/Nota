@@ -225,6 +225,19 @@ enum TextFile {
     private static let excludedTypes: [UTType] = deliberatelyExcludedTypes
         + [.pdf, .audiovisualContent]
 
+    /// A drawing — the one thing the system files under images that Nota
+    /// opens as a note. An `.svg` is text: a tree of tags you edit, with the
+    /// picture it draws in the column beside it, exactly as a `.html` has.
+    /// The exclusions above are what would otherwise refuse it, since the
+    /// system says a drawing is an image; this is the single place that
+    /// disagrees, and `Note.isImageFile` asks it too, so what is a picture
+    /// and what is a note is settled once.
+    static func isDrawing(_ url: URL) -> Bool {
+        if url.pathExtension.caseInsensitiveCompare("svg") == .orderedSame { return true }
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
+        return type.conforms(to: .svg)
+    }
+
     /// Whether a file dropped on the editor is one to open in a tab. A type
     /// the system knows answers for itself; a `.toml` or a `.env` has no UTI
     /// at all, so its first bytes are asked instead.
@@ -232,6 +245,7 @@ enum TextFile {
         if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
             return false
         }
+        if isDrawing(url) { return true }
         if let type = UTType(filenameExtension: url.pathExtension) {
             if excludedTypes.contains(where: type.conforms(to:)) { return false }
             if type.conforms(to: .text) || type.conforms(to: .sourceCode) { return true }
@@ -243,6 +257,7 @@ enum TextFile {
     /// Whether `url`'s extension is one of the types Nota refuses to open as
     /// a note no matter what its bytes look like.
     static func isDeliberatelyExcluded(_ url: URL) -> Bool {
+        if isDrawing(url) { return false }
         guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
         return deliberatelyExcludedTypes.contains(where: type.conforms(to:))
     }

@@ -875,6 +875,10 @@ final class NotaTextView: NSTextView {
     /// picture. Extensions are no use on their own — a `.toml` has no type at
     /// all — so `Note.isOpenable` decides, by the system's type where there is
     /// one and by the bytes where not, and a PDF is openable the way text is.
+    ///
+    /// A drawing is one of these rather than a picture: an `.svg` is text
+    /// that opens in a tab with the drawing beside it, never a chip. That is
+    /// `AssetStore.isImageFile`'s word, and it is the same word `Note` gives.
     static func openableFiles(on pboard: NSPasteboard) -> [URL] {
         guard pboard.types?.contains(.fileURL) == true else { return [] }
         let urls = pboard.readObjects(forClasses: [NSURL.self]) as? [URL] ?? []

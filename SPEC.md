@@ -2,6 +2,15 @@
 
 "Notepad++ in a Notes.app body." Native macOS, AppKit, SwiftPM, no dependencies.
 
+## Promo website (2026-09-05)
+
+- `website/` is a separate static Astro landing page: hero, persistent tabs, inline images,
+  split/reading previews, Zen benefits, file support, Vim, bookmarks, and native/open-source/no-login benefits.
+- Real screenshots use isolated demo content. The minimal screenshot uses chrome preferences;
+  the persistent-tab illustration is HTML. The page's only interaction switches preview screenshots.
+- Download links go to GitHub releases; source links go to `manfad/Nota`. A packaged release is
+  needed before public promotion. No backend, login, additional pages, or app behavior changes.
+
 ## Model
 - **Tabs are the notes.** An open tab is the unit; the cache dir is the truth until ⌘S.
   Closed tabs are gone (after the Save / Don't Save / Cancel prompt; Don't Save = ⌘D in the alert).
@@ -145,7 +154,8 @@
   Adjustable: New Tab ⌘T, New Window ⇧⌘N, Open… ⌘O, Close Tab ⌘W, Save ⌘S, Save As… ⇧⌘S, Bookmark This
   Tab ⌘D, Show Bookmarks… ⇧⌘D, Tabs Dialog ⌘P, Next Tab ⌃Tab, Previous Tab ⌃⇧Tab, Find… ⌘F, Find Next ⌘G,
   Find Previous ⇧⌘G, Search All Notes… ⇧⌘F, Go to Line… ⌘L, Toggle Comment ⌘/, Indent ⌘], Outdent ⌘[,
-  Increase Font Size ⌘+, Decrease Font Size ⌘-, Actual Size ⌘0, Image Gallery ⌘B, Mode Toggle ⇧⌘P,
+  Increase Font Size ⌘+, Decrease Font Size ⌘-, Actual Size ⌘0, Image Gallery ⌘B ("Table of
+  Contents" while a book or PDF tab is in front), Mode Toggle ⇧⌘P,
   Reading Mode ⌥⇧⌘P, Zen Mode ⌥⌘Z, Settings… ⌘,. The system-standard items are not adjustable and are
   reserved against: ⌘Q ⌘H ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A ⌘M, and neither is ⌘N, Nota's older new-tab key.
   A row records the next combination you press: ⌘ or ⌃ has to be in it (⌘ with a letter is fine), Esc
@@ -308,6 +318,13 @@
 - The page you were on comes back: it rides in the session in the same key the caret does, and the tab reopens there.
   A file that has gone — deleted while the tab was open, or missing when the session comes back — keeps its tab, stays
   clean, and shows a quiet centred `Couldn't open "name.pdf".` in the editor's own font.
+- The document's own outline stands in the sidebar (decided 2026-09-05), the column a note's pictures are shown in:
+  `PDFDocument.outlineRoot` walked depth first, the depth kept as an indent, and clicking a line goes to the
+  destination it names rather than the top of its page. The line rung is the last entry landing on or before the page
+  in front — an outline says where a section begins, so you are inside the one you most recently passed — and it
+  follows the pages. A PDF with no outline lists nothing, so the column stays away exactly as it does for a note with
+  no pictures; ⌘B pins it open on the quiet `No contents` hint rather than offering a gallery for a document that has
+  no pictures to gather. See Images for the column itself.
 - ⌘F searches the document (done 2026-09-04): the same pill in the same corner, "Find in document", over PDFKit's own
   selections rather than a text storage. Every match wears a quiet band drawn over the page, the one you are on wears
   `findHighlightColor` and is the page's selection, and the count reads the same `3 of 12` / `12 matches` /
@@ -337,11 +354,22 @@
 - Where it lands is the drop target's business, not the file's. Through ⌘O, the Finder, the Dock, the command line,
   `:e path` and the session it is a tab; dropped into the text of a note it is still what it has always been, a
   picture imported into that note as a chip (see Images). The same `.png` does both, depending only on where it went.
-- The window has two tab targets and one chip target. The tab strip is one, and so is the band across the top of the
-  window where a hidden, auto-hidden or zen window keeps its drag region — files let go on either open as tabs, one
-  per file, pictures and `.svg`s included, each classified exactly as ⌘O classifies it. The text of a note is the
-  chip target, and only there does a picture become part of the note. A drag carrying no file is refused by both
-  bands; a file drag hovering an auto-hidden strip holds it open until the drop is done.
+- The window has three tab targets and one chip target. The tab strip is one, the band across the top of the
+  window where a hidden, auto-hidden or zen window keeps its drag region is another, and the render column is the
+  third — files let go on any of them open as tabs, one per file, pictures and `.svg`s included, each classified
+  exactly as ⌘O classifies it. The text of a note is the chip target, and only there does a picture become part of
+  the note. A drag carrying no file is refused by both bands; a file drag hovering an auto-hidden strip holds it
+  open until the drop is done.
+- The render column is a tab target in every kind: the Markdown or LaTeX render, an HTML page, a drawing, a PDF, a
+  picture and a chapter of a book all take a drop anywhere over them, and there is no text there to put a chip in.
+  WebKit and PDFKit both answer for a dropped file themselves — by loading it in place, which would throw away what
+  was being read — so neither ever sees the drag: the types they registered for are taken off those views and only
+  `public.file-url` is put back.
+- An `.svg` let go on the text opens as a tab, never as a chip. A drawing is text with the picture beside it, the
+  same arrangement a `.html` has, and the system filing it under images is the one thing that used to say otherwise
+  — it was claimed as a picture and then lost, since the asset store cannot read a drawing's bytes as one.
+  `TextFile.isDrawing` is the single place that disagrees with the system, and `AssetStore.isImageFile`,
+  `Note.isImageFile` and the deliberate exclusions all ask it.
 - The tab is locked in reading, exactly as a PDF's is: the picture takes the whole column, the editor stays collapsed,
   there is no mode control in either corner, and ⇧⌘P, ⌥⇧⌘P and both View items are disabled.
 - Drawn by an `NSImageView` inside a scroll view, on the editor's own background, edge to edge. Its own size when the
@@ -354,7 +382,7 @@
   than its points, and the right is empty — there is nowhere in a picture to be.
 - An `.svg` is not one of these. See the HTML preview above.
 
-## EPUB (done 2026-09-04, Todo 3)
+## EPUB (done 2026-09-04, Todo 3; contents moved to the sidebar 2026-09-05)
 - A book opens in a tab of its own and is read there, the third viewer after a PDF and a picture. The bytes decide,
   not the name: an EPUB is a zip whose first entry is a stored `mimetype` reading `application/epub+zip`, which the
   OCF specification insists on and which is what tells a book from every other archive. A plain `.zip` is still
@@ -366,12 +394,19 @@
   `nota-file://`, so the book's own stylesheets, fonts and pictures resolve out of the unpacked folder and the page
   is the author's own. EPUB 2 and 3; no DRM.
 - The contents come from EPUB 3's `nav` document, and from the NCX off the spine's `toc` attribute when there is no
-  nav — flattened, with the nesting kept as a level. They are what `@` in the ⌘P switcher lists for a book tab, in
-  place of a text note's headings; choosing one turns to that chapter and to the `#anchor` it named.
-- Chapters turn with a bar in the column's bottom-trailing corner — the external-change offer's corner rather than
-  ⌘F's, so a search and a book can stand at once — reading `‹ The Middle 2 / 3 ›`, and with `→` / `←` or a page key
-  at the end of a chapter. The page reports those keys rather than swallowing them, so nothing changes for a `.html`
-  tab. Both ends of the book are ends: there is nothing before the first chapter or after the last.
+  nav — flattened, with the nesting kept as a level. They stand in the sidebar (decided 2026-09-05), the column a
+  note's pictures are shown in and a PDF's outline stands in: the same split item, the same 150pt, the same side,
+  brought up on its own when a book tab comes to the front and put away by the same ⌘B, which reads "Table of
+  Contents" there. The line naming the chapter on screen is rung and follows along as chapters turn; clicking one
+  goes to that chapter and to the `#anchor` it named. Zen takes the column the way it takes the gallery. A book whose
+  contents are empty lists nothing and the column stays away. Nothing new is persisted. See Images for the column.
+- `@` in the ⌘P switcher lists nothing for a book tab: the contents are on screen beside the chapter now, and a list
+  that closes the moment you choose from it is the wrong shape for a table of contents. A text note's `@` headings
+  are unchanged.
+- Chapters turn with `→` / `←` or a page key at the end of a chapter. The page reports those keys rather than
+  swallowing them, so nothing changes for a `.html` tab. Both ends of the book are ends: there is nothing before the
+  first chapter or after the last. There is no floating chapter bar (removed 2026-09-05): a control the reader
+  cannot put away has no business standing over the page, and the sidebar says which chapter this is without one.
 - ⌘F is the page's own find session, the same pill in the same corner. ⌘+ / ⌘- zoom the chapter the way they zoom any
   other page.
 - Read, never written, the same as a PDF: locked in reading, never dirty, ⌘S and Save As disabled, nothing in the
@@ -473,14 +508,42 @@
   Remembered per session; combine with ⌃⌘F for full screen if wanted.
 
 ## Images
-- Stored as originals in `<support>/assets/<uuid>.<ext>`; token in text `![](nota://<uuid>.<ext>)`.
-  Reading also accepts `![](jot://…)`, the scheme used before the app was renamed, so existing notes keep their pictures;
-  only `nota://` is ever written, so a file brought through the editor is updated on its next save.
+- The store: originals in `<support>/assets/<uuid>.<ext>`, which is what the editor, the chips, the sidebar and the
+  render all draw from. An untitled note is only that — its text goes to the cache with `![](nota://<uuid>.<ext>)`
+  tokens in it, and the store is the truth until ⌘S. Reading also accepts `![](jot://…)`, the scheme used before the
+  app was renamed, so existing notes keep their pictures.
+- The sidecar: saving under a name (⌘S, Save As) writes every chip's picture into `<basename>.assets/` beside the
+  file — `notes.md` → `notes.assets/`, made on demand, each picture keeping the asset id it already has as its name
+  — and the token in the file becomes an ordinary relative Markdown link, `![](notes.assets/3f9a….png)`. A saved
+  note is then portable: copy the two together and any editor draws the pictures. The store is untouched; a sidecar
+  is a copy made at save time. A picture already there with identical bytes is not written again. The path is
+  percent-encoded in the link (`my%20notes.assets/…`), and both spellings are read back. `nota://` tokens found in a
+  named file — written by an older version — read as they always did and are rewritten as sidecar links on the next
+  save, which is what "a file brought through the editor is updated on its next save" means here.
+- Opening: a relative image link, `![](pics/a.png)` or `![alt](…)`, that resolves to a real raster picture under the
+  file's own folder becomes a chip — the sidecar's own links and anybody else's alike, so a Markdown file written
+  elsewhere shows its pictures here for the first time. Never an absolute path, never `http`, never above the file's
+  own folder. The note remembers the path the file spelled, so the next save writes that same link rather than
+  moving the picture into `<basename>.assets/`; a picture beside the file is imported by content, so opening the
+  same note twice does not grow a second asset. A link whose target is not there stays the literal text it was.
+- Save As to a new name writes a new sidecar for the new name and leaves the old folder alone. A path the author
+  chose (`pics/a.png`) is kept as it is; one inside another note's `.assets` folder is not, or the copy would go on
+  pointing at the note it was copied from. Saving into another folder starts a sidecar of its own, since a relative
+  path means nothing there.
 - Inline: always a text chip `Image N`, numbered in document order, renumbered live. Clicking one selects the chip itself, so ⌘C
   copies the picture and ⌫ or typing replaces it; in vim the block caret sits on it instead. Dragging and ⇧-clicking select as usual.
 - Sidebar (native split pane, 150pt, side per Settings): 104pt thumbnails with `Image N` captions. Auto-shows when the note has ≥1 image,
   hides when none; ⌘B toggles it manually for the session. Settings: sidebar side Left / Right (default Right). Click → select chip; double-click → open in Preview.
   Context menu: Copy Image / Save Image As… / Reveal in Finder.
+- The same column is a table of contents while a tab that is read rather than edited is in front — a book's chapters
+  (see EPUB), a PDF's outline (see PDF). One split item, one width, one side, one ⌘B and one pin; what stands in it is
+  whatever the tab in front has to list. The lines arrive as a title, a nesting level and the line's own number, and
+  the content view they came from is the only thing that knows what going there means, so one column serves both. A
+  line is 13pt, one line truncated, indented 12pt a level, and the line naming what is on screen carries a grey wash
+  — the ⌘P switcher's own selection rather than a blue document one. A picture tab has no contents and keeps the
+  column away, and every editable tab — `.md`, `.tex`, `.html`, `.svg`, a plain note — is the gallery as before. The
+  View item is named after what is listed: "Image Gallery" over a note, "Table of Contents" over a book or a PDF, ⌘B
+  and its tick unchanged either way.
 - ⌘A ⌘C carries images (RTFD) to other apps, and when the selection holds exactly one image the picture also goes
   as PNG/TIFF, so it pastes into terminals, browsers and Slack; two or more images offer no picture flavour.
   Nota→Nota paste prefers Nota's own flavour, re-linking without duplicating assets.
@@ -491,7 +554,7 @@
   flavours a browser puts the pictures in. Taken only when the markup holds an `<img>`: a text-only copy still lands as plain
   text, untouched. Each picture comes from the markup's own `src` — inline `data:` bytes, a web archive subresource, or the URL
   fetched (5s) — and one that resolves to nothing is dropped, keeping the words around it.
-- Orphan assets are never auto-deleted.
+- Orphan assets are never auto-deleted, in the store or in a sidecar folder.
 
 ## Tabs
 - One width for every tab, `clamp((viewport − plus − gaps) / n, 40, 180)`, shrinking as tabs are added; the strip never scrolls. The selected tab is raised to 60pt so its ✕ fits and the others shrink evenly to pay for it. Titles clip with a fade rather than an ellipsis; under 60pt the trailing slot goes and the unsaved dot rides on the icon. A separator hairline shows only between two plain tabs. The + rides after the last tab and pins at the trailing edge once the strip is full; it opens a new tab (same as ⌘T). ⌘P fuzzy tab switcher by title.
@@ -600,6 +663,55 @@
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+23. **A saved note keeps its pictures beside it (done 2026-09-05).** A note with pictures in it was readable only
+   here: the file said `![](nota://3f9a….png)` and the bytes lived under Application Support, so mailing the file,
+   putting it in a repository or opening it in any other editor gave prose with holes in it. Saving under a name now
+   writes each chip's picture into `<basename>.assets/` next to the file and spells the token as an ordinary
+   relative Markdown link, so `notes.md` and `notes.assets/` travel together and every reader draws them. The store
+   is untouched and stays what the editor renders from — an untitled note still writes tokens to the cache, which is
+   what keeps the cache the truth until ⌘S. The other half is the open path, and it is the half that pays: a
+   relative link to a real picture under the file's own folder becomes a chip, so an existing Markdown file with
+   local images shows them inline here for the first time, and the note remembers the path its author spelled so the
+   next save puts the same link back rather than moving the picture. `Sidecar.swift` is the whole of the file-system
+   side — the folder, the percent-encoding, the identical-bytes check, the resolver and the importer — and `NoteText`
+   stays pure, taking a closure for each direction: `serialize(_:sidecar:)` asks what link a chip should get,
+   `render(_:…:importing:)` asks what a relative link should become. `AssetStore.importFileDeduplicating(at:)` is
+   what stops the store growing a copy of every picture on every open, comparing bytes and reading only the files of
+   the same length. Nothing about the render changed: a chip is a chip whichever link it came from, so the preview
+   draws it through the same attachment it always did.
+22. **The sidebar becomes a table of contents for the tabs that are read, and the chapter bar goes (done
+   2026-09-05).** A book's contents were reachable only through `@` in the ⌘P switcher — a list that closed the
+   moment you chose from it, which is the wrong shape for the thing you navigate a book by — a PDF's outline was not
+   reachable at all, and chapters turned with a pill floating in the column's bottom-trailing corner that the reader
+   had no way to put away. All three are answered at once. The column a note's pictures stand in is now the
+   document's own contents while a tab that is read rather than edited is in front: one split item, one width, one
+   side, one ⌘B and one pin, with `ContentsSidebarView` swapped in beside `ImageSidebarView` rather than a second
+   content mode inside it — the two share a rectangle and nothing else, one being picture cards with an asset store
+   behind each and the other a list of indented lines. Nothing in the column knows what it is listing: lines arrive
+   as `ContentsEntry` (title, level, the line's own number) and `PreviewContent` grew `contentsEntries`,
+   `currentContentsLine` and `goToContentsLine`, so the window asks the content view rather than switching on a
+   kind. `EPUBBook.contentsEntries` maps the book's `nav`/NCX and `PDFOutlineContents` walks `outlineRoot` depth
+   first, each next to the view that reads it. `refreshImages` branches on the tab being read and
+   `applySidebarVisibility` counts entries where it counted pictures, so auto-show, ⌘B, zen and the tab-strip inset
+   all keep working unchanged; the ring is re-rung from `previewPositionDidChange`, so `→` in a book and a page
+   scrolled past in a PDF both walk the list. The View item reads "Table of Contents" over a book or a PDF and
+   "Image Gallery" over everything else, from the same validate path, keeping ⌘B and its tick — by the tab's kind
+   rather than by whether there is anything to list, so ⌘B on an outline-less PDF shows the quiet `No contents` hint.
+   `@` over a book now lists nothing; `MarkdownHeadings` for a text note is untouched.
+21. **Drops the window used to swallow: a drawing on the text, anything on the render column (done 2026-09-05).**
+   Two file drags landed nowhere. An `.svg` let go on the text was claimed as a picture — the system files a drawing
+   under images, and `AssetStore.isImageFile` took the system's word — so it never reached `openableFiles` to open as
+   a tab, and the store could not read its bytes as a picture either, so it vanished. There is one answer to what a
+   picture is now: `TextFile.isDrawing` is the single place that disagrees with the system, `AssetStore.isImageFile`
+   defers to `Note.isImageFile`, which asks it, and `isDeliberatelyExcluded` and `isTextFile` ask it too — a drawing
+   was excluded as an image there, which is what stopped `Note.isOpenable` even after the chip was refused. The other
+   drag was the render column: `PreviewPaneView.onDropFiles` only wired zen's drag band, so a file let go on a
+   render, a page, a PDF, a picture or a chapter did nothing at all. Every content view now takes it — the protocol
+   asks for `onDropFiles` rather than defaulting it, so a new kind of content cannot forget — and the column hands
+   whatever lands to `openDroppedFiles`, the same as the strip. AppKit routes a drag by hit testing, so the views
+   that actually receive it say so themselves rather than an overlay guessing: the render's text view, the web view,
+   the PDF view. WebKit and PDFKit would each take the file by loading it in place and losing the tab, so both are
+   unregistered from every drag type and given `public.file-url` back, and neither override calls `super`.
 20. **The Mac's cursor keys in vim's normal and visual mode (done 2026-09-05).** A Mac keyboard's own navigation keys
    used to do nothing useful once vim was on: ⌥-arrows arrived as plain arrows, and Home, End, Page Up and Page Down
    fell through as function-key characters `handleCommand` quietly swallowed. `VimKey.Base` now has `.home`, `.end`,

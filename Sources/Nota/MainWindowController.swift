@@ -146,7 +146,11 @@ final class MainWindowController: NSWindowController {
     private var lineNumberRuler: LineNumberRulerView?
     private let tabBar = TabBarView()
     private lazy var imageSidebar = ImageSidebarView(topInset: 8)
-    /// The outer split keeps the optional image sidebar outside the document.
+    /// The same column, showing the tab's own table of contents instead,
+    /// while the tab in front is one that is read rather than edited — a book
+    /// or a PDF. Exactly one of the two is on screen.
+    private lazy var contentsSidebar = ContentsSidebarView(topInset: 8)
+    /// The outer split keeps the optional sidebar outside the document.
     private let splitViewController = NSSplitViewController()
     /// The document owns the shared tab strip and the editor/preview split
     /// beneath it, so the divider begins below rather than crossing the tabs.
@@ -813,11 +817,25 @@ final class MainWindowController: NSWindowController {
         imageSidebar.assets = store.assets
         imageSidebar.delegate = self
         container.addSubview(imageSidebar)
+        // The contents list sits in the same rectangle, behind it: the column
+        // is one split item whichever of the two it is showing, so its width,
+        // its side and everything that collapses it are the same either way.
+        contentsSidebar.translatesAutoresizingMaskIntoConstraints = false
+        contentsSidebar.delegate = self
+        contentsSidebar.isHidden = true
+        container.addSubview(contentsSidebar)
         NSLayoutConstraint.activate([
             imageSidebar.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
             imageSidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             imageSidebar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             imageSidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            contentsSidebar.topAnchor.constraint(
+                equalTo: container.safeAreaLayoutGuide.topAnchor
+            ),
+            contentsSidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            contentsSidebar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            contentsSidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
     }
 
@@ -1533,7 +1551,12 @@ final class MainWindowController: NSWindowController {
             text: text,
             attributes: defaultAttributes,
             assets: store.assets,
-            format: format
+            format: format,
+            // A clean tab has just re-read its file, so its own relative
+            // image links come back as chips exactly as an open reads them.
+            // A dirty one came out of the cache, which holds tokens already.
+            importing: (fileURL.flatMap { isDirty ? nil : $0 })
+                .map { Sidecar.importer(forFileAt: $0, assets: store.assets) }
         )
         note.isDirty = isDirty
         watchFile(of: note)
@@ -2132,7 +2155,8 @@ final class MainWindowController: NSWindowController {
         if let fileURL {
             note = Note(id: UUID(), fileURL: fileURL, untitledName: nil,
                         text: text, attributes: defaultAttributes, assets: store.assets,
-                        format: format, kind: kind)
+                        format: format, kind: kind,
+                        importing: relativeImageImporter(forFileAt: fileURL, kind: kind))
             watchFile(of: note)
         } else {
             note = makeUntitledNote()
@@ -2150,6 +2174,16 @@ final class MainWindowController: NSWindowController {
         updateStatus()
         refreshImages(force: true)
         flush()
+    }
+
+    /// What turns an ordinary relative image link in a file into a chip, for
+    /// the two places that fill a note from a file: opening one and reloading
+    /// one. A viewer has no text to read links out of, so it gets nothing.
+    private func relativeImageImporter(
+        forFileAt fileURL: URL, kind: NoteKind
+    ) -> NoteText.RelativeImporter? {
+        guard kind == .text else { return nil }
+        return Sidecar.importer(forFileAt: fileURL, assets: store.assets)
     }
 
     /// A tab dragged along the strip. `index` and `newIndex` are the same
@@ -2344,7 +2378,18 @@ final class MainWindowController: NSWindowController {
         // The file goes back in the shape it came in — same encoding, same
         // mark, same line endings — unless the text has outgrown it, which
         // `encode` says by handing back a format of its own.
-        let encoded = TextFile.encode(note.text, format: note.format)
+        //
+        // Every chip's picture goes into `<basename>.assets/` beside the file
+        // as the text is written out, and its token becomes the ordinary
+        // relative link that folder makes readable anywhere else.
+        let sidecar = Sidecar.Writer(
+            fileURL: destination, assets: store.assets,
+            remembered: note.sidecarPaths, rememberedBase: note.sidecarBaseDirectory
+        )
+        let encoded = TextFile.encode(
+            NoteText.serialize(note.storage, sidecar: sidecar.link(forAssetID:)),
+            format: note.format
+        )
         do {
             try encoded.data.write(to: destination, options: .atomic)
         } catch {
@@ -2352,6 +2397,10 @@ final class MainWindowController: NSWindowController {
             return false
         }
 
+        // Where each picture ended up, so the next save writes the same links
+        // rather than a second copy of everything.
+        note.sidecarPaths = sidecar.paths
+        note.sidecarBaseDirectory = destination.deletingLastPathComponent()
         note.format = encoded.format
         note.fileURL = destination
         note.isDirty = false
@@ -2718,9 +2767,16 @@ final class MainWindowController: NSWindowController {
         let scrollOrigin = isFront ? scrollView.contentView.bounds.origin : .zero
 
         if isFront { isSwappingNote = true }
-        note.storage.setAttributedString(
-            NoteText.render(opened.text, attributes: defaultAttributes, assets: store.assets)
+        // Read the same way an open reads it: the file's own relative image
+        // links are chips again, and the paths behind them are what the next
+        // save writes back.
+        let rendered = NoteText.render(
+            opened.text, attributes: defaultAttributes, assets: store.assets,
+            importing: relativeImageImporter(forFileAt: url, kind: note.kind)
         )
+        note.storage.setAttributedString(rendered.text)
+        note.sidecarPaths = rendered.relativePaths
+        note.sidecarBaseDirectory = url.deletingLastPathComponent()
         note.format = opened.format
         note.isDirty = false
         note.hasExternalChange = false
@@ -3552,13 +3608,9 @@ extension MainWindowController {
     /// never waits on the run loop for it; an ordinary note answers on the
     /// spot, the same call either way.
     private func loadFrontTabHeadings(completion: @escaping ([MarkdownHeadings.Heading]) -> Void) {
-        // A book's headings are its own table of contents rather than a scan
-        // of any text: the chapters are already named, and choosing one goes
-        // to that chapter (SPEC Todo 3).
-        if let note = currentNote, note.kind == .epub {
-            completion(note.epubBook?.tocHeadings ?? [])
-            return
-        }
+        // A book has no headings here: its own table of contents is the
+        // sidebar's, where it can stay on screen while the chapter is read,
+        // rather than a list that closes the moment one is chosen.
         guard let note = currentNote, note.previewKind == .markdown else {
             completion([])
             return
@@ -4107,6 +4159,9 @@ extension MainWindowController {
         // a step behind until it is asked for again.
         previewStatus = currentPreviewFooterStatus
         updateCursorPosition()
+        // And the contents column follows the chapter or page that just
+        // moved.
+        updateContentsSelection()
         scheduleSave()
     }
 
@@ -4166,14 +4221,6 @@ extension MainWindowController {
     /// so the keyboard is left where it was rather than jumping to it.
     private func goToHeading(_ heading: MarkdownHeadings.Heading) {
         guard let note = currentNote else { return }
-        // Over a book the location is a line of its contents rather than an
-        // offset into text there is none of: the chapter it names is turned
-        // to, at the anchor it named if it named one.
-        if note.kind == .epub {
-            (previewColumn.content(for: note) as? EPUBPreviewView)?
-                .goToContentsLine(heading.location)
-            return
-        }
         let location = max(0, min(heading.location, note.storage.length))
         if preferences.vimMode, vimEngine.mode != .normal { vimEngine.enterNormalMode() }
         textView.setSelectedRange(NSRange(location: location, length: 0))
@@ -4222,14 +4269,32 @@ extension MainWindowController {
     }
 }
 
-// MARK: - Images: chips and sidebar
+// MARK: - Images and book contents: chips and sidebar
 
 extension MainWindowController {
 
     var isImageSidebarVisible: Bool { sidebarIsVisible }
 
-    /// ⌥⌘I. Pins the sidebar open or shut, overriding the follow-the-note
-    /// default for the rest of the session.
+    /// Whether the column is a table of contents rather than a note's
+    /// pictures — which is what the View item is named after. It goes by the
+    /// tab's kind rather than by whether there is anything to list, so ⌘B on
+    /// a PDF with no outline brings up the quiet "No contents" hint instead
+    /// of a gallery for a document that has no pictures to gather.
+    var sidebarShowsContents: Bool {
+        switch currentNote?.kind {
+        case .pdf, .epub: true
+        default: false
+        }
+    }
+
+    /// The list of contents itself — for the tests, which have no other way
+    /// to ask the column which of its two lists it is holding.
+    var contentsSidebarView: ContentsSidebarView { contentsSidebar }
+
+    /// ⌘B. Pins the sidebar open or shut, overriding the follow-the-tab
+    /// default for the rest of the session. One pin for both lists: hiding
+    /// the gallery on a note hides the contents on a book too, since it is
+    /// the same column being told to go away.
     func toggleImageSidebar() {
         sidebarVisibility = sidebarIsVisible ? .alwaysHidden : .alwaysShown
         refreshImages(force: true)
@@ -4245,9 +4310,17 @@ extension MainWindowController {
 
     /// One pass over the visible note: renumber the chips, resize the ones
     /// whose label changed, then bring the sidebar in line.
+    ///
+    /// A book or a PDF has no chips to renumber; what its column shows is the
+    /// document's own contents, brought up and put away by the same pin and
+    /// the same follow-the-tab default.
     fileprivate func refreshImages(force: Bool = false) {
         sidebarWorkItem?.cancel()
         sidebarWorkItem = nil
+        if let note = currentNote, sidebarShowsContents {
+            refreshContents(of: note, force: force)
+            return
+        }
         guard let storage = currentNote?.storage else { return }
 
         let font = preferences.font()
@@ -4270,17 +4343,42 @@ extension MainWindowController {
             }
         }
 
-        applySidebarVisibility(imageCount: assetIDs.count)
+        applySidebarVisibility(itemCount: assetIDs.count)
         if sidebarIsVisible {
+            contentsSidebar.isHidden = true
+            imageSidebar.isHidden = false
             imageSidebar.setAssetIDs(assetIDs, force: force)
             updateSidebarHighlight()
         }
     }
 
-    private func applySidebarVisibility(imageCount: Int) {
+    /// The document in front, listed. What the lines are is the content
+    /// view's business — a book's chapters, a PDF's outline — and nothing
+    /// here asks which it has. One with no contents at all lists nothing, so
+    /// the column follows the tab exactly as an empty note's does and stays
+    /// away until ⌘B pins it open on the hint.
+    private func refreshContents(of note: Note, force: Bool) {
+        let entries = previewColumn.content(for: note).contentsEntries
+        applySidebarVisibility(itemCount: entries.count)
+        guard sidebarIsVisible else { return }
+        imageSidebar.isHidden = true
+        contentsSidebar.isHidden = false
+        contentsSidebar.setEntries(entries, force: force)
+        updateContentsSelection()
+    }
+
+    /// Rings the line naming what is on screen. Called when the contents are
+    /// listed and again on every move the content reports, so a chapter
+    /// turned and a page scrolled past both walk the list.
+    fileprivate func updateContentsSelection() {
+        guard sidebarIsVisible, sidebarShowsContents, let note = currentNote else { return }
+        contentsSidebar.setSelectedLine(previewColumn.content(for: note).currentContentsLine)
+    }
+
+    private func applySidebarVisibility(itemCount: Int) {
         let shouldShow: Bool
         switch sidebarVisibility {
-        case .followsNote: shouldShow = imageCount > 0
+        case .followsNote: shouldShow = itemCount > 0
         case .alwaysShown: shouldShow = true
         case .alwaysHidden: shouldShow = false
         }
@@ -4312,7 +4410,9 @@ extension MainWindowController {
     /// Rings the sidebar item for the chip the caret is touching, or for any
     /// chip inside the selection.
     fileprivate func updateSidebarHighlight() {
-        guard sidebarIsVisible else { return }
+        // A contents column is rung by what is on screen, not by a caret in
+        // text there is none of.
+        guard sidebarIsVisible, !sidebarShowsContents else { return }
         let highlighted = ChipHighlight.resolve(
             clickedChipLocation: clickedChipLocation,
             selection: textView.selectedRange(),
@@ -4345,6 +4445,18 @@ extension MainWindowController: ImageSidebarViewDelegate {
         textView.scrollRangeToVisible(textView.selectedRange())
         focusEditor()
         updateSidebarHighlight()
+    }
+}
+
+extension MainWindowController: ContentsSidebarViewDelegate {
+    /// Clicking a line goes where it points — a chapter and its `#anchor`, a
+    /// destination on a page — and the ring goes with it. The keyboard stays
+    /// where it was: these tabs are read, and there is no editor to go back
+    /// to.
+    func contentsSidebar(_ sidebar: ContentsSidebarView, didChooseLine line: Int) {
+        guard let note = currentNote, sidebarShowsContents else { return }
+        previewColumn.content(for: note).goToContentsLine(line)
+        updateContentsSelection()
     }
 }
 

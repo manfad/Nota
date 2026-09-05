@@ -263,6 +263,141 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(controller.footerRegions.lineEnding.stringValue, "LF")
     }
 
+    // MARK: - The outline in the sidebar
+
+    /// A document with an outline brings the column up on its own — the way a
+    /// note with a picture in it does — and what stands in it is the
+    /// document's own outline, nesting and all.
+    @MainActor
+    func testAPDFsOutlineIsWhatTheSidebarLists() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makeOutlinedPDF())
+
+        XCTAssertTrue(controller.isImageSidebarVisible, "the column came up with the document")
+        XCTAssertTrue(controller.sidebarShowsContents)
+        XCTAssertEqual(controller.contentsSidebarView.rowTitles, [
+            "1. Introduction",
+            "1.1 Background",
+            "2. Method",
+            "2.1 Sampling",
+            "3. Results",
+        ])
+        XCTAssertEqual(controller.contentsSidebarView.rowIndents, [0, 12, 0, 12, 0],
+                       "a subsection sits one step in from its section")
+        XCTAssertEqual(controller.contentsSidebarView.selectedRowTitle, "1. Introduction",
+                       "the page on screen is the line that is rung")
+    }
+
+    /// Clicking a line goes to the destination it names, and the line rung
+    /// goes with it.
+    @MainActor
+    func testClickingAnOutlineEntryGoesToItsPage() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makeOutlinedPDF())
+        let sidebar = controller.contentsSidebarView
+        let row = try XCTUnwrap(sidebar.rowTitles.firstIndex(of: "2. Method"))
+
+        sidebar.chooseRow(row)
+
+        XCTAssertEqual(controller.previewPanes.pdf.currentPageIndex, 2)
+        XCTAssertEqual(controller.currentTabState.selection, 2,
+                       "and that is where the tab is left")
+        XCTAssertEqual(sidebar.selectedRowTitle, "2. Method")
+    }
+
+    /// An outline names where a section begins, so the line rung is the one
+    /// the reader has most recently passed — and it follows the pages.
+    @MainActor
+    func testTheRungOutlineEntryFollowsThePageInFront() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makeOutlinedPDF())
+        let pane = controller.previewPanes.pdf
+
+        XCTAssertEqual(pane.currentContentsLine, 0)
+        pane.currentPageIndex = 1
+        XCTAssertEqual(pane.currentContentsLine, 1, "page two is inside 1.1")
+        pane.currentPageIndex = 3
+        XCTAssertEqual(pane.currentContentsLine, 3)
+        pane.currentPageIndex = 5
+        XCTAssertEqual(pane.currentContentsLine, 4,
+                       "a page past the last entry is still inside it")
+    }
+
+    /// A document with no outline has nothing to list, so the column stays
+    /// away — and ⌘B on it says so rather than offering a gallery a document
+    /// has no pictures for.
+    @MainActor
+    func testAPDFWithNoOutlineKeepsTheColumnAwayUntilItIsAskedFor() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makePDF(pages: 3, named: "plain.pdf",
+                                         in: try makeTemporaryDirectory()))
+
+        XCTAssertFalse(controller.isImageSidebarVisible)
+        XCTAssertTrue(controller.sidebarShowsContents,
+                      "it is still a table of contents, empty or not")
+
+        controller.toggleImageSidebar()
+        XCTAssertTrue(controller.isImageSidebarVisible)
+        XCTAssertFalse(controller.contentsSidebarView.isHidden)
+        XCTAssertTrue(controller.quickLookSidebar.isHidden)
+        XCTAssertEqual(controller.contentsSidebarView.rowTitles, [])
+        XCTAssertTrue(controller.contentsSidebarView.showsEmptyHint)
+    }
+
+    /// The column belongs to the tab in front: a document's outline while a
+    /// document is being read, a note's pictures the moment one is.
+    @MainActor
+    func testSwitchingToATextTabSwapsTheOutlineBackForTheGallery() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeKeyController()
+        let markdown = directory.appendingPathComponent("notes.md")
+        try "Just words.".write(to: markdown, atomically: true, encoding: .utf8)
+
+        controller.open(url: markdown)
+        let textTab = controller.selectedTabIndex
+        controller.open(url: try makeOutlinedPDF())
+        let pdfTab = controller.selectedTabIndex
+
+        XCTAssertTrue(controller.sidebarShowsContents)
+        XCTAssertFalse(controller.contentsSidebarView.isHidden)
+        XCTAssertTrue(controller.quickLookSidebar.isHidden)
+
+        controller.selectTab(at: textTab)
+        XCTAssertFalse(controller.sidebarShowsContents)
+        controller.toggleImageSidebar()
+        XCTAssertFalse(controller.quickLookSidebar.isHidden)
+        XCTAssertTrue(controller.contentsSidebarView.isHidden)
+
+        controller.selectTab(at: pdfTab)
+        XCTAssertTrue(controller.sidebarShowsContents)
+        XCTAssertFalse(controller.contentsSidebarView.isHidden)
+        XCTAssertTrue(controller.quickLookSidebar.isHidden)
+    }
+
+    /// A picture is not read through a table of contents: its column is the
+    /// gallery's, and a picture tab has nothing to put in it.
+    @MainActor
+    func testAPictureTabHasNoContentsColumn() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeKeyController()
+        let picture = directory.appendingPathComponent("shot.png")
+        let image = NSImage(size: NSSize(width: 8, height: 8))
+        image.lockFocus()
+        NSColor.red.setFill()
+        NSRect(x: 0, y: 0, width: 8, height: 8).fill()
+        image.unlockFocus()
+        let bitmap = try XCTUnwrap(
+            NSBitmapImageRep(data: image.tiffRepresentation ?? Data())
+        )
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: picture)
+
+        controller.open(url: picture)
+
+        XCTAssertEqual(controller.currentTabState.kind, .image)
+        XCTAssertFalse(controller.sidebarShowsContents)
+        XCTAssertFalse(controller.isImageSidebarVisible, "and nothing brings it up on its own")
+    }
+
     // MARK: - Nothing to save
 
     @MainActor
@@ -532,6 +667,46 @@ final class PDFTests: XCTestCase {
         let url = directory.appendingPathComponent(name)
         XCTAssertTrue(document.write(to: url), "the fixture has to be a real PDF")
         return url
+    }
+
+    /// A real PDF with a real outline: six pages and five bookmarks over two
+    /// levels, written out by PDFKit so the outline is read back off the file
+    /// rather than off the object the test built.
+    private func makeOutlinedPDF() throws -> URL {
+        let directory = try makeTemporaryDirectory()
+        let url = try makePDF(pages: 6, named: "paper.pdf", in: directory)
+        let document = try XCTUnwrap(PDFDocument(url: url))
+
+        // Title, the page it starts on, and how deep it sits.
+        let plan: [(String, Int, Int)] = [
+            ("1. Introduction", 0, 1),
+            ("1.1 Background", 1, 2),
+            ("2. Method", 2, 1),
+            ("2.1 Sampling", 3, 2),
+            ("3. Results", 4, 1),
+        ]
+
+        let root = PDFOutline()
+        var sections: [PDFOutline] = []
+        for (title, page, level) in plan {
+            let node = PDFOutline()
+            node.label = title
+            node.destination = PDFDestination(
+                page: try XCTUnwrap(document.page(at: page)), at: NSPoint(x: 0, y: 400)
+            )
+            if level == 1 {
+                root.insertChild(node, at: root.numberOfChildren)
+                sections.append(node)
+            } else {
+                let parent = try XCTUnwrap(sections.last, "a subsection needs a section")
+                parent.insertChild(node, at: parent.numberOfChildren)
+            }
+        }
+        document.outlineRoot = root
+
+        let outlined = directory.appendingPathComponent("outlined.pdf")
+        XCTAssertTrue(document.write(to: outlined), "the fixture has to be a real PDF")
+        return outlined
     }
 
     /// A controller whose window is key and laid out, without a frame of it

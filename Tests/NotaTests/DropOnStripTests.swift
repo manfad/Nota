@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 import XCTest
 @testable import Nota
 
@@ -101,7 +102,213 @@ final class DropOnStripTests: XCTestCase {
         XCTAssertEqual(controller.currentTabState.kind, .text)
     }
 
+    // MARK: - The text
+
+    /// The editor is the chip target, and a drawing is not a picture: an
+    /// `.svg` is text that opens in a tab with the drawing beside it, the
+    /// same arrangement a `.html` has. The system files it under images all
+    /// the same, which is what used to claim it as a chip and then lose it —
+    /// the store cannot read a drawing's bytes as a picture.
+    @MainActor
+    func testADrawingDroppedOnTheTextOpensATabRatherThanBecomingAChip() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeController(in: directory)
+        let drawing = try write(
+            Data("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>".utf8),
+            named: "logo.svg", in: directory
+        )
+        let editor = try XCTUnwrap(controller.editorScrolling.textView as? NotaTextView)
+        let tabsBefore = controller.openNotes.count
+
+        XCTAssertFalse(AssetStore.isImageFile(drawing), "the store refuses a drawing")
+        XCTAssertTrue(editor.performDragOperation(dragOf([drawing])))
+
+        XCTAssertEqual(controller.openNotes.count, tabsBefore + 1)
+        XCTAssertEqual(controller.openNotes.last?.title, "logo.svg")
+        XCTAssertEqual(controller.openNotes.last?.fileURL.flatMap(Note.previewKind), .svg,
+                       "and it is read as the drawing it is")
+        XCTAssertTrue(controller.openNotes.allSatisfy { !$0.text.contains("nota://") },
+                      "and no chip landed in the note it was let go on")
+    }
+
+    /// The other half of the same rule: a real picture in the text is still
+    /// a chip in that note, and no tab of its own.
+    @MainActor
+    func testAPictureDroppedOnTheTextIsStillAChipAndNoTab() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeController(in: directory)
+        let picture = try write(pngData(width: 20, height: 10), named: "photo.png",
+                                in: directory)
+        let editor = try XCTUnwrap(controller.editorScrolling.textView as? NotaTextView)
+        let tabsBefore = controller.openNotes.count
+
+        XCTAssertTrue(editor.performDragOperation(dragOf([picture])))
+
+        XCTAssertEqual(controller.openNotes.count, tabsBefore, "no tab opened")
+        XCTAssertTrue(controller.openNotes.contains { $0.text.contains("nota://") },
+                      "the picture is in the note as a chip")
+    }
+
+    // MARK: - The render column
+
+    /// Reading a render, the column is all there is on screen — and it is a
+    /// tab target like the strip, so a file let go anywhere over it opens as
+    /// a tab and the note being read is left as it was.
+    @MainActor
+    func testAFileDroppedOnTheRenderOpensATab() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeController(in: directory)
+        let note = try write(Data("# hi".utf8), named: "notes.md", in: directory)
+        controller.open(url: note)
+        controller.setPreviewMode(.reading)
+        controller.window?.layoutIfNeeded()
+        XCTAssertEqual(controller.previewPanes.kind, .markdown)
+
+        let dropped = try write(Data("dropped".utf8), named: "dropped.md", in: directory)
+        let target = dropTarget(in: controller.previewPanes.markdown)
+        XCTAssertTrue(target.performDragOperation(dragOf([dropped])))
+
+        XCTAssertEqual(controller.openNotes.last?.title, "dropped.md")
+        XCTAssertEqual(controller.currentTabState.kind, .text)
+        XCTAssertEqual(controller.openNotes.first(where: { $0.title == "notes.md" })?.text,
+                       "# hi", "the note that was being read is untouched")
+    }
+
+    /// WebKit takes a dropped file itself, by loading it — which would throw
+    /// away the page being read with no way back. It never sees the drag.
+    @MainActor
+    func testAFileDroppedOnAPageOpensATabAndLeavesThePageWhereItWas() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeController(in: directory)
+        let page = try write(Data("<!doctype html><p>hi</p>".utf8), named: "page.html",
+                             in: directory)
+        controller.open(url: page)
+        controller.setPreviewMode(.reading)
+        controller.window?.layoutIfNeeded()
+        XCTAssertEqual(controller.previewPanes.kind, .html)
+
+        let pane = controller.previewPanes.html
+        let webView = try XCTUnwrap(pane.webView, "the page is on screen")
+        let dropped = try write(Data("dropped".utf8), named: "dropped.md", in: directory)
+        let target = dropTarget(in: pane)
+        XCTAssertTrue(target.performDragOperation(dragOf([dropped])))
+
+        XCTAssertEqual(controller.openNotes.last?.title, "dropped.md")
+        XCTAssertEqual(controller.currentTabState.kind, .text)
+        XCTAssertEqual(pane.shownBaseURL, PageFiles.pageURL(page),
+                       "the page is still the page it was")
+        XCTAssertNotEqual(webView.url, dropped)
+        XCTAssertNotEqual(webView.url.map(PageFiles.linkDestination), dropped,
+                          "and WebKit never navigated to the file let go on it")
+    }
+
+    /// PDFKit does the same thing with a dropped file — opens it in place —
+    /// and is kept out of the drag the same way.
+    @MainActor
+    func testAFileDroppedOnADocumentOpensATab() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeController(in: directory)
+        let paper = try makePDF(named: "paper.pdf", in: directory)
+        controller.open(url: paper)
+        controller.window?.layoutIfNeeded()
+        XCTAssertEqual(controller.previewPanes.kind, .pdf)
+
+        let pane = controller.previewPanes.pdf
+        let dropped = try write(Data("dropped".utf8), named: "dropped.md", in: directory)
+        let target = dropTarget(in: pane)
+        XCTAssertTrue(target.performDragOperation(dragOf([dropped])))
+
+        XCTAssertEqual(controller.openNotes.last?.title, "dropped.md")
+        XCTAssertEqual(controller.currentTabState.kind, .text)
+        XCTAssertEqual(
+            controller.openNotes.first(where: { $0.title == "paper.pdf" })?.fileURL?
+                .standardizedFileURL,
+            paper.standardizedFileURL,
+            "the document tab is still the document it was"
+        )
+    }
+
+    /// A picture tab has no text to put a chip in, so a picture let go on one
+    /// is a picture tab of its own — the strip's answer, not the editor's.
+    @MainActor
+    func testAFileDroppedOnAPictureOpensATab() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeController(in: directory)
+        let picture = try write(pngData(width: 20, height: 10), named: "photo.png",
+                                in: directory)
+        controller.open(url: picture)
+        controller.window?.layoutIfNeeded()
+        XCTAssertEqual(controller.previewPanes.kind, .image)
+
+        let other = try write(pngData(width: 8, height: 8), named: "other.png", in: directory)
+        let target = dropTarget(in: controller.previewPanes.image)
+        XCTAssertTrue(target.performDragOperation(dragOf([other])))
+
+        XCTAssertEqual(controller.openNotes.last?.title, "other.png")
+        XCTAssertEqual(controller.currentTabState.kind, .image)
+    }
+
+    /// A chapter is a page like any other, and the book behind it is left on
+    /// the chapter it was open at.
+    @MainActor
+    func testAFileDroppedOnAChapterOpensATab() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeController(in: directory)
+        controller.open(url: exampleURL("Book.epub"))
+        controller.window?.layoutIfNeeded()
+        XCTAssertEqual(controller.previewPanes.kind, .epub)
+        let chapterBefore = controller.previewPanes.epub.chapterIndex
+
+        let dropped = try write(Data("dropped".utf8), named: "dropped.md", in: directory)
+        let target = dropTarget(in: controller.previewPanes.epub)
+        XCTAssertTrue(target.performDragOperation(dragOf([dropped])))
+
+        XCTAssertEqual(controller.openNotes.last?.title, "dropped.md")
+        XCTAssertEqual(controller.currentTabState.kind, .text)
+        XCTAssertEqual(controller.previewPanes.epub.chapterIndex, chapterBefore,
+                       "the book is still where it was being read")
+    }
+
     // MARK: - Helpers
+
+    /// The fixtures the repo keeps beside the sources.
+    private func exampleURL(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Examples/\(name)")
+            .standardizedFileURL
+    }
+
+    /// The view a Finder drag actually lands on. AppKit hands it to the
+    /// deepest view under the pointer that is registered for the type, so a
+    /// test that dropped on the wrapper would prove nothing about the page or
+    /// the document inside it.
+    @MainActor
+    private func dropTarget(in view: NSView) -> NSView {
+        var best = view
+        var bestDepth = -1
+        var stack: [(view: NSView, depth: Int)] = [(view, 0)]
+        while let (candidate, depth) = stack.popLast() {
+            if candidate.registeredDraggedTypes.contains(.fileURL), depth > bestDepth {
+                best = candidate
+                bestDepth = depth
+            }
+            stack.append(contentsOf: candidate.subviews.map { ($0, depth + 1) })
+        }
+        return best
+    }
+
+    private func makePDF(named name: String, in directory: URL) throws -> URL {
+        let document = PDFDocument()
+        let page = PDFPage()
+        page.setBounds(NSRect(x: 0, y: 0, width: 300, height: 400), for: .mediaBox)
+        document.insert(page, at: 0)
+        let url = directory.appendingPathComponent(name)
+        XCTAssertTrue(document.write(to: url), "the fixture has to be a real PDF")
+        return url
+    }
 
     @MainActor
     private func makeController(in directory: URL) throws -> MainWindowController {

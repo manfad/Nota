@@ -237,9 +237,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleImageSidebar(_:)) {
             let showing = activeController?.isImageSidebarVisible ?? false
-            // One name, ticked while the gallery is up, rather than a title
-            // that flips between Show and Hide.
-            menuItem.title = L10n.text("Image Gallery")
+            // One name, ticked while the column is up, rather than a title
+            // that flips between Show and Hide. The name is what the column
+            // is listing: a note's pictures, or the document's own contents
+            // while a tab that is read rather than edited is in front — a
+            // book or a PDF. ⌘B and the tick are the same either way.
+            let contents = activeController?.sidebarShowsContents ?? false
+            menuItem.title = L10n.text(contents ? "Table of Contents" : "Image Gallery")
             menuItem.state = showing ? .on : .off
         }
         if menuItem.action == #selector(toggleZenMode(_:)) {

@@ -47,9 +47,29 @@ final class PDFPreviewView: NSView, PreviewContent {
     /// page — restoring page 4 must not be the same thing as leaving page 4.
     private var isInstalling = false
 
+    /// Files let go on the document. PDFKit would take a dropped PDF itself
+    /// and swap the document under the reader, so the view never sees the
+    /// drag — see `NotaPDFView`.
+    var onDropFiles: (([URL]) -> Void)? {
+        didSet { pdfView.onDropFiles = onDropFiles }
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        PreviewFileDrop.accept(sender, by: onDropFiles)
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        registerForDraggedTypes(PreviewFileDrop.types)
 
         // Pinned edge to edge, unlike the Markdown render's own margins.
         // PDFView scales and centres each page inside the room it is given,
@@ -150,6 +170,9 @@ final class PDFPreviewView: NSView, PreviewContent {
             // being taken out, so the search goes with it.
             findSession.close()
             pdfView.document = document
+            // And a fresh outline, walked once here rather than on every
+            // question the sidebar asks.
+            outline = PDFOutlineContents(of: document)
             // A fresh document is a fresh page size: the fit the last one
             // was drawn at says nothing about this one.
             fittedSize = .zero
@@ -164,6 +187,34 @@ final class PDFPreviewView: NSView, PreviewContent {
 
     /// How many pages there are, and none at all when there is no document.
     var pageCount: Int { pdfView.document?.pageCount ?? 0 }
+
+    // MARK: - The document's own outline
+
+    /// The outline of the document in the pane, read once when the document
+    /// goes in. Walking `outlineRoot` costs a traversal of the whole tree and
+    /// nothing about it changes while the tab is open, so it is not walked
+    /// again on every scroll.
+    private var outline = PDFOutlineContents()
+
+    /// What the sidebar lists for a PDF: its outline, flattened. A document
+    /// with none lists nothing, which is what keeps the column away.
+    var contentsEntries: [ContentsEntry] { outline.entries }
+
+    /// Which line names the page in front — the last entry landing on or
+    /// before it, since an outline names where a section starts and the
+    /// reader is inside the one they have most recently passed.
+    var currentContentsLine: Int? { outline.line(forPage: currentPageIndex) }
+
+    /// A line of the outline, chosen in the sidebar: the document goes to the
+    /// destination the entry names, which is a point on a page rather than
+    /// the top of it. An entry with no destination has nowhere to go.
+    func goToContentsLine(_ line: Int) {
+        guard let destination = outline.destination(ofLine: line) else { return }
+        pdfView.go(to: destination)
+        // `go(to:)` moves the page without a `PDFViewPageChanged` of its own
+        // in every case, so where the tab is left is reported by hand.
+        onPositionChange?(currentPageIndex)
+    }
 
     // MARK: - How big the page is drawn
 
@@ -339,6 +390,76 @@ final class PDFPreviewView: NSView, PreviewContent {
     }
 }
 
+// MARK: - The outline, flattened
+
+/// A PDF's own outline — its bookmarks, the thing every other reader puts in a
+/// drawer down the side — read into the shape the contents column lists.
+///
+/// PDFKit hands it over as a tree hanging off `PDFDocument.outlineRoot`, whose
+/// own node is a holder rather than an entry: its children are the top level.
+/// Walking it depth first is what makes the flattened list read in the order
+/// the document does, and the depth of the walk is the level the sidebar
+/// indents by — the same shape a book's chapters arrive in, so one column
+/// lists both without knowing which it has.
+///
+/// Everything is read once, when the document goes into the pane. A
+/// `PDFDestination` holds a page, and asking a page for its index means asking
+/// the document; doing that per scroll for every entry of a long outline is a
+/// traversal a scroll cannot afford.
+struct PDFOutlineContents {
+    /// The lines, in the order the document reads.
+    private(set) var entries: [ContentsEntry] = []
+    /// Where each of them goes, in the same order.
+    private var destinations: [PDFDestination?] = []
+    /// And which page that is, so the line naming the page in front is found
+    /// by comparing numbers rather than by asking PDFKit again.
+    private var pages: [Int?] = []
+
+    /// An empty outline, which is what a pane with no document in it has.
+    init() { }
+
+    init(of document: PDFDocument?) {
+        guard let document, let root = document.outlineRoot else { return }
+        walk(root, level: 0, in: document)
+    }
+
+    /// Depth first, the root itself skipped: `outlineRoot` is a holder with no
+    /// label of its own, so level 1 is its children.
+    private mutating func walk(_ node: PDFOutline, level: Int, in document: PDFDocument) {
+        for index in 0 ..< node.numberOfChildren {
+            guard let child = node.child(at: index) else { continue }
+            // An entry with no label is one the document did not name; there
+            // is nothing to list, but its children may still be worth
+            // listing, so the walk goes on through it at the same level.
+            let label = child.label ?? ""
+            if !label.isEmpty {
+                entries.append(
+                    ContentsEntry(level: level + 1, title: label, line: entries.count)
+                )
+                destinations.append(child.destination)
+                pages.append(child.destination?.page.map { document.index(for: $0) })
+            }
+            walk(child, level: label.isEmpty ? level : level + 1, in: document)
+        }
+    }
+
+    func destination(ofLine line: Int) -> PDFDestination? {
+        destinations.indices.contains(line) ? destinations[line] : nil
+    }
+
+    /// The last entry landing on or before a page. An outline names where a
+    /// section begins, so the reader is inside the one they most recently
+    /// passed — and inside nothing at all until they have passed the first.
+    func line(forPage page: Int) -> Int? {
+        var found: Int?
+        for (line, entryPage) in pages.enumerated() {
+            guard let entryPage, entryPage != NSNotFound, entryPage <= page else { continue }
+            found = line
+        }
+        return found
+    }
+}
+
 // MARK: - The view the Find menu reaches
 
 /// The `PDFView` a PDF tab is read in, and the one thing it is here for: ⌘F.
@@ -360,6 +481,47 @@ final class NotaPDFView: PDFView, NSUserInterfaceValidations {
     /// The document's find bar. Weak, the way the render's is: the session
     /// belongs to the pane, and the pane owns this view.
     weak var findSession: PDFFindSession?
+
+    /// Files let go on the document, which open as tabs the way they do
+    /// anywhere else over the column.
+    ///
+    /// `PDFView` answers for a file drop itself, by opening the file in
+    /// place: a PDF dropped on a PDF replaces it, and the tab that was being
+    /// read is showing another document with no way back. So the drag never
+    /// reaches PDFKit — the types it registered for are taken off this view
+    /// and only `public.file-url` is put back, and the methods below answer
+    /// without ever calling `super`.
+    var onDropFiles: (([URL]) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        unregisterDraggedTypes()
+        registerForDraggedTypes(PreviewFileDrop.types)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    // MARK: - Dropped files
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        PreviewFileDrop.accept(sender, by: onDropFiles)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) { }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) { }
+
+    // MARK: - Find
 
     override func performTextFinderAction(_ sender: Any?) {
         guard let item = sender as? NSValidatedUserInterfaceItem,

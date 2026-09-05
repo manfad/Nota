@@ -136,9 +136,31 @@ final class HTMLPreviewView: NSView, PreviewContent {
         set { findSession.onPageAnswered = newValue }
     }
 
+    /// Files let go on the page. WebKit would take them itself and navigate
+    /// away from what is being read, so the page view never sees the drag —
+    /// see `HTMLPageView`. Kept here as well as handed on, since the pane is
+    /// an empty rectangle until the first tab is read through it and a drop
+    /// on that is still a drop on the column.
+    var onDropFiles: (([URL]) -> Void)? {
+        didSet { webView?.onDropFiles = onDropFiles }
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        PreviewFileDrop.accept(sender, by: onDropFiles)
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        registerForDraggedTypes(PreviewFileDrop.types)
 
         findSession.onVisibilityChange = { [weak self] visible in
             self?.onFindBarVisibilityChange?(visible)
@@ -201,6 +223,7 @@ final class HTMLPreviewView: NSView, PreviewContent {
 
         let page = HTMLPageView(frame: bounds, configuration: configuration)
         page.findSession = findSession
+        page.onDropFiles = onDropFiles
         // Pinned edge to edge, unlike the Markdown render's own margins, and
         // for the same reason a PDF is: a page lays out to the viewport it is
         // given, and its own body margin is already the margin its author
@@ -741,6 +764,17 @@ final class PageFiles: NSObject, WKURLSchemeHandler {
 final class HTMLPageView: WKWebView {
     var takesKeyboard = false
 
+    /// Files let go on the page, which open as tabs the way they do anywhere
+    /// else over the column.
+    ///
+    /// WebKit answers for a file drop itself, by loading the file — a page
+    /// dropped on a page replaces it, and the tab that was being read is gone
+    /// with no way back. So the drag never reaches WebKit: the types it
+    /// registered for are taken off this view and only `public.file-url` is
+    /// put back, and the three methods below answer without ever calling
+    /// `super`. A page in the column is read, not navigated.
+    var onDropFiles: (([URL]) -> Void)?
+
     /// The page's find bar. Find…, Find Next, Find Previous and Use Selection
     /// for Find are nil-targeted `performTextFinderAction:` items, so they
     /// land here whenever this view has the keyboard — which is reading mode,
@@ -752,11 +786,41 @@ final class HTMLPageView: WKWebView {
     /// what must never appear here.
     weak var findSession: HTMLFindSession?
 
+    override init(frame: CGRect, configuration: WKWebViewConfiguration) {
+        super.init(frame: frame, configuration: configuration)
+        // Everything WebKit registered for goes, and the one drag the column
+        // answers for is put back in its place.
+        unregisterDraggedTypes()
+        registerForDraggedTypes(PreviewFileDrop.types)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
     override var acceptsFirstResponder: Bool { takesKeyboard }
 
     override func becomeFirstResponder() -> Bool {
         takesKeyboard && super.becomeFirstResponder()
     }
+
+    // MARK: - Dropped files
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        PreviewFileDrop.operation(for: sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        PreviewFileDrop.accept(sender, by: onDropFiles)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) { }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) { }
 
     override func performTextFinderAction(_ sender: Any?) {
         guard let item = sender as? NSValidatedUserInterfaceItem,

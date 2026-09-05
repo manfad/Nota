@@ -119,10 +119,10 @@ final class EPUBTests: XCTestCase {
         XCTAssertEqual(book.contents.map(\.chapterIndex), [0, 1, 1, 2])
         XCTAssertEqual(book.contents.map(\.fragment), [nil, nil, "part-two", nil])
 
-        XCTAssertEqual(book.tocHeadings.map(\.text),
+        XCTAssertEqual(book.contentsEntries.map(\.title),
                        ["The Beginning", "The Middle", "A Second Part", "The End"])
-        XCTAssertEqual(book.tocHeadings.map(\.location), [0, 1, 2, 3],
-                       "a heading's location is its own line of the contents")
+        XCTAssertEqual(book.contentsEntries.map(\.line), [0, 1, 2, 3],
+                       "an entry's line is its own place in the contents")
         let destination = try XCTUnwrap(book.destination(ofContentsLine: 2))
         XCTAssertEqual(destination.chapter, 1)
         XCTAssertEqual(destination.fragment, "part-two")
@@ -261,27 +261,21 @@ final class EPUBTests: XCTestCase {
     // MARK: - Turning the chapters
 
     @MainActor
-    func testTheChapterBarWalksTheSpineAndStopsAtBothEnds() throws {
+    func testTheChaptersWalkTheSpineAndStopAtBothEnds() throws {
         let controller = try makeController(store: try makeStore())
         controller.open(url: try makeEPUB3(named: "novel.epub"))
         let pane = controller.previewPanes.epub
-        let (back, forward) = pane.chapterControl.glyphsForTesting
 
-        XCTAssertEqual(pane.chapterControl.readout.title, "The Beginning")
-        XCTAssertEqual(pane.chapterControl.readout.ordinal, "1 / 3")
-        XCTAssertFalse(back.isEnabled, "there is nothing before the first chapter")
-        XCTAssertTrue(forward.isEnabled)
+        XCTAssertEqual(pane.chapterTitle, "The Beginning")
+        XCTAssertEqual(controller.footerRegions.cursor.stringValue, "Chapter 1 of 3")
 
         pane.stepChapter(by: 1)
         XCTAssertEqual(pane.chapterIndex, 1)
         XCTAssertEqual(pane.chapterTitle, "The Middle")
-        XCTAssertEqual(pane.chapterControl.readout.ordinal, "2 / 3")
         XCTAssertEqual(controller.footerRegions.cursor.stringValue, "Chapter 2 of 3")
 
         pane.stepChapter(by: 1)
         XCTAssertEqual(pane.chapterIndex, 2)
-        XCTAssertFalse(pane.chapterControl.glyphsForTesting.forward.isEnabled,
-                       "and nothing after the last")
 
         pane.stepChapter(by: 1)
         XCTAssertEqual(pane.chapterIndex, 2, "the end of the book is the end")
@@ -292,10 +286,26 @@ final class EPUBTests: XCTestCase {
         XCTAssertEqual(pane.chapterIndex, 0, "and so is the start")
     }
 
-    /// `@` in the ⌘P switcher lists the book's own contents, and choosing one
-    /// turns to that chapter.
+    /// Nothing floats over the chapter but the tools the reader opened. The
+    /// bar that used to turn chapters is gone: a control with no way to close
+    /// it has no business standing on the page, and the contents are in the
+    /// sidebar now.
     @MainActor
-    func testTheSwitcherListsTheChaptersUnderAt() throws {
+    func testTheColumnHasNoFloatingChapterControl() throws {
+        let controller = try makeController(store: try makeStore())
+        controller.open(url: try makeEPUB3(named: "novel.epub"))
+        let pane = controller.previewPanes.epub
+
+        let floating = descendants(of: pane, ofType: PillView.self)
+        let unexpected = floating.filter { !($0 is FindBarView) && !($0 is ReplaceBarView) }
+        XCTAssertTrue(unexpected.isEmpty,
+                      "the column still floats \(unexpected.map { type(of: $0) })")
+    }
+
+    /// `@` over a book lists nothing at all: a book's contents live in the
+    /// sidebar, where they can stay on screen while the chapter is read.
+    @MainActor
+    func testTheSwitcherListsNoHeadingsForABook() throws {
         let controller = try makeKeyController()
         controller.open(url: try makeEPUB3(named: "novel.epub"))
 
@@ -304,15 +314,8 @@ final class EPUBTests: XCTestCase {
         defer { picker.hide() }
 
         picker.query = "@"
-        XCTAssertEqual(picker.visibleRowTexts,
-                       ["The Beginning", "The Middle", "A Second Part", "The End"])
-
-        picker.query = "@end"
-        XCTAssertEqual(picker.visibleRowTexts.first, "The End")
-        picker.chooseSelection()
-
-        XCTAssertEqual(controller.previewPanes.epub.chapterIndex, 2)
-        XCTAssertEqual(controller.previewPanes.epub.chapterTitle, "The End")
+        XCTAssertTrue(picker.isShowingHeadings, "`@` still switches the list over")
+        XCTAssertEqual(picker.visibleRowTexts, [], "and the list is empty")
     }
 
     /// A text tab's `@` list is still its own headings — a book's contents
@@ -331,6 +334,112 @@ final class EPUBTests: XCTestCase {
         defer { picker.hide() }
         picker.query = "@"
         XCTAssertEqual(picker.visibleRowTexts, ["Alpha", "Beta"])
+    }
+
+    // MARK: - The contents in the sidebar
+
+    /// A book tab brings the column up on its own — the way a note with a
+    /// picture in it does — and what stands in it is the book's own table of
+    /// contents, nesting and all.
+    @MainActor
+    func testABookInFrontListsItsContentsInTheSidebar() throws {
+        let controller = try makeKeyController()
+        controller.open(url: exampleURL("Book.epub"))
+
+        XCTAssertTrue(controller.isImageSidebarVisible, "the column came up with the book")
+        XCTAssertTrue(controller.sidebarShowsContents)
+        XCTAssertEqual(controller.contentsSidebarView.rowTitles, [
+            "1. A Book in a Tab",
+            "1.1 Turning pages",
+            "1.2 Finding things",
+            "2. Text and Pictures",
+            "2.1 A short table",
+            "3. The Last Chapter",
+            "3.1 Afterword",
+        ])
+        XCTAssertEqual(controller.contentsSidebarView.rowIndents, [0, 12, 12, 0, 12, 0, 12],
+                       "a section sits one step in from its chapter")
+        XCTAssertEqual(controller.contentsSidebarView.selectedRowTitle, "1. A Book in a Tab",
+                       "the chapter on screen is the line that is rung")
+    }
+
+    /// Clicking a line turns to the chapter it names, and the line rung goes
+    /// with it.
+    @MainActor
+    func testClickingALineOfTheContentsTurnsToThatChapter() throws {
+        let controller = try makeKeyController()
+        controller.open(url: exampleURL("Book.epub"))
+        let sidebar = controller.contentsSidebarView
+        let row = try XCTUnwrap(sidebar.rowTitles.firstIndex(of: "2. Text and Pictures"))
+
+        sidebar.chooseRow(row)
+
+        XCTAssertEqual(controller.previewPanes.epub.chapterIndex, 1)
+        XCTAssertEqual(controller.currentTabState.selection, 1,
+                       "and that is where the tab is left")
+        XCTAssertEqual(sidebar.selectedRowTitle, "2. Text and Pictures")
+    }
+
+    /// The keys a book is turned by are the page's own script, and the line
+    /// rung follows them: `→` at the end of chapter one lands on chapter two,
+    /// and the sidebar says so.
+    @MainActor
+    func testTurningAChapterWithTheKeyScriptMovesTheRungLine() throws {
+        let controller = try makeReadingController(url: exampleURL("Book.epub"))
+        let pane = controller.previewPanes.epub
+        XCTAssertEqual(controller.contentsSidebarView.selectedRowTitle, "1. A Book in a Tab")
+
+        let turned = expectation(description: "the next chapter loaded")
+        turned.assertForOverFulfill = false
+        pane.chapterPage.onLoadFinished = { turned.fulfill() }
+        try evaluate(
+            """
+            document.dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })
+            );
+            """,
+            in: pane
+        )
+        wait(for: [turned], timeout: 10)
+        pane.chapterPage.onLoadFinished = nil
+
+        XCTAssertEqual(pane.chapterIndex, 1)
+        XCTAssertEqual(controller.contentsSidebarView.selectedRowTitle, "2. Text and Pictures")
+    }
+
+    /// The column belongs to the tab in front: a book's contents while a book
+    /// is being read, a note's pictures the moment one is.
+    @MainActor
+    func testSwitchingToATextTabSwapsTheContentsBackForTheGallery() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeKeyController()
+        let markdown = directory.appendingPathComponent("notes.md")
+        try "Just words.".write(to: markdown, atomically: true, encoding: .utf8)
+
+        controller.open(url: markdown)
+        let textTab = controller.selectedTabIndex
+        controller.open(url: exampleURL("Book.epub"))
+        let bookTab = controller.selectedTabIndex
+
+        XCTAssertTrue(controller.sidebarShowsContents)
+        XCTAssertFalse(controller.contentsSidebarView.isHidden)
+        XCTAssertTrue(controller.quickLookSidebar.isHidden)
+
+        controller.selectTab(at: textTab)
+        XCTAssertFalse(controller.sidebarShowsContents)
+        XCTAssertFalse(controller.isImageSidebarVisible,
+                       "a note with no pictures has nothing to show")
+
+        // Pinned open, the same column is the gallery again.
+        controller.toggleImageSidebar()
+        XCTAssertTrue(controller.isImageSidebarVisible)
+        XCTAssertFalse(controller.quickLookSidebar.isHidden)
+        XCTAssertTrue(controller.contentsSidebarView.isHidden)
+
+        controller.selectTab(at: bookTab)
+        XCTAssertTrue(controller.sidebarShowsContents)
+        XCTAssertFalse(controller.contentsSidebarView.isHidden)
+        XCTAssertTrue(controller.quickLookSidebar.isHidden)
     }
 
     // MARK: - The chapter is a page
@@ -753,6 +862,15 @@ final class EPUBTests: XCTestCase {
     private func makeReadingController(
         named name: String, store: SessionStore? = nil
     ) throws -> MainWindowController {
+        try makeReadingController(url: try makeEPUB3(named: name), store: store)
+    }
+
+    /// The same, for a book that already exists on disk — the checked-in
+    /// example rather than a fixture built for the test.
+    @MainActor
+    private func makeReadingController(
+        url: URL, store: SessionStore? = nil
+    ) throws -> MainWindowController {
         let controller = try makeController(store: store ?? (try makeStore()))
         let window = try XCTUnwrap(controller.window)
         window.makeKeyAndOrderFrontOffscreen()
@@ -761,11 +879,22 @@ final class EPUBTests: XCTestCase {
         let loaded = expectation(description: "the chapter loaded")
         loaded.assertForOverFulfill = false
         controller.previewPanes.epub.chapterPage.onLoadFinished = { loaded.fulfill() }
-        controller.open(url: try makeEPUB3(named: name))
+        controller.open(url: url)
         window.layoutIfNeeded()
         wait(for: [loaded], timeout: 10)
         controller.previewPanes.epub.chapterPage.onLoadFinished = nil
         return controller
+    }
+
+    /// A file in the folder of examples checked in beside the app — a real
+    /// book a reader might open, rather than one zipped up for the test.
+    private func exampleURL(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Examples/\(name)")
+            .standardizedFileURL
     }
 
     /// Turns to a chapter and waits for its page to arrive.
@@ -840,6 +969,17 @@ final class EPUBTests: XCTestCase {
             if let match = descendant(of: subview, ofType: type) { return match }
         }
         return nil
+    }
+
+    /// Every one of them, not the first — what a test asking "and nothing
+    /// else" needs.
+    private func descendants<T: NSView>(of view: NSView, ofType type: T.Type) -> [T] {
+        var found: [T] = []
+        if let match = view as? T { found.append(match) }
+        for subview in view.subviews {
+            found.append(contentsOf: descendants(of: subview, ofType: type))
+        }
+        return found
     }
 
     private func makeTemporaryDirectory() throws -> URL {
