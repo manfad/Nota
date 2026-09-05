@@ -7,10 +7,17 @@
   Closed tabs are gone (after the Save / Don't Save / Cancel prompt; Don't Save = ⌘D in the alert).
 - Files are plain text of any kind — .md .txt .xml .json .css .js .html .yaml .toml .csv .log .ini .sh .py .swift and
   anything else that is text (Notepad++ model). Nota registers as an editor for text/source types (Finder "Open With",
-  drag onto the Dock icon, drop onto the window). No syntax highlighting. Not .docx / .rtf / binaries —
-  except the three Nota views rather than edits: a PDF, a picture and an EPUB (see PDF, Image tabs and EPUB).
+  drag onto the Dock icon, drop onto the window). No syntax highlighting. Not .docx / binaries — except the three
+  Nota views rather than edits: a PDF, a picture and an EPUB (see PDF, Image tabs and EPUB). An `.rtf` or an RTFD
+  package is imported rather than opened (done 2026-09-05, see Done 17): its plain text lands in a brand-new
+  untitled tab, formatting and any pictures dropped and never written back — `fileURL` stays nil, so it is never
+  the file itself, only ever a copy of its words.
 - Editing a named file only updates the cache; disk changes on ⌘S only. A named file keeps its extension, encoding
   (UTF-8 / UTF-16 / Latin-1 / Windows-1252 detected on open) and line endings (LF / CRLF) on save.
+- The save panel splits the extension out of the name field into its own editable "Format" combo box (pick one of
+  Nota's known extensions, or type another), so it is never lost to the panel's own name-typed-with-a-dot handling; a
+  named file's extension preselects it, and otherwise the last extension chosen through the panel is remembered
+  (`Preferences.lastSaveExtension`, default `md`) and offered again next time.
 - The footer shows a text note's own shape at the right of the counts, `UTF-8` and `LF` as two capsule badges in
   the vim chip's family (done 2026-09-04, see Done 2): clicking either pops a menu to convert it, which marks the tab
   dirty for the next ⌘S; hover brightens the capsule so it reads as pressable. Empty over a PDF or a picture, which
@@ -89,36 +96,43 @@
   Settings toggle "Gutter separator" (default off) draws a hairline (separatorColor) along the gutter's inner edge.
 - Settings toggle "Word wrap" (default on). Off: a long line runs on and the editor scrolls sideways; the gutter stays
   pinned at the left edge. The Markdown render always wraps.
-- Settings (⌘,): a source list of seven pages down the left — General, Appearance, Editor, Preview,
-  Status bar, Shortcuts, About — over one shared Save button, which applies every page's draft together
-  and is greyed until something changes. The sidebar is a `.sidebar`-material column, 180pt, running the
-  full height with the traffic lights over it (the titlebar is transparent and the title is not drawn);
-  each row is an accent-coloured SF Symbol beside its name, and the page on screen is a rounded row
-  filled in the accent colour. The pane beside it carries the page's title at the top, centred and bold,
-  then the controls in inset rounded groups: a 10pt-radius card, a hairline between one 44pt row and the
-  next, the label left and the control on the right edge, an on/off setting wearing an `NSSwitch` rather
-  than a checkbox, and a quiet footnote under the group where one is owed. **General** — language, theme
-  ("System Default follows the Mac."). **Appearance** — font family, size, line spacing, editor padding,
-  then a **Window** group of five: hide the tab bar, auto-hide the tab bar, hide the traffic lights, the
-  bookmark button, the Settings button, under a footnote saying the keys (⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W) all
-  keep working without them and what auto-hide does. "Auto-hide tab bar" is greyed while "Hide tab bar"
-  is on.
+- Settings (⌘,): a source list of eight pages down the left — General, Appearance, Editor, Preview,
+  Tab bar, Status bar, Shortcuts, About — over one shared Save button, which applies every page's draft
+  together and is greyed until something changes. The sidebar is a `.sidebar`-material column, 180pt,
+  running the full height with the traffic lights over it (the titlebar is transparent and the title is
+  not drawn); each row is an accent-coloured SF Symbol beside its name, and the page on screen is a
+  rounded row filled in the accent colour. The pane beside it carries the page's title at the top,
+  centred and bold, then the controls in inset rounded groups: a 10pt-radius card, a hairline between one
+  44pt row and the next, the label left and the control on the right edge, an on/off setting wearing an
+  `NSSwitch` rather than a checkbox, and a quiet footnote under the group where one is owed. **General**
+  — language, theme ("System Default follows the Mac."). **Appearance** — font family, size, line
+  spacing, editor padding. **Tab bar** — a first group of "Show tab bar" and "Auto-hide tab bar", then a
+  second group for what the strip shows: Traffic lights, Bookmark button, Settings button, under a
+  footnote saying the keys (⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W) all keep working even with the tab bar and its
+  buttons hidden, and what auto-hide does. "Auto-hide tab bar" and "Traffic lights" are both greyed while
+  "Show tab bar" is off — turning the strip off already takes the lights with it, the way zen does, so
+  there is nothing left for either row to do. Whenever the lights are gone from their corner, the strip
+  takes their slot, starting at the same 12pt inset it uses beside a left sidebar; a tab torn off from it
+  is placed under the pointer by the strip's current inset, not always the lights' 82pt.
   **Editor** — word wrap, line numbers, gutter separator, vim mode. **Preview** — start supported files
   in preview mode. **Status bar** — show status bar, then which regions it shows. **About** — the app
   icon at 96pt, "Nota", `Version N.N.N` and one line saying what Nota is. The window is 760×520,
   resizable down to a floor; a page taller than the pane scrolls inside it, and the page you left it on
   is the page it opens on next time, for the life of the window.
-- **Auto-hide tab bar** (Settings › Appearance › Window, default off): the strip leaves the layout exactly
-  as "Hide tab bar" takes it — the split runs to the top of the window and the editor keeps the same 28pt
-  drag band — but the top 28pt of the window is a hot zone. The pointer reaching it slides the strip in
-  over the split (0.15s, alpha and a slide down from its own height), opaque, with a `separatorColor`
-  hairline along its bottom edge; nothing is pushed down for it. The pointer leaving the strip or the band
-  starts a 0.3s grace period, after which the strip slides away again; coming back cancels it, and so does
-  a reorder drag, a tear-off, an open tab context menu, or a pointer still over the strip — each buys
-  another grace period rather than interrupting the gesture. The hot zone takes no clicks: hit testing
+- **Auto-hide tab bar** (Settings › Tab bar, default off): the strip and the traffic lights
+  leave the layout exactly as "Hide tab bar" takes them — the split runs to the top of the window and the
+  editor keeps the same 28pt drag band — but the top 28pt of the window is a hot zone. The pointer reaching
+  it slides the strip in over the split (0.15s, alpha and a slide down from its own height), opaque, with a
+  `separatorColor` hairline along its bottom edge; nothing is pushed down for it. The traffic lights come
+  back with it, plain show, and the strip's leading inset switches from 12pt back to 82pt to clear them —
+  unless "Hide traffic lights" is also on, in which case the lights stay off and the strip keeps the 12pt
+  inset through the reveal. The pointer leaving the strip or the band starts a 0.3s grace period, after
+  which the strip (and the lights, if it brought them back) slides away again; coming back cancels it, and
+  so does a reorder drag, a tear-off, an open tab context menu, or a pointer still over the strip — each
+  buys another grace period rather than interrupting the gesture. The hot zone takes no clicks: hit testing
   goes straight through it to the document. Zen mode and "Hide tab bar" both win: under either the strip
-  is gone for good, the hot zone watches for nothing, and leaving zen does not pop a strip that is waiting
-  on the pointer.
+  and the lights are gone for good, the hot zone watches for nothing, and leaving zen does not pop a strip
+  that is waiting on the pointer.
 - **The version** is one string, `AppVersion.current`, and the About page is where it is read. Every
   commit bumps its patch number by one and writes the same number into `Info.plist`, so the About page,
   the Finder and the bundle never disagree — `.githooks/pre-commit` does it, installed with
@@ -143,6 +157,18 @@
   place, so a moved key works everywhere at once.
 - Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` (· `3 / 7 done` on a `.md` with
   task items) · `N pt` beside gear.
+- **Lists continue themselves (done 2026-09-05)** — Return at the end of a list item opens the next one, in any text
+  tab and not only a `.md`: the same indent, the same delimiter and the counter stepped on once. `1.` → `2.`,
+  `3)` → `4)`, `a.` → `b.`, `z.` → `aa.`, `A.` → `B.`, `viii.` → `ix.`, `IV.` → `V.`, and a bullet (`-`, `*`, `+`)
+  handed on as it stands; case is kept exactly, so an upper-case list never turns lower-case, and a `- [ ]` or
+  `- [x]` box comes back as a fresh unticked `- [ ]`. A lone `i`, `v` or `x` is both a letter and a numeral, and the
+  two step on differently, so Nota looks up: the token is roman only when the nearest non-blank line above it at the
+  same indent carries a roman marker of the same case — `h.` above `i.` gives `j.`, `viii.` above it gives `ii.`, and
+  with nothing above it at all a bare `i.` is the numeral. Tokens that read only one way (`ii`, `iv`, `xii`; `b`,
+  `k`, `aa`) never ask. Return on an item with nothing typed on it takes the marker off and leaves an empty line,
+  which is how the list is ended; Return in the middle of an item still opens the next marker and takes the rest of
+  the text with it. ⇧Return and ⌥Return are the plain newline, and in vim mode the whole hand stands aside outside
+  insert mode, where `o` and `O` are vim's own. One `shouldChangeText` edit, so it is one undo step.
 - **Line operations (done 2026-09-04)** — the hands Notepad++ leaves in the fingers, in the Edit menu and outside vim:
   ⌥↑ / ⌥↓ move the caret's line, or every line the selection touches, up or down one (nothing at either end, and the
   newline count never changes, so no stray line is left behind); ⇧⌥↓ duplicates them below with the caret or the
@@ -183,7 +209,8 @@
   column's corner; the editor mode shows only the editor's, reading only the preview's, since the editor column is
   collapsed there. Both drive the one mode the tab is in and stay in step. It sits over the text rather than in a row of
   its own: nothing is pushed down for it, and the text starts at the strip's bottom edge. Idle segments in
-  `secondaryLabelColor`, the selected one in the standard filled look. Hover only: it fades in (opacity, ≤150ms, no
+  `secondaryLabelColor`, the selected one in the standard filled look; its icons and opaque bezel fill are re-resolved
+  in the control's effective appearance whenever the Mac switches between light and dark. Hover only: it fades in (opacity, ≤150ms, no
   movement) when the pointer is anywhere in the top 44pt of that column and fades out when it leaves; while it is away
   the band takes no clicks, so the text under it stays reachable. ⌘F's find bar wants the same corner: the control drops
   the pill's height plus 6pt and goes on working underneath it rather than leaving, and the hover band grows by the same
@@ -307,6 +334,11 @@
 - Where it lands is the drop target's business, not the file's. Through ⌘O, the Finder, the Dock, the command line,
   `:e path` and the session it is a tab; dropped into the text of a note it is still what it has always been, a
   picture imported into that note as a chip (see Images). The same `.png` does both, depending only on where it went.
+- The window has two tab targets and one chip target. The tab strip is one, and so is the band across the top of the
+  window where a hidden, auto-hidden or zen window keeps its drag region — files let go on either open as tabs, one
+  per file, pictures and `.svg`s included, each classified exactly as ⌘O classifies it. The text of a note is the
+  chip target, and only there does a picture become part of the note. A drag carrying no file is refused by both
+  bands; a file drag hovering an auto-hidden strip holds it open until the drop is done.
 - The tab is locked in reading, exactly as a PDF's is: the picture takes the whole column, the editor stays collapsed,
   there is no mode control in either corner, and ⇧⌘P, ⌥⇧⌘P and both View items are disabled.
 - Drawn by an `NSImageView` inside a scroll view, on the editor's own background, edge to edge. Its own size when the
@@ -460,6 +492,13 @@
 
 ## Tabs
 - One width for every tab, `clamp((viewport − plus − gaps) / n, 40, 180)`, shrinking as tabs are added; the strip never scrolls. The selected tab is raised to 60pt so its ✕ fits and the others shrink evenly to pay for it. Titles clip with a fade rather than an ellipsis; under 60pt the trailing slot goes and the unsaved dot rides on the icon. A separator hairline shows only between two plain tabs. The + rides after the last tab and pins at the trailing edge once the strip is full; it opens a new tab (same as ⌘T). ⌘P fuzzy tab switcher by title.
+- There is no colour in the strip, so how much `labelColor` a shape carries is the only thing that says what state it
+  is in. The selected tab is the strongest mark in it — a rounded fill at 10% (12% dark), its title in `labelColor` —
+  and the pointer's wash on an unselected tab is a clear step lighter at 3.5% (5% dark), its title staying
+  `secondaryLabelColor`, so two tabs never read as selected at once. The selected tab takes no wash of its own. That
+  wash fades in and out over the same 0.12s the tab's dot→✕ cross-fade takes, rather than snapping on beside it. The
+  strip buttons (+, bookmark, gear) wear the same wash and fade, one step darker at 9% (11.5% dark) while held; the
+  disc behind a ✕ is 10% (13% dark) and 18% (22% dark) under a press.
 - The strip's top-right corner holds two buttons past the +: the bookmark button (the ⌘P picker in bookmarks mode) and, last before the reserve, a Settings gear (⌘, by another door). Both pin at the trailing edge; the tabs and the + step left by exactly the slots they take.
 - The switcher's first row sits above its search field and never filters away: "Add new tab", with a `plus`, which ↑ from the top of the list reaches and Return (or a click) turns into a new tab, ⌘T by another door. It is there in the `@` mode too. It is a one-row table of its own, sharing the list's cell view and taking the list's own resolved table style, so it is drawn as a list row — same inset, same rounded selection highlight, icon and title at the list rows' own x. In the bookmarks panel the row is the front tab's bookmark instead: "Bookmark this tab" with a `bookmark`, or "Remove bookmark from this tab" with `bookmark.fill` once it is one, and choosing it is ⇧⌘D by another door; with no tab to bookmark it is greyed and takes no selection.
 - Every tab carries a leading icon for its kind, in the strip and in the switcher's rows, from `FileKindIcon`: most kinds (Markdown, plain text/no extension, PDF, EPUB, HTML, TeX, SQL, JSON, YAML, TOML, XML, CSV, common code and image extensions, and more — see `FileKindIcon.artStem(forExtension:)`) draw this app's own hand-drawn icon set, embedded as SVG text in the generated `FileKindArt.swift`; a kind the set has no art for falls back to an SF Symbol — pictures without art `photo`, logs `list.bullet.rectangle`, remaining code extensions `chevron.left.forwardslash.chevron.right`, an unsaved note `doc`, anything else `text.page` — with an older spelling behind any SF Symbol the running system lacks. Heading rows keep their bare indent, with no icon.
@@ -547,6 +586,25 @@
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+18. **Lists continue themselves on Return (done 2026-09-05).** `ListContinuation.swift` reads the line the caret is
+   on and says what Return means: the same marker stepped on once, with the indent, the delimiter and the case kept,
+   or — on an item with nothing typed on it — the marker taken off and the list ended. Bullets, arabic numbers,
+   letters and roman numerals, after `.` or `)`, and `- [ ]` boxes handed on fresh and unticked. A lone `i.` or `I.`
+   is settled by the item above it at the same indent. All the arithmetic is pure; `NotaTextView.insertNewline`
+   applies the answer as one `shouldChangeText` edit. See the Editor section.
+17. **Import `.rtf` and RTFD as plain text (done 2026-09-05).** Nota still refuses to edit an RTF or an RTFD package
+    as a file, but no longer refuses to open one at all: `MainWindowController.open(url:)` — the single path ⌘O,
+    drop, the Dock icon and Open Recent all funnel through — asks `TextFile.rtfPlainText(at:)` first, before the
+    sniff or the exclusion below would otherwise refuse it. That reads the document with `NSAttributedString(rtf:
+    documentAttributes:)` for a `.rtf` and `NSAttributedString(rtfdFileWrapper:documentAttributes:)` for an RTFD
+    package and keeps only `.string` — no formatting, no pictures — deciding by the bytes actually parsing as RTF
+    rather than by the extension, so a `.rtf` that is not really RTF still falls through to the ordinary rules
+    untouched. A hit lands in a brand-new untitled tab rather than a tab bound to the file: `fileURL` stays nil, so
+    ⌘S always asks where to put it and can never overwrite the rich document with plain text, and the tab is dirty
+    from the moment it lands, since none of its text is on disk anywhere yet. Its title is the document's own base
+    name rather than the usual `Untitled` — `untitledName` already took any string. `Note.isOpenable` gets the same
+    check, so a dropped `.rtf` reaches the import instead of being silently refused. Neither the rtf's path nor the
+    untitled tab it becomes is noted to File › Open Recent or the session as a file.
 1. **External changes to an open file (done 2026-09-04).** A named tab watches its file — a `DispatchSource` on the
    file's descriptor and one on its folder, so a temp-file-and-rename save is caught as well as a write in place.
    Clean reloads silently, dirty is marked with a ring round its unsaved dot and offered Reload / Keep mine in a pill

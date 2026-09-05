@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import UniformTypeIdentifiers
 
@@ -244,6 +245,31 @@ enum TextFile {
     static func isDeliberatelyExcluded(_ url: URL) -> Bool {
         guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
         return deliberatelyExcludedTypes.contains(where: type.conforms(to:))
+    }
+
+    /// The plain text of an RTF file or an RTFD package, if `url` really is
+    /// one — decided by asking `NSAttributedString` to parse it rather than
+    /// by its extension alone, so a `.rtf` that turns out to hold something
+    /// else (plain text under the wrong suffix, say) comes back `nil` and is
+    /// left to the ordinary open rules instead of being imported. `nil` for
+    /// any other extension without even trying. This is `MainWindowController
+    /// .open(url:)`'s one look at an RTF's bytes, asked before
+    /// `isDeliberatelyExcluded` would otherwise refuse it outright: import
+    /// rather than the ordinary text-editing path, since Nota drops the
+    /// formatting and any pictures rather than keeping them.
+    static func rtfPlainText(at url: URL) -> String? {
+        let ext = url.pathExtension.lowercased()
+        if ext == "rtfd" {
+            guard let wrapper = try? FileWrapper(url: url, options: []),
+                  let attributed = NSAttributedString(rtfdFileWrapper: wrapper, documentAttributes: nil)
+            else { return nil }
+            return attributed.string
+        }
+        guard ext == "rtf",
+              let data = try? Data(contentsOf: url),
+              let attributed = NSAttributedString(rtf: data, documentAttributes: nil)
+        else { return nil }
+        return attributed.string
     }
 
     /// The first 8 KB, so sniffing a huge log does not read the whole thing.

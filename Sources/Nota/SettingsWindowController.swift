@@ -24,6 +24,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         ("Appearance", "paintbrush"),
         ("Editor", "square.and.pencil"),
         ("Preview", "doc.richtext"),
+        ("Tab bar", "rectangle.topthird.inset.filled"),
         ("Status bar", "rectangle.bottomthird.inset.filled"),
         ("Shortcuts", "keyboard"),
         ("About", "info.circle"),
@@ -48,11 +49,11 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let vimModeSwitch = NSSwitch()
     private let previewModeSwitch = NSSwitch()
     private let statusBarSwitch = NSSwitch()
-    private let hideTabBarSwitch = NSSwitch()
+    private let showTabBarSwitch = NSSwitch()
     private let autoHideTabBarSwitch = NSSwitch()
-    private let hideTrafficLightsSwitch = NSSwitch()
-    private let hideBookmarkButtonSwitch = NSSwitch()
-    private let hideSettingsButtonSwitch = NSSwitch()
+    private let trafficLightsSwitch = NSSwitch()
+    private let bookmarkButtonSwitch = NSSwitch()
+    private let settingsButtonSwitch = NSSwitch()
     private let footerSwitches: [(TextStats.Segment, NSSwitch)] = [
         (.words, NSSwitch()),
         (.characters, NSSwitch()),
@@ -78,9 +79,12 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     /// The row whose switch only means anything while line numbers are on.
     private var gutterSeparatorRow: SettingsRowView?
-    /// Greyed while "Hide tab bar" is on: a strip that is gone for good has
+    /// Greyed while "Show tab bar" is off: a strip that is gone for good has
     /// nothing to slide in.
     private var autoHideTabBarRow: SettingsRowView?
+    /// Greyed while "Show tab bar" is off: it already takes the lights with
+    /// it, the way zen does, so there is nothing left for this row to do.
+    private var trafficLightsRow: SettingsRowView?
     /// The region rows the status-bar switch turns off as a block.
     private var statusDetailRows: [SettingsRowView] = []
 
@@ -318,8 +322,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         sizeStepper.action = #selector(sizeStepperChanged)
 
         for control in [wordWrapSwitch, gutterSeparatorSwitch, vimModeSwitch, previewModeSwitch,
-                        autoHideTabBarSwitch, hideTrafficLightsSwitch, hideBookmarkButtonSwitch,
-                        hideSettingsButtonSwitch] {
+                        autoHideTabBarSwitch, trafficLightsSwitch, bookmarkButtonSwitch,
+                        settingsButtonSwitch] {
             control.target = self
             control.action = #selector(draftChanged)
         }
@@ -333,8 +337,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         }
         lineNumbersSwitch.target = self
         lineNumbersSwitch.action = #selector(lineNumbersDraftChanged)
-        hideTabBarSwitch.target = self
-        hideTabBarSwitch.action = #selector(hideTabBarDraftChanged)
+        showTabBarSwitch.target = self
+        showTabBarSwitch.action = #selector(showTabBarDraftChanged)
         statusBarSwitch.target = self
         statusBarSwitch.action = #selector(statusBarDraftChanged)
 
@@ -377,7 +381,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private func buildPages() {
         pages = [
             generalPage(), appearancePage(), editorPage(), previewPage(),
-            statusBarPage(), shortcutsPage(), aboutPage(),
+            tabBarPage(), statusBarPage(), shortcutsPage(), aboutPage(),
         ]
     }
 
@@ -401,26 +405,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             row("Line spacing", control: spacingPopUp),
             row("Padding", control: paddingPopUp),
         ]
-        // What the window itself wears: each of these takes a piece of chrome
-        // away, and every one of them has a key that still works without it.
-        let autoHide = row("Auto-hide tab bar", control: autoHideTabBarSwitch)
-        autoHideTabBarRow = autoHide
-        let chrome = [
-            row("Hide tab bar", control: hideTabBarSwitch),
-            autoHide,
-            row("Hide traffic lights", control: hideTrafficLightsSwitch),
-            row("Hide bookmark button", control: hideBookmarkButtonSwitch),
-            row("Hide Settings button", control: hideSettingsButtonSwitch),
-        ]
-        return page(
-            "Appearance",
-            blocks: [
-                groupBox(text),
-                sectionHeading("Window"),
-                groupBox(chrome),
-            ],
-            rows: text + chrome
-        )
+        return page("Appearance", blocks: [groupBox(text)], rows: text)
     }
 
     private func editorPage() -> Page {
@@ -440,6 +425,36 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             row("Start supported files in preview mode", control: previewModeSwitch),
         ]
         return page("Preview", blocks: [groupBox(rows)], rows: rows)
+    }
+
+    private func tabBarPage() -> Page {
+        let showTabBar = row("Show tab bar", control: showTabBarSwitch)
+        // Auto-hide has nothing to slide in once the strip is gone for good.
+        let autoHide = row("Auto-hide tab bar", control: autoHideTabBarSwitch)
+        autoHideTabBarRow = autoHide
+        let master = [showTabBar, autoHide]
+
+        // What the strip shows: each of these takes a piece of chrome away,
+        // and every one of them has a key that still works without it.
+        let trafficLights = row("Traffic lights", control: trafficLightsSwitch)
+        trafficLightsRow = trafficLights
+        let parts = [
+            trafficLights,
+            row("Bookmark button", control: bookmarkButtonSwitch),
+            row("Settings button", control: settingsButtonSwitch),
+        ]
+
+        return page(
+            "Tab bar",
+            blocks: [
+                groupBox(master),
+                groupBox(parts),
+                footnote(
+                    "The keys — ⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W — all keep working even with the tab bar and its buttons hidden. Auto-hide brings the strip back when the pointer reaches the window's top edge."
+                ),
+            ],
+            rows: master + parts
+        )
     }
 
     private func statusBarPage() -> Page {
@@ -669,12 +684,13 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         setStatusDetailsEnabled(preferences.showsStatusBar)
         previewModeSwitch.state = preferences.opensMarkdownInReadingMode ? .on : .off
         vimModeSwitch.state = preferences.vimMode ? .on : .off
-        hideTabBarSwitch.state = preferences.hidesTabBar ? .on : .off
+        showTabBarSwitch.state = preferences.hidesTabBar ? .off : .on
         autoHideTabBarSwitch.state = preferences.autoHidesTabBar ? .on : .off
         autoHideTabBarRow?.isEnabled = !preferences.hidesTabBar
-        hideTrafficLightsSwitch.state = preferences.hidesTrafficLights ? .on : .off
-        hideBookmarkButtonSwitch.state = preferences.hidesBookmarkButton ? .on : .off
-        hideSettingsButtonSwitch.state = preferences.hidesSettingsButton ? .on : .off
+        trafficLightsRow?.isEnabled = !preferences.hidesTabBar
+        trafficLightsSwitch.state = preferences.hidesTrafficLights ? .off : .on
+        bookmarkButtonSwitch.state = preferences.hidesBookmarkButton ? .off : .on
+        settingsButtonSwitch.state = preferences.hidesSettingsButton ? .off : .on
         hotKeyField.shortcut = pendingHotKey
 
         let failed = (NSApp.delegate as? AppDelegate)?.hotKeyRegistrationFailed ?? false
@@ -827,10 +843,12 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         markDirty()
     }
 
-    /// Hiding the strip outright takes auto-hide with it: there is nothing
-    /// left for the top edge to slide in.
-    @objc private func hideTabBarDraftChanged(_ sender: NSSwitch) {
-        autoHideTabBarRow?.isEnabled = sender.state == .off
+    /// Turning the strip off outright takes auto-hide, and the traffic
+    /// lights, with it: there is nothing left for the top edge to slide in,
+    /// and the lights are already gone the way zen takes them.
+    @objc private func showTabBarDraftChanged(_ sender: NSSwitch) {
+        autoHideTabBarRow?.isEnabled = sender.state == .on
+        trafficLightsRow?.isEnabled = sender.state == .on
         markDirty()
     }
 
@@ -891,11 +909,11 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         preferences.footerShowsLineEndings = footerLineEndingsSwitch.state == .on
         preferences.footerShowsCursorPosition = footerCursorSwitch.state == .on
         preferences.vimMode = vimModeSwitch.state == .on
-        preferences.hidesTabBar = hideTabBarSwitch.state == .on
+        preferences.hidesTabBar = showTabBarSwitch.state == .off
         preferences.autoHidesTabBar = autoHideTabBarSwitch.state == .on
-        preferences.hidesTrafficLights = hideTrafficLightsSwitch.state == .on
-        preferences.hidesBookmarkButton = hideBookmarkButtonSwitch.state == .on
-        preferences.hidesSettingsButton = hideSettingsButtonSwitch.state == .on
+        preferences.hidesTrafficLights = trafficLightsSwitch.state == .off
+        preferences.hidesBookmarkButton = bookmarkButtonSwitch.state == .off
+        preferences.hidesSettingsButton = settingsButtonSwitch.state == .off
         preferences.hotKey = hotKey
         preferences.shortcuts = pendingShortcuts
         preferences.language = language

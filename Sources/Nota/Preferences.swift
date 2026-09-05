@@ -191,6 +191,7 @@ final class Preferences {
         static let hotKeyDisabled = "hotKeyDisabled"
         static let shortcuts = "shortcuts"
         static let lastSaveDirectory = "lastSaveDirectory"
+        static let lastSaveExtension = "lastSaveExtension"
     }
 
     private let defaults: UserDefaults
@@ -411,16 +412,19 @@ final class Preferences {
 
     /// The tab strip across the title bar goes, the way zen mode takes it —
     /// the editor starts at the top, under a slim band the window can still
-    /// be dragged by. ⌘T, ⌘P and the rest keep working.
+    /// be dragged by — and the traffic lights go with it, zen's way too.
+    /// ⌘T, ⌘P and the rest keep working.
     var hidesTabBar: Bool {
         get { defaults.bool(forKey: Key.hidesTabBar) }
         set { setBoolean(newValue, current: hidesTabBar, key: Key.hidesTabBar) }
     }
 
-    /// The strip is off the window the same way, but the top edge is
-    /// watching: the pointer reaching it slides the strip in over the
-    /// document, and leaving it slides the strip away again. Zen mode and
-    /// "Hide tab bar" both win — either of those means gone for good.
+    /// The strip and the lights are off the window the same way, but the top
+    /// edge is watching: the pointer reaching it slides the whole top bar —
+    /// strip and lights together, unless "Hide traffic lights" keeps the
+    /// lights off — in over the document, and leaving it slides them away
+    /// again. Zen mode and "Hide tab bar" both win — either of those means
+    /// gone for good.
     var autoHidesTabBar: Bool {
         get { defaults.bool(forKey: Key.autoHidesTabBar) }
         set { setBoolean(newValue, current: autoHidesTabBar, key: Key.autoHidesTabBar) }
@@ -559,6 +563,13 @@ final class Preferences {
             return URL(fileURLWithPath: path, isDirectory: true)
         }
         set { defaults.set(newValue?.path, forKey: Key.lastSaveDirectory) }
+    }
+
+    /// The extension last chosen in the save panel's Format combo, offered
+    /// again next time a note has none of its own to keep.
+    var lastSaveExtension: String {
+        get { defaults.string(forKey: Key.lastSaveExtension) ?? SuggestedName.defaultExtension }
+        set { defaults.set(newValue, forKey: Key.lastSaveExtension) }
     }
 
     /// Picking a font in the font panel changes family and name together, so

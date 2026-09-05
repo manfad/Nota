@@ -2970,6 +2970,25 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(fill.opacity, 0, "and gone again together with it")
     }
 
+    /// The fill is stored as a concrete CGColor, so it must be resolved again
+    /// in the overlay's own appearance when the Mac switches light or dark.
+    @MainActor
+    func testTheModeControlFillFollowsItsEffectiveAppearance() throws {
+        _ = NSApplication.shared
+        let overlay = ModeControlOverlay(target: nil, action: #selector(NSObject.description))
+        let fill = try XCTUnwrap(overlay.layer?.sublayers?.first)
+
+        overlay.appearance = try XCTUnwrap(NSAppearance(named: .aqua))
+        overlay.viewDidChangeEffectiveAppearance()
+        let light = try XCTUnwrap(fill.backgroundColor)
+
+        overlay.appearance = try XCTUnwrap(NSAppearance(named: .darkAqua))
+        overlay.viewDidChangeEffectiveAppearance()
+        let dark = try XCTUnwrap(fill.backgroundColor)
+
+        XCTAssertNotEqual(light, dark, "the fill must not keep the light-mode colour")
+    }
+
     /// The ⇧⌘F field is in the strip and the control is under it, so the two
     /// have nothing to argue about.
     @MainActor

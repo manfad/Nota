@@ -174,7 +174,8 @@ final class NotaTests: XCTestCase {
 
         XCTAssertEqual(
             controller.pageTitles,
-            ["General", "Appearance", "Editor", "Preview", "Status bar", "Shortcuts", "About"]
+            ["General", "Appearance", "Editor", "Preview", "Tab bar", "Status bar",
+             "Shortcuts", "About"]
         )
 
         func allViews(in root: NSView) -> [NSView] {
@@ -188,15 +189,14 @@ final class NotaTests: XCTestCase {
             controller.rows(on: page).map(\.title)
         }
         XCTAssertEqual(titles(on: 0), ["Language", "Theme"])
-        XCTAssertEqual(titles(on: 1), ["Font", "Size", "Line spacing", "Padding",
-                                       "Hide tab bar", "Auto-hide tab bar",
-                                       "Hide traffic lights",
-                                       "Hide bookmark button", "Hide Settings button"])
+        XCTAssertEqual(titles(on: 1), ["Font", "Size", "Line spacing", "Padding"])
         XCTAssertEqual(titles(on: 2), ["Word wrap", "Line numbers", "Gutter separator", "Vim mode"])
         XCTAssertEqual(titles(on: 3), ["Start supported files in preview mode"])
-        XCTAssertEqual(titles(on: 4), ["Show status bar", "Words", "Characters", "Images", "Lines",
+        XCTAssertEqual(titles(on: 4), ["Show tab bar", "Auto-hide tab bar", "Traffic lights",
+                                       "Bookmark button", "Settings button"])
+        XCTAssertEqual(titles(on: 5), ["Show status bar", "Words", "Characters", "Images", "Lines",
                                        "Text encoding", "Line endings", "Cursor position"])
-        for page in [2, 3, 4] {
+        for page in [2, 3, 4, 5] {
             for row in controller.rows(on: page) {
                 XCTAssertTrue(row.control is NSSwitch, "\(row.title) is not a switch")
             }
@@ -266,7 +266,7 @@ final class NotaTests: XCTestCase {
 
         let controller = SettingsWindowController.shared
         defer { controller.selectPage(at: 0) }
-        XCTAssertTrue(controller.selectPage(titled: "Appearance"))
+        XCTAssertTrue(controller.selectPage(titled: "Tab bar"))
         let root = try XCTUnwrap(controller.window?.contentView)
         func allViews(in view: NSView) -> [NSView] {
             [view] + view.subviews.flatMap(allViews)
@@ -275,15 +275,22 @@ final class NotaTests: XCTestCase {
             .first { $0.title == "Save" })
         XCTAssertFalse(save.isEnabled, "a fresh draft has nothing to save")
 
-        // Auto-hide first: switching "Hide tab bar" on greys its row, and a
-        // row that is greyed is one the reader cannot reach either.
-        let chrome = ["Auto-hide tab bar", "Hide tab bar", "Hide traffic lights",
-                      "Hide bookmark button", "Hide Settings button"]
-        for title in chrome {
+        // Auto-hide first: switching "Show tab bar" off greys its row, and a
+        // row that is greyed is one the reader cannot reach either. The other
+        // three switches wear positive labels now, so turning them off is
+        // what hides the piece of chrome they name.
+        let chrome: [(title: String, state: NSControl.StateValue)] = [
+            ("Auto-hide tab bar", .on),
+            ("Show tab bar", .off),
+            ("Traffic lights", .off),
+            ("Bookmark button", .off),
+            ("Settings button", .off),
+        ]
+        for (title, state) in chrome {
             let control = try XCTUnwrap(
-                controller.rows(on: 1).first { $0.title == title }?.control as? NSSwitch
+                controller.rows(on: 4).first { $0.title == title }?.control as? NSSwitch
             )
-            control.state = .on
+            control.state = state
             _ = NSApp.sendAction(try XCTUnwrap(control.action), to: control.target, from: control)
         }
         XCTAssertTrue(save.isEnabled)
@@ -296,6 +303,48 @@ final class NotaTests: XCTestCase {
         XCTAssertTrue(preferences.hidesBookmarkButton)
         XCTAssertTrue(preferences.hidesSettingsButton)
         XCTAssertFalse(save.isEnabled, "the draft is spent")
+    }
+
+    /// The Tab bar page's rows, in the order the strip itself reads them:
+    /// "Show tab bar" and "Auto-hide tab bar" first, then the three parts the
+    /// strip can carry. Turning "Show tab bar" off greys "Auto-hide tab bar"
+    /// and "Traffic lights" — a strip that is gone for good has nothing to
+    /// slide back in, and the lights are already gone the way zen takes them
+    /// — but leaves "Bookmark button" and "Settings button" reachable.
+    @MainActor
+    func testTabBarPageRowsAndShowTabBarGreying() throws {
+        _ = NSApplication.shared
+        let preferences = Preferences.shared
+        let original = preferences.hidesTabBar
+        defer { preferences.hidesTabBar = original }
+        preferences.hidesTabBar = false
+
+        let controller = SettingsWindowController.shared
+        defer { controller.selectPage(at: 0) }
+        XCTAssertTrue(controller.selectPage(titled: "Tab bar"))
+
+        let rows = controller.rows(on: 4)
+        XCTAssertEqual(rows.map(\.title), [
+            "Show tab bar", "Auto-hide tab bar", "Traffic lights",
+            "Bookmark button", "Settings button",
+        ])
+
+        func isEnabled(_ title: String) -> Bool {
+            rows.first { $0.title == title }?.control.isEnabled ?? false
+        }
+        XCTAssertTrue(isEnabled("Auto-hide tab bar"))
+        XCTAssertTrue(isEnabled("Traffic lights"))
+
+        let showTabBar = try XCTUnwrap(
+            rows.first { $0.title == "Show tab bar" }?.control as? NSSwitch
+        )
+        showTabBar.state = .off
+        _ = NSApp.sendAction(try XCTUnwrap(showTabBar.action), to: showTabBar.target, from: showTabBar)
+
+        XCTAssertFalse(isEnabled("Auto-hide tab bar"))
+        XCTAssertFalse(isEnabled("Traffic lights"))
+        XCTAssertTrue(isEnabled("Bookmark button"), "only auto-hide and traffic lights grey")
+        XCTAssertTrue(isEnabled("Settings button"))
     }
 
     /// The last page is a plain about box: the icon, the name, and the version

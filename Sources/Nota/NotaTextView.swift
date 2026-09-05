@@ -253,6 +253,45 @@ final class NotaTextView: NSTextView {
         outdentLines(sender)
     }
 
+    /// Return at the end of a list item opens the next one — `2.` after `1.`,
+    /// `b)` after `a)`, a fresh `- [ ]` after a task — and on an item with
+    /// nothing typed on it takes the marker off instead, which is how a list
+    /// is ended. `ListContinuation` works out what the key means; this only
+    /// puts the answer in, as one `shouldChangeText` edit so that undo, the
+    /// dirty flag, the save and vim all see a single step.
+    ///
+    /// It stands aside for ⇧Return and ⌥Return, which are the plain newline,
+    /// for a selection with anything in it, for ⌘D's extra carets, and — like
+    /// every other key here — for every vim mode but insert.
+    override func insertNewline(_ sender: Any?) {
+        if continueList() { return }
+        super.insertNewline(sender)
+    }
+
+    private func continueList() -> Bool {
+        guard lineOperationsEnabled, !plainNewlineWanted, selectedRanges.count == 1,
+              let storage = textStorage,
+              let edit = ListContinuation.edit(
+                  forReturnIn: storage.mutableString, at: selectedRange()
+              ),
+              shouldChangeText(in: edit.range, replacementString: edit.text)
+        else { return false }
+        storage.replaceCharacters(
+            in: edit.range, with: NSAttributedString(string: edit.text, attributes: attributes)
+        )
+        didChangeText()
+        setSelectedRange(NSRange(location: min(edit.caret, storage.length), length: 0))
+        scrollRangeToVisible(selectedRange())
+        return true
+    }
+
+    /// ⇧Return and ⌥Return: whatever the line says, the newline is plain.
+    private var plainNewlineWanted: Bool {
+        guard let event = NSApp.currentEvent, event.type == .keyDown else { return false }
+        return !event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .isDisjoint(with: [.shift, .option])
+    }
+
     private var selectionSpansLines: Bool {
         let range = selectedRange()
         guard range.length > 0 else { return false }

@@ -156,7 +156,9 @@ final class ModeControlOverlay: NSView {
     }
 
     private func applyControlFillColor() {
-        controlFill.backgroundColor = NSColor.textBackgroundColor.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            controlFill.backgroundColor = NSColor.textBackgroundColor.cgColor
+        }
     }
 
     // MARK: - Hover
@@ -232,20 +234,22 @@ final class ModeControlOverlay: NSView {
     /// over the text without shouting at it — while the selected one keeps the
     /// standard filled look, which tints a template image for itself.
     func applySegmentTints() {
-        for (index, mode) in PreviewMode.allCases.enumerated() {
-            let image = NSImage(
-                systemSymbolName: mode.symbolName, accessibilityDescription: mode.controlTitle
-            )
-            if index == modeControl.selectedSegment {
-                image?.isTemplate = true
-                modeControl.setImage(image, forSegment: index)
-            } else {
-                let quiet = image?.withSymbolConfiguration(
-                    NSImage.SymbolConfiguration(paletteColors: [.secondaryLabelColor])
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            for (index, mode) in PreviewMode.allCases.enumerated() {
+                let image = NSImage(
+                    systemSymbolName: mode.symbolName, accessibilityDescription: mode.controlTitle
                 )
-                // Already coloured: template would have AppKit tint it again.
-                quiet?.isTemplate = false
-                modeControl.setImage(quiet, forSegment: index)
+                if index == modeControl.selectedSegment {
+                    image?.isTemplate = true
+                    modeControl.setImage(image, forSegment: index)
+                } else {
+                    let quiet = image?.withSymbolConfiguration(
+                        NSImage.SymbolConfiguration(paletteColors: [.secondaryLabelColor])
+                    )
+                    // Already coloured: template would have AppKit tint it again.
+                    quiet?.isTemplate = false
+                    modeControl.setImage(quiet, forSegment: index)
+                }
             }
         }
     }

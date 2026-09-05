@@ -69,6 +69,21 @@ final class WindowChromeTests: XCTestCase {
         XCTAssertEqual(controller.tabStrip.frame, stripTop, "back exactly where it was")
     }
 
+    /// "Hide tab bar" takes the traffic lights with it, the same way zen
+    /// does — and they come back when the strip does.
+    @MainActor
+    func testHidingTheTabBarTakesTheTrafficLightsWithIt() throws {
+        let (_, window) = try makeController()
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        XCTAssertTrue(buttons.allSatisfy { window.standardWindowButton($0)?.isHidden == false })
+
+        Preferences.shared.hidesTabBar = true
+        XCTAssertTrue(buttons.allSatisfy { window.standardWindowButton($0)?.isHidden == true })
+
+        Preferences.shared.hidesTabBar = false
+        XCTAssertTrue(buttons.allSatisfy { window.standardWindowButton($0)?.isHidden == false })
+    }
+
     @MainActor
     func testHidingTheTrafficLightsHidesAllThreeButtons() throws {
         let (_, window) = try makeController()
@@ -80,6 +95,25 @@ final class WindowChromeTests: XCTestCase {
 
         Preferences.shared.hidesTrafficLights = false
         XCTAssertTrue(buttons.allSatisfy { window.standardWindowButton($0)?.isHidden == false })
+    }
+
+    /// Hiding the lights hands their slot to the strip: it starts at the
+    /// same 12pt inset a left sidebar gets, and moves back when they return.
+    @MainActor
+    func testHidingTheTrafficLightsMovesTheStripIntoTheirSlot() throws {
+        let (controller, window) = try makeController()
+        window.layoutIfNeeded()
+        XCTAssertEqual(controller.tabStrip.frame.minX, MainWindowController.tabStripLeadingInset,
+                       accuracy: 0.5)
+
+        Preferences.shared.hidesTrafficLights = true
+        window.layoutIfNeeded()
+        XCTAssertEqual(controller.tabStrip.frame.minX, 12, accuracy: 0.5)
+
+        Preferences.shared.hidesTrafficLights = false
+        window.layoutIfNeeded()
+        XCTAssertEqual(controller.tabStrip.frame.minX, MainWindowController.tabStripLeadingInset,
+                       accuracy: 0.5)
     }
 
     /// A hidden button is not drawn, and its slot goes back to the tabs: the
@@ -131,11 +165,13 @@ final class WindowChromeTests: XCTestCase {
     // MARK: - Auto-hide
 
     /// Auto-hide takes the strip out of the layout exactly as the plain hide
-    /// does: the split grows into the room the strip was using.
+    /// does: the split grows into the room the strip was using. The traffic
+    /// lights idle the same way, gone until the pointer brings them back.
     @MainActor
     func testAutoHidingTakesTheStripOutOfTheLayout() throws {
         let (controller, window) = try makeController()
         let inLayout = controller.workspaceSplitForTesting.frame.height
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
         XCTAssertFalse(controller.tabStrip.isHidden)
 
         Preferences.shared.autoHidesTabBar = true
@@ -145,13 +181,18 @@ final class WindowChromeTests: XCTestCase {
         XCTAssertEqual(controller.workspaceSplitForTesting.frame.height,
                        inLayout + TabBarView.height, accuracy: 0.5,
                        "the split takes the strip's room")
+        XCTAssertTrue(buttons.allSatisfy { window.standardWindowButton($0)?.isHidden == true },
+                      "idling, the lights are gone with the strip")
     }
 
     /// The pointer reaching the top edge brings the strip back as an opaque
-    /// overlay: it lies over the split rather than pushing it down again.
+    /// overlay: it lies over the split rather than pushing it down again. The
+    /// traffic lights come back with it, and the strip clears them at 82pt
+    /// again rather than keeping the idle 12pt inset.
     @MainActor
     func testReachingTheTopEdgeSlidesTheStripInOverTheSplit() throws {
         let (controller, window) = try makeController()
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
         Preferences.shared.autoHidesTabBar = true
         window.layoutIfNeeded()
         let splitHeight = controller.workspaceSplitForTesting.frame.height
@@ -166,6 +207,10 @@ final class WindowChromeTests: XCTestCase {
                       "over the document the strip has to bring its own ground")
         XCTAssertTrue(controller.tabStrip.frame.intersects(controller.workspaceSplitForTesting.frame),
                       "the strip is an overlay, not a row above the split")
+        XCTAssertTrue(buttons.allSatisfy { window.standardWindowButton($0)?.isHidden == false },
+                      "the lights come back with the revealed strip")
+        XCTAssertEqual(controller.tabStrip.frame.minX, MainWindowController.tabStripLeadingInset,
+                       accuracy: 0.5)
         XCTAssertEqual(controller.workspaceSplitForTesting.frame.height, splitHeight, accuracy: 0.5,
                        "nothing moved to make room for it")
         let workspace = try XCTUnwrap(controller.tabStrip.superview)
@@ -176,10 +221,31 @@ final class WindowChromeTests: XCTestCase {
         XCTAssertGreaterThan(strip, split, "the strip draws over the split")
     }
 
+    /// The overlaid strip reuses the same leading constraint as the docked
+    /// one, so hiding the lights moves it in too.
+    @MainActor
+    func testTheOverlayStripAlsoMovesIntoTheLightsSlotWhenTheyAreHidden() throws {
+        let (controller, window) = try makeController()
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        Preferences.shared.hidesTrafficLights = true
+        Preferences.shared.autoHidesTabBar = true
+        window.layoutIfNeeded()
+
+        controller.pointerEnteredHotZoneForTesting()
+        settle(0.3)
+        window.layoutIfNeeded()
+
+        XCTAssertTrue(controller.isTabBarOverlayVisibleForTesting)
+        XCTAssertEqual(controller.tabStrip.frame.minX, 12, accuracy: 0.5)
+        XCTAssertTrue(buttons.allSatisfy { window.standardWindowButton($0)?.isHidden == true },
+                      "\"Hide traffic lights\" keeps them off through the reveal")
+    }
+
     /// And leaving it sends the strip away again, after the grace period.
     @MainActor
     func testLeavingTheStripSlidesItAwayAfterTheGracePeriod() throws {
         let (controller, window) = try makeController()
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
         Preferences.shared.autoHidesTabBar = true
         window.layoutIfNeeded()
         controller.pointerEnteredHotZoneForTesting()
@@ -193,6 +259,8 @@ final class WindowChromeTests: XCTestCase {
         window.layoutIfNeeded()
         XCTAssertFalse(controller.isTabBarOverlayVisibleForTesting)
         XCTAssertTrue(controller.tabStrip.isHidden)
+        XCTAssertTrue(buttons.allSatisfy { window.standardWindowButton($0)?.isHidden == true },
+                      "the lights go with the strip again once it slides away")
     }
 
     /// "Hide tab bar" beats auto-hide: the strip is gone for good and the top

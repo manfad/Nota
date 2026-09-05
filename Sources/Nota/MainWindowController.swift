@@ -38,7 +38,19 @@ final class MainWindowController: NSWindowController {
     /// How far the tab strip starts from the window's leading edge: the
     /// room the traffic lights need. A tab torn off into a window of its own
     /// lands right against it, so the gesture has to know the figure.
+    ///
+    /// Kept for tests, which run with the lights shown. Live code reads
+    /// `currentTabStripLeadingInset` instead, since hiding the lights or
+    /// showing a left sidebar moves the strip.
     static let tabStripLeadingInset = Layout.trafficLightInset
+
+    /// Where the strip actually starts right now: 12pt beside a left
+    /// sidebar or with the traffic lights hidden, `Layout.trafficLightInset`
+    /// otherwise. A tear-off reads this so the torn tab lands under the
+    /// pointer whichever inset was in effect.
+    private var currentTabStripLeadingInset: CGFloat {
+        tabBarLeading?.constant ?? Layout.trafficLightInset
+    }
 
     private let store: SessionStore
     private var notes: [Note] = []
@@ -120,6 +132,12 @@ final class MainWindowController: NSWindowController {
     /// Stands in for the real save-changes alert so a dirty-tab close can be
     /// driven without putting a modal on screen. Nothing in the app sets it.
     var confirmDiscardOverrideForTesting: (() -> NSApplication.ModalResponse)?
+    /// Stands in for the save panel's "already exists, replace?" alert, the
+    /// same way `confirmDiscardOverrideForTesting` stands in for the
+    /// save-changes one — so a test that drives the panel past a name that
+    /// collides with a real file never puts a modal on screen. Nothing in
+    /// the app sets it. The `URL` is the file the write would overwrite.
+    var confirmReplaceOverrideForTesting: ((URL) -> Bool)?
     private var lineNumberRuler: LineNumberRulerView?
     private let tabBar = TabBarView()
     private lazy var imageSidebar = ImageSidebarView(topInset: 8)
@@ -558,6 +576,7 @@ final class MainWindowController: NSWindowController {
 
         zenDragRegion.translatesAutoresizingMaskIntoConstraints = false
         zenDragRegion.isHidden = true
+        zenDragRegion.onDropFiles = { [weak self] urls in self?.openDroppedFiles(urls) }
         content.addSubview(zenDragRegion)
 
         // Last in, so it lies over the bottom of the document rather than
@@ -846,6 +865,9 @@ final class MainWindowController: NSWindowController {
         previewColumn.onZoomChange = { [weak self] zoom in
             self?.previewZoomDidChange(zoom)
         }
+        previewColumn.onDropFiles = { [weak self] urls in
+            self?.openDroppedFiles(urls)
+        }
 
         installModeOverlay(previewModeOverlay, over: previewColumn)
     }
@@ -966,10 +988,15 @@ final class MainWindowController: NSWindowController {
 
     /// The strip clears the traffic lights only when they sit over the editor
     /// pane — with a left sidebar showing, they are over the sidebar instead.
+    /// The lights being gone from the corner for any reason — hidden
+    /// outright, or merely idling off-screen under auto-hide — frees their
+    /// slot the same way: the strip takes it, starting at the same 12pt
+    /// inset.
     private func updateTabStripInset() {
         let leftSidebarShowing =
             preferences.sidebarSide == .left && !(sidebarItem?.isCollapsed ?? true)
-        tabBarLeading?.constant = leftSidebarShowing ? 12 : Layout.trafficLightInset
+        let lightsGoneFromTheCorner = leftSidebarShowing || !trafficLightsAreVisible
+        tabBarLeading?.constant = lightsGoneFromTheCorner ? 12 : Layout.trafficLightInset
     }
 
     private func configureTextView() {
@@ -1279,6 +1306,28 @@ final class MainWindowController: NSWindowController {
         !isZenMode && !preferences.hidesTabBar && preferences.autoHidesTabBar
     }
 
+    /// Whether the traffic lights are on screen right now. Off in zen, under
+    /// "Hide traffic lights", and under "Hide tab bar" — which takes the
+    /// lights the same way zen does, since there is no strip left for them
+    /// to clear. Auto-hide idles the same way while the strip is off-screen,
+    /// and brings the lights back with it the moment the pointer reveals
+    /// it — unless "Hide traffic lights" is what is keeping them off.
+    /// `applyTopChrome` and the overlay reveal/hide paths all read this one
+    /// property, so the buttons and the strip's inset never disagree.
+    private var trafficLightsAreVisible: Bool {
+        !(isZenMode || preferences.hidesTrafficLights || preferences.hidesTabBar
+            || (autoHidesTabBar && !isTabBarOverlayVisible))
+    }
+
+    /// Shows or hides the three window buttons to match
+    /// `trafficLightsAreVisible`.
+    private func applyTrafficLightsVisibility() {
+        let hidden = !trafficLightsAreVisible
+        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window?.standardWindowButton(button)?.isHidden = hidden
+        }
+    }
+
     /// The strip and the traffic lights, on or off, from whichever of zen and
     /// Settings wants them gone. The constraints are zen's own: the workspace
     /// meets the top of the pane and the editor keeps a slim inset the
@@ -1303,10 +1352,10 @@ final class MainWindowController: NSWindowController {
         // Outside a zen fade the strip simply is or is not there — unless it
         // is the auto-hidden one, currently answering the pointer.
         if !isZenMode { tabBar.isHidden = hidesTop && !isTabBarOverlayVisible }
-        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            window?.standardWindowButton(button)?.isHidden =
-                isZenMode || preferences.hidesTrafficLights
-        }
+        applyTrafficLightsVisibility()
+        // Hiding or showing the lights hands their slot to the strip (or
+        // takes it back), live, whenever this runs from a Settings change.
+        updateTabStripInset()
     }
 
     // MARK: - Auto-hidden tab strip
@@ -1323,6 +1372,12 @@ final class MainWindowController: NSWindowController {
         tabBar.isHidden = false
         tabBar.alphaValue = 0
         tabBarTop?.constant = -TabBarView.height
+        // The lights come back with the strip — unless "Hide traffic
+        // lights" keeps them off — and the strip's inset follows suit, so
+        // it starts at 82 or 12 depending on which is true before the
+        // slide-in frame is captured.
+        applyTrafficLightsVisibility()
+        updateTabStripInset()
         tabBar.superview?.layoutSubtreeIfNeeded()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Layout.tabBarOverlaySlide
@@ -1385,6 +1440,11 @@ final class MainWindowController: NSWindowController {
         cancelTabBarOverlayHide()
         guard isTabBarOverlayVisible else { return }
         isTabBarOverlayVisible = false
+        // Idling again, the lights go with the strip — unless they were
+        // already off for some other reason — and the strip's inset
+        // reverts with them.
+        applyTrafficLightsVisibility()
+        updateTabStripInset()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Layout.tabBarOverlaySlide
             tabBarTop?.animator().constant = -TabBarView.height
@@ -1417,6 +1477,9 @@ final class MainWindowController: NSWindowController {
     internal var isTabBarOverlayVisibleForTesting: Bool { isTabBarOverlayVisible }
     /// The split the overlaid strip lies over, for the frame check.
     internal var workspaceSplitForTesting: NSView { workspaceSplitViewController.view }
+    /// The band a hidden strip leaves across the top of the editor column —
+    /// the other tab target files can be let go on.
+    internal var topDragBandForTesting: DragRegionView { zenDragRegion }
 
     // MARK: - Session restore
 
@@ -2339,25 +2402,130 @@ final class MainWindowController: NSWindowController {
 
     private func presentSavePanel(for note: Note) -> URL? {
         let panel = NSSavePanel()
-        // Every text type Nota knows, and `allowsOtherFileTypes` for the ones
-        // it does not — a `.toml` typed into the panel stays a `.toml`.
-        panel.allowedContentTypes = TextFile.contentTypes
+        // The extension lives in the Format combo below, not in the name
+        // field, so the panel is left with no type opinion of its own —
+        // `allowedContentTypes` would otherwise rename the field itself and
+        // fight the combo — and the final name is composed by hand once
+        // `runModal` returns.
+        panel.allowedContentTypes = []
         panel.allowsOtherFileTypes = true
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
-        panel.nameFieldStringValue = SuggestedName.panelName(
-            for: note.fileURL, text: note.countableText
+
+        let suggested = SuggestedName.panelName(for: note.fileURL, text: note.countableText)
+        let (base, ownExtension) = SaveNameComposer.split(name: suggested)
+        panel.nameFieldStringValue = base
+
+        let extensionCombo = NSComboBox()
+        extensionCombo.addItems(withObjectValues: SaveNameComposer.knownExtensions())
+        extensionCombo.completes = false
+        // A named file keeps its own extension preselected; a new note
+        // offers whatever was chosen last.
+        extensionCombo.stringValue = ownExtension ?? preferences.lastSaveExtension
+        panel.accessoryView = Self.saveFormatAccessory(combo: extensionCombo)
+
+        // The panel would otherwise check its own name field — the bare
+        // base name, since the extension lives in the combo — against
+        // what's on disk, so a save of "notes" over an existing "notes.md"
+        // would never trip its "already exists" alert. `validate` composes
+        // the real destination by hand and raises Nota's own alert for it.
+        // `delegate` is weak, so the validator must outlive `runModal`.
+        let validator = SavePanelReplaceValidator(
+            combo: extensionCombo, existingFileURL: note.fileURL,
+            confirmReplace: { [weak self] url in self?.confirmReplace(url) ?? false }
         )
+        panel.delegate = validator
+
         if let existing = note.fileURL {
             panel.directoryURL = existing.deletingLastPathComponent()
         } else {
             panel.directoryURL = preferences.lastSaveDirectory
                 ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
         }
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        // Next save opens where this one landed.
+        let response = withExtendedLifetime(validator) { panel.runModal() }
+        guard response == .OK, let directory = panel.url?.deletingLastPathComponent() else {
+            return nil
+        }
+        let url = SaveNameComposer.composedURL(
+            directory: directory, name: panel.nameFieldStringValue,
+            extension: extensionCombo.stringValue
+        )
+        // Next save opens where this one landed, offering the same extension.
         preferences.lastSaveDirectory = url.deletingLastPathComponent()
+        if let chosen = SaveNameComposer.split(name: url.lastPathComponent).extension {
+            preferences.lastSaveExtension = chosen
+        }
         return url
+    }
+
+    /// The panel's own "already exists, replace?" alert, raised by hand for
+    /// the composed destination `validate` found — real unless a test hands
+    /// in something else, the same way `confirmDiscard` does.
+    private func confirmReplace(_ url: URL) -> Bool {
+        if let confirmReplaceOverrideForTesting { return confirmReplaceOverrideForTesting(url) }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(
+            format: L10n.text("“%@” already exists. Do you want to replace it?",
+                              chinese: "“%@”已存在，是否替换？"),
+            url.lastPathComponent
+        )
+        alert.informativeText = L10n.text(
+            "A file with this name already exists in this location. Replacing it will overwrite its current contents.",
+            chinese: "此位置已存在同名文件，替换后将覆盖其当前内容。"
+        )
+        alert.addButton(withTitle: L10n.text("Replace", chinese: "替换"))
+        alert.addButton(withTitle: L10n.text("Cancel", chinese: "取消"))
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Checks the save panel's *actual* destination — name field plus the
+    /// Format combo, which the panel itself never sees as one string —
+    /// against what's already on disk, since the panel's own overwrite
+    /// check only ever looks at the bare name field.
+    private final class SavePanelReplaceValidator: NSObject, NSOpenSavePanelDelegate {
+        let combo: NSComboBox
+        let existingFileURL: URL?
+        let confirmReplace: (URL) -> Bool
+
+        init(combo: NSComboBox, existingFileURL: URL?, confirmReplace: @escaping (URL) -> Bool) {
+            self.combo = combo
+            self.existingFileURL = existingFileURL
+            self.confirmReplace = confirmReplace
+        }
+
+        func panel(_ sender: Any, validate url: URL) throws {
+            guard let panel = sender as? NSSavePanel, let directory = panel.directoryURL else {
+                return
+            }
+            let composed = SaveNameComposer.composedURL(
+                directory: directory, name: panel.nameFieldStringValue,
+                extension: combo.stringValue
+            )
+            guard composed.path != existingFileURL?.path,
+                  FileManager.default.fileExists(atPath: composed.path)
+            else { return }
+            guard confirmReplace(composed) else {
+                throw NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError)
+            }
+        }
+    }
+
+    /// The Format row that goes in the save panel's `accessoryView`: a label
+    /// and the editable extension combo, apart from the panel's own name
+    /// field so a typed extension there is never mistaken for the combo's.
+    private static func saveFormatAccessory(combo: NSComboBox) -> NSView {
+        let label = NSTextField(labelWithString: L10n.text("Format", chinese: "格式"))
+        combo.translatesAutoresizingMaskIntoConstraints = false
+        combo.widthAnchor.constraint(equalToConstant: 120).isActive = true
+
+        let row = NSStackView(views: [label, combo])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        row.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 12, right: 16)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        return row
     }
 
     /// No type filter: Notepad++ opens whatever you point it at, and the
@@ -2372,11 +2540,33 @@ final class MainWindowController: NSWindowController {
         for url in panel.urls { open(url: url) }
     }
 
+    /// Files let go on one of the window's tab targets — the strip, or the
+    /// band across the top where a hidden strip would be. Nothing is
+    /// filtered on the way in: a picture dropped here is a picture tab, the
+    /// same as it would be through ⌘O, and `open(url:)` alone decides which
+    /// kind each file becomes.
+    func openDroppedFiles(_ urls: [URL]) {
+        for url in urls { open(url: url) }
+    }
+
     func open(url: URL) {
         let target = url.standardizedFileURL
         if let index = notes.firstIndex(where: { $0.fileURL?.standardizedFileURL == target }) {
             noteRecentDocument(target)
             selectTab(at: index)
+            return
+        }
+        // An RTF or an RTFD is not a document Nota edits, but its plain text
+        // is worth keeping: imported into a brand-new untitled tab rather
+        // than opened as the file itself, so it never gets a chance to sit
+        // in Open Recent or the session as a file, and ⌘S always asks where
+        // to put it rather than overwriting the rich document with plain
+        // text. Asked before the sniff below, and before the exclusion it
+        // would otherwise hit, since this is decided by the bytes actually
+        // parsing as RTF — one that does not isn't RTF at all, and falls
+        // through to the ordinary rules just below.
+        if let text = TextFile.rtfPlainText(at: target) {
+            importRTF(text: text, named: target.deletingPathExtension().lastPathComponent)
             return
         }
         // The bytes decide what the file is before its name gets a say: a
@@ -2430,6 +2620,33 @@ final class MainWindowController: NSWindowController {
         if preferences.opensMarkdownInReadingMode, Note.supportsRenderedPreview(target) {
             setPreviewMode(.reading)
         }
+    }
+
+    /// An RTF or an RTFD, imported rather than opened: a brand-new untitled
+    /// tab holding its plain text, formatting and any pictures dropped.
+    /// `fileURL` stays `nil` — `addTab`'s untitled path takes no text of its
+    /// own, so this builds the note directly the same way `makeUntitledNote`
+    /// does — and the tab starts dirty, since it holds text that exists
+    /// nowhere on disk yet. Its title is the document's own base name rather
+    /// than the usual `Untitled`, so the reader knows where it came from;
+    /// `untitledName` already takes any string, so nothing else needed to
+    /// change for that.
+    private func importRTF(text: String, named baseName: String) {
+        let note = Note(id: UUID(), fileURL: nil, untitledName: baseName, text: text,
+                         attributes: defaultAttributes, assets: store.assets)
+        note.isDirty = true
+        watchFile(of: note)
+        notes.insert(note, at: min(selectedIndex + 1, notes.count))
+        selectedIndex = notes.firstIndex { $0 === note } ?? notes.count - 1
+        if BigFile.isBig(length: note.storage.length) {
+            openedText = (note.id, text)
+        }
+        writeCache(note)
+        installCurrentNote()
+        refreshTabs()
+        updateStatus()
+        refreshImages(force: true)
+        flush()
     }
 
     /// File › Open Recent's list, kept by `NSDocumentController` rather than
@@ -2965,8 +3182,38 @@ final class DocumentSplitViewController: NSSplitViewController {
 
 /// A transparent strip that lets the window be dragged by its top edge once
 /// the title bar's own chrome is gone.
+///
+/// It stands in the band the tab strip would occupy, so it is a tab target
+/// too: files let go on it open as tabs, exactly as they would on the strip
+/// itself. That is also what saves the auto-hidden strip from having to
+/// reveal itself for a drag — the band behind it already takes the drop.
 final class DragRegionView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
+
+    /// Files dragged in from the Finder and let go on the band.
+    var onDropFiles: (([URL]) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sender.draggingPasteboard.draggedFileURLs.isEmpty ? [] : .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sender.draggingPasteboard.draggedFileURLs.isEmpty ? [] : .copy
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = sender.draggingPasteboard.draggedFileURLs
+        guard !urls.isEmpty else { return false }
+        onDropFiles?(urls)
+        return true
+    }
 }
 
 /// The band across the very top of the window that an auto-hidden tab strip
@@ -4366,6 +4613,10 @@ extension MainWindowController: TabBarViewDelegate {
         toggleBookmark(at: index)
     }
 
+    func tabBar(_ bar: TabBarView, didDropFiles urls: [URL]) {
+        openDroppedFiles(urls)
+    }
+
     // MARK: Tear-off
 
     /// The tab has left the strip: it gets a window of its own, sized like
@@ -4379,11 +4630,13 @@ extension MainWindowController: TabBarViewDelegate {
         guard let note = detachNote(at: index, keepingOneTab: !wasLastTab) else { return }
 
         // Where the pointer sits inside the window it is about to hold: the
-        // strip starts after the traffic lights, the torn tab is the first
-        // one in it, and the strip's middle is the height it is grabbed at.
+        // strip starts wherever it currently does — after the traffic
+        // lights, or at the 12pt inset if they are hidden or a left sidebar
+        // has their slot — the torn tab is the first one in it, and the
+        // strip's middle is the height it is grabbed at.
         let size = window.frame.size
         let pointerOffset = NSPoint(
-            x: Self.tabStripLeadingInset + grabOffset.x,
+            x: currentTabStripLeadingInset + grabOffset.x,
             y: size.height - TabBarView.height / 2
         )
         let frame = NSRect(origin: originForPointer(screenPoint, offset: pointerOffset), size: size)

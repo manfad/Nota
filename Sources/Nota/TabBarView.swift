@@ -40,10 +40,16 @@ protocol TabBarViewDelegate: AnyObject {
     func tabBar(_ bar: TabBarView, didToggleBookmarkAt index: Int)
     /// The gear past the bookmark button: Settings, ⌘, by another door.
     func tabBarDidRequestSettings(_ bar: TabBarView)
+
+    /// Files dragged in from the Finder and let go on the strip. The strip is
+    /// a tab target, so each one opens as a tab of its own — pictures
+    /// included, which is the whole difference from a drop into the text.
+    func tabBar(_ bar: TabBarView, didDropFiles urls: [URL])
 }
 
-/// Tear-off and bookmarks are the parts of the strip a delegate may ignore —
-/// a test recorder that only cares about selection still compiles.
+/// Tear-off, bookmarks and dropped files are the parts of the strip a
+/// delegate may ignore — a test recorder that only cares about selection
+/// still compiles.
 extension TabBarViewDelegate {
     func tabBar(_ bar: TabBarView, tearOff index: Int, grabOffset: NSPoint, screenPoint: NSPoint) {}
     func tabBarDragMoved(_ bar: TabBarView, to screenPoint: NSPoint) {}
@@ -51,6 +57,18 @@ extension TabBarViewDelegate {
     func tabBarDidRequestBookmarks(_ bar: TabBarView) {}
     func tabBar(_ bar: TabBarView, didToggleBookmarkAt index: Int) {}
     func tabBarDidRequestSettings(_ bar: TabBarView) {}
+    func tabBar(_ bar: TabBarView, didDropFiles urls: [URL]) {}
+}
+
+extension NSPasteboard {
+    /// Every file a drag is carrying, in the order it holds them and with
+    /// nothing left out. What each one becomes is the drop target's business,
+    /// not the file's: the text keeps pictures for itself as chips (that is
+    /// `NotaTextView.openableFiles`), the tab targets take the lot.
+    var draggedFileURLs: [URL] {
+        guard types?.contains(.fileURL) == true else { return [] }
+        return readObjects(forClasses: [NSURL.self]) as? [URL] ?? []
+    }
 }
 
 /// The strip of tabs that sits in the title bar next to the traffic lights.
@@ -139,9 +157,16 @@ final class TabBarView: NSView {
     var onPointerExited: (() -> Void)?
 
     /// A gesture the pointer owns is underway in the strip — a reorder drag,
-    /// or a tab torn off it. An auto-hiding strip must not slide out from
-    /// under one.
-    var isDraggingForOverlay: Bool { dragSession != nil || isTornOff }
+    /// a tab torn off it, or files from the Finder held over it. An
+    /// auto-hiding strip must not slide out from under one.
+    var isDraggingForOverlay: Bool {
+        dragSession != nil || isTornOff || isFileDragOverStrip
+    }
+
+    /// A Finder drag is hovering the strip, waiting to be let go. It is not
+    /// this view's own gesture — AppKit runs it — so nothing else here knows
+    /// about it, and the overlay would otherwise slide away mid-drop.
+    private var isFileDragOverStrip = false
 
     /// A tab's context menu is up. The pointer is free to walk off the strip
     /// while it is, and the strip has to still be there when the menu closes.
@@ -203,6 +228,10 @@ final class TabBarView: NSView {
         settingsButton.target = self
         settingsButton.action = #selector(requestSettings)
         addSubview(settingsButton)
+        // The strip is a tab target: files let go on it open as tabs. The
+        // reorder gesture cannot collide with this one — that is a mouse
+        // tracking loop, and an external drag never sends mouse events.
+        registerForDraggedTypes([.fileURL])
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -217,6 +246,33 @@ final class TabBarView: NSView {
         case "None": break
         default: window.performZoom(nil)
         }
+    }
+
+    // MARK: - Dropping files from outside
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        isFileDragOverStrip = !sender.draggingPasteboard.draggedFileURLs.isEmpty
+        return isFileDragOverStrip ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        isFileDragOverStrip ? .copy : []
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        isFileDragOverStrip = false
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        isFileDragOverStrip = false
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        isFileDragOverStrip = false
+        let urls = sender.draggingPasteboard.draggedFileURLs
+        guard !urls.isEmpty else { return false }
+        delegate?.tabBar(self, didDropFiles: urls)
+        return true
     }
 
     func setItems(_ items: [TabBarItem], selectedIndex: Int) {
@@ -332,6 +388,14 @@ final class TabBarView: NSView {
 
     /// Test hook: which tabs are drawing the bookmark badge on their icon.
     internal var bookmarkBadgesForTesting: [Bool] { itemViews.map(\.showsBookmarkBadge) }
+
+    /// Test hook: how much of the hover wash each tab is wearing — 0 at rest
+    /// and on the selected tab, which never takes it.
+    internal var hoverFillAlphasForTesting: [CGFloat] { itemViews.map(\.hoverFillAlphaForTesting) }
+
+    /// Test hook: the same for the + button, which fades its wash in over the
+    /// same 0.12s the tabs do.
+    internal var newTabButtonHoverAlphaForTesting: CGFloat { newTabButton.hoverFillAlphaForTesting }
 
     /// Test hook: the context menu a right-click on the tab at `index` puts
     /// up — there is no window server here to raise one.
@@ -1036,14 +1100,65 @@ extension TabBarView: NSMenuDelegate {
     }
 }
 
+/// The greys the strip paints itself in. There is no colour in it, so how
+/// much `labelColor` a shape carries is the only thing that says what state
+/// it is in, and the ladder has to be read at a glance: the selected tab is
+/// the strongest mark in the strip, the wash under the pointer a clear step
+/// lighter than it — near enough and two tabs read as selected at once — and
+/// a press one step darker again than the thing it is pressing. Dark mode
+/// takes a touch more of each: a white wash over a dark strip carries less
+/// than a black one over a light strip.
+enum StripWash {
+    /// The rounded fill behind the selected tab.
+    static func selected(for view: NSView) -> NSColor { grey(view, light: 0.10, dark: 0.12) }
+    /// The pointer resting on an unselected tab, or on a strip button.
+    static func hover(for view: NSView) -> NSColor { grey(view, light: 0.035, dark: 0.05) }
+    /// A strip button held down.
+    static func pressed(for view: NSView) -> NSColor { grey(view, light: 0.09, dark: 0.115) }
+    /// The disc behind the ✕, which is a small shape and needs more grey
+    /// than a tab-wide wash to read as one.
+    static func closeDisc(for view: NSView) -> NSColor { grey(view, light: 0.10, dark: 0.13) }
+    /// That disc while the ✕ is held down.
+    static func closeDiscPressed(for view: NSView) -> NSColor { grey(view, light: 0.18, dark: 0.22) }
+
+    private static func grey(_ view: NSView, light: CGFloat, dark: CGFloat) -> NSColor {
+        let isDark = view.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return NSColor.labelColor.withAlphaComponent(isDark ? dark : light)
+    }
+}
+
+/// The wash a tab or a strip button wears under the pointer. A view of its
+/// own rather than another pass in `draw(_:)` so its alpha can be animated:
+/// the wash then arrives and leaves with the dot→✕ cross-fade beside it
+/// instead of snapping on while that fades. Transparent to the mouse, and
+/// told when it is being pressed — a press is a darker grey, which alpha
+/// alone cannot say.
+private final class HoverFillView: NSView {
+    var isPressed = false {
+        didSet { if isPressed != oldValue { needsDisplay = true } }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        (isPressed ? StripWash.pressed(for: self) : StripWash.hover(for: self)).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+    }
+}
+
 /// Trailing control on the tab strip. Same density as a tab (24pt), not an
 /// iOS-sized hit target; a quiet template symbol that lights up under the
 /// pointer, and — like the tabs and the ✕ — a press it must keep for itself
 /// rather than letting AppKit turn into a window drag.
 class StripButton: NSButton {
+    /// The same 0.12s the tabs fade their slot over: the two are the same
+    /// gesture arriving at two neighbours, and must not run at two speeds.
+    private static let hoverFadeDuration: TimeInterval = 0.12
+
+    private let hoverFill = HoverFillView()
     private var hoverArea: NSTrackingArea?
     private var isHovered = false {
-        didSet { if isHovered != oldValue { needsDisplay = true } }
+        didSet { if isHovered != oldValue { updateHoverFill(animated: true) } }
     }
 
     override var mouseDownCanMoveWindow: Bool { false }
@@ -1060,21 +1175,38 @@ class StripButton: NSButton {
         self.toolTip = toolTip
         setAccessibilityLabel(name)
         setAccessibilityRole(.button)
+        hoverFill.alphaValue = 0
+        addSubview(hoverFill)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    override func draw(_ dirtyRect: NSRect) {
-        if isHovered || isHighlighted {
-            NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.08 : 0.04).setFill()
-            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+    override func layout() {
+        super.layout()
+        hoverFill.frame = bounds
+    }
+
+    /// Test hook: how much of the hover wash this button is wearing.
+    internal var hoverFillAlphaForTesting: CGFloat { hoverFill.alphaValue }
+
+    private func updateHoverFill(animated: Bool) {
+        hoverFill.isPressed = isHighlighted
+        let target: CGFloat = (isHovered || isHighlighted) ? 1 : 0
+        guard animated else {
+            hoverFill.alphaValue = target
+            return
         }
-        super.draw(dirtyRect)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.hoverFadeDuration
+            hoverFill.animator().alphaValue = target
+        }
     }
 
     override func highlight(_ flag: Bool) {
         super.highlight(flag)
-        needsDisplay = true
+        // A press is an answer to a click and lands at once; only the
+        // release, which may take the wash away with it, is worth a fade.
+        updateHoverFill(animated: !flag)
     }
 
     override func updateTrackingAreas() {
@@ -1195,6 +1327,7 @@ private final class TabItemView: NSView {
     private var isSelected = false
     private var isHovered = false
     private var isHoveringClose = false
+    private var isPressingClose = false
     private var dragTrackingStart: NSPoint?
     private var isDraggingTab = false
     /// The last pointer position on screen this gesture saw. Esc arrives as
@@ -1204,12 +1337,17 @@ private final class TabItemView: NSView {
     private let dotView = DirtyDotView()
     private let closeButton = TabCloseButton()
     private let iconView = TabIconView()
+    private let hoverFillView = HoverFillView()
     private var hoverArea: NSTrackingArea?
 
     override var mouseDownCanMoveWindow: Bool { false }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+
+        // First in, so every other piece of the tab sits over the wash.
+        hoverFillView.alphaValue = 0
+        addSubview(hoverFillView)
 
         setIcon(named: FileKindIcon.untitledSymbolName)
         iconView.contentTintColor = .secondaryLabelColor
@@ -1232,6 +1370,11 @@ private final class TabItemView: NSView {
         closeButton.onHoverChange = { [weak self] hovering in
             guard let self, self.isHoveringClose != hovering else { return }
             self.isHoveringClose = hovering
+            self.needsDisplay = true
+        }
+        closeButton.onHighlightChange = { [weak self] pressed in
+            guard let self, self.isPressingClose != pressed else { return }
+            self.isPressingClose = pressed
             self.needsDisplay = true
         }
         addSubview(closeButton)
@@ -1304,6 +1447,7 @@ private final class TabItemView: NSView {
 
     override func layout() {
         super.layout()
+        hoverFillView.frame = bounds
         iconView.frame = iconRect
         dotView.frame = slotRect
         closeButton.frame = slotRect
@@ -1312,21 +1456,34 @@ private final class TabItemView: NSView {
         closeButton.isHidden = compact
     }
 
-    /// Hovering swaps the dot for the ✕; a clean, unhovered tab shows neither.
+    /// Hovering swaps the dot for the ✕ and lays the wash under the tab; a
+    /// clean, unhovered tab shows neither. All three move together over the
+    /// same 0.12s — one arrival of the pointer, not a wash that snaps on
+    /// while the slot beside it is still fading.
+    ///
+    /// The selected tab takes no wash: its own fill is the strongest mark in
+    /// the strip and the pointer has nothing to add to it.
     private func updateSlot(animated: Bool) {
         let dotAlpha: CGFloat = (isDirty && !isHovered) ? 1 : 0
         let closeAlpha: CGFloat = isHovered ? 1 : 0
+        let hoverAlpha: CGFloat = (isHovered && !isSelected) ? 1 : 0
         guard animated else {
             dotView.alphaValue = dotAlpha
             closeButton.alphaValue = closeAlpha
+            hoverFillView.alphaValue = hoverAlpha
             return
         }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Self.crossFadeDuration
             dotView.animator().alphaValue = dotAlpha
             closeButton.animator().alphaValue = closeAlpha
+            hoverFillView.animator().alphaValue = hoverAlpha
         }
     }
+
+    /// Test hook: how much of the hover wash this tab is wearing, so a test
+    /// can tell a hovered tab from the selected one without a screenshot.
+    internal var hoverFillAlphaForTesting: CGFloat { hoverFillView.alphaValue }
 
     // MARK: Mouse
 
@@ -1492,14 +1649,20 @@ private final class TabItemView: NSView {
     // MARK: Drawing
 
     override func draw(_ dirtyRect: NSRect) {
-        if isSelected || isHovered {
-            NSColor.labelColor.withAlphaComponent(isSelected ? 0.08 : 0.04).setFill()
+        // Only the selected fill is drawn here; it has nothing to animate.
+        // The hover wash is `hoverFillView`, under everything else, so it can
+        // fade in with the slot.
+        if isSelected {
+            StripWash.selected(for: self).setFill()
             NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         }
 
         // Sits behind the ✕, which is a subview and so draws on top of this.
         if isHoveringClose, !isCompact {
-            NSColor.labelColor.withAlphaComponent(0.1).setFill()
+            let disc = isPressingClose
+                ? StripWash.closeDiscPressed(for: self)
+                : StripWash.closeDisc(for: self)
+            disc.setFill()
             NSBezierPath(ovalIn: slotRect).fill()
         }
 
@@ -1655,11 +1818,19 @@ private final class DirtyDotView: NSView {
     }
 }
 
-/// Reports pointer enter/exit so the tab can draw the circle behind the ✕.
+/// Reports pointer enter/exit so the tab can draw the circle behind the ✕,
+/// and the press as well: the disc goes a step darker while the ✕ is held, so
+/// the click has an answer before the tab goes.
 private final class TabCloseButton: NSButton {
     /// Same reason as `NewTabButton`: a press on the ✕ must never move the window.
     override var mouseDownCanMoveWindow: Bool { false }
     var onHoverChange: ((Bool) -> Void)?
+    var onHighlightChange: ((Bool) -> Void)?
+
+    override func highlight(_ flag: Bool) {
+        super.highlight(flag)
+        onHighlightChange?(flag)
+    }
 
     private var hoverArea: NSTrackingArea?
 

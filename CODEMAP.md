@@ -16,6 +16,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 |---|---|
 | A menu item, its key, or app launch / windows / summon | `AppDelegate.swift`, keys in `Shortcuts.swift` |
 | Anything in the main window: footer, split, modes, tabs, opening files, saving | `MainWindowController.swift` (see its sections below) |
+| The save panel's Format combo, or the extensions it offers | `SaveNameComposer.swift` (pure logic), `MainWindowController.presentSavePanel` (the panel itself) |
 | The tab strip (drawing, drag, close, +, tear-off) | `TabBarView.swift`, geometry in `TabStripLayout.swift` |
 | ⌘P switcher, `@` headings, bookmarks dialog, hover/arrow selection | `TabPickerPanel.swift`, ranking in `FuzzyMatch.swift` |
 | Settings window (draft + Save, sidebar pages) | `SettingsWindowController.swift`, values in `Preferences.swift` |
@@ -43,6 +44,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | Vim | `Vim/` (see below) |
 | Big files, spell check | `BigFile.swift`, `SpellCheckPolicy.swift` |
 | Task lists `- [ ]` | `TaskList.swift` |
+| Return continuing a list (`1.` → `2.`, `a.` → `b.`, `- [ ]`) | `ListContinuation.swift` |
 | Line ops (move/duplicate/comment/indent) | `LineOperations.swift` |
 | Copying HTML in from browsers | `HTMLClipboard.swift` |
 | Attachments (`Image N` chips, asset store) | `Assets.swift` |
@@ -58,13 +60,13 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `Shortcuts.swift` (~200) — `KeyCombo`, `ShortcutAction` (every adjustable menu key, defaults, groups, reserved combos), `NSMenuItem.applyShortcut`. ⌘D bookmarks the tab, ⇧⌘D shows the bookmarks; duplicating a line is ⇧⌥↓ only.
 - `Version.swift` — `AppVersion.current`; bumped with `Info.plist` by `.githooks/pre-commit` on every commit (`git config core.hooksPath .githooks`).
 - `Localization.swift` (~130) — `L10n.text`, the English→Chinese table.
-- `SettingsWindowController.swift` (~900) — Settings: a sidebar source list over seven pages (General, Appearance, Editor, Preview, Status bar, Shortcuts, About), each page's controls in inset rounded groups of 44pt rows; draft-and-Save. Version shown on About comes from `Version.swift`.
+- `SettingsWindowController.swift` (~900) — Settings: a sidebar source list over eight pages (General, Appearance, Editor, Preview, Tab bar, Status bar, Shortcuts, About), each page's controls in inset rounded groups of 44pt rows; draft-and-Save. Version shown on About comes from `Version.swift`.
 - `ShortcutRecorderField.swift` (~150) — press-a-key field; records a global hotkey (key code) or an app `KeyCombo` (character).
 - `GlobalHotKey.swift` (~170) — Carbon hotkey; `KeyCodeNames` (key code / key-equivalent display names).
 
 ### Main window
 - `MainWindowController.swift` (~4350) — the whole window. Sections by `MARK`:
-  Setup (303) · Text attributes (990) · Session restore (1215) · Tabs (1356) · Encoding and line endings (1493) · Vim footer (1748) · Files (2070, open/save/close, sniff → viewer kinds) · External changes (2246) · Persistence (2387) · Font size and zoom (2495) · Menu actions (2576) · Bookmarks (2591) · Zen mode (2659) · Tab picker (3045, `@` headings incl. EPUB contents) · Markdown preview (3152, modes, split, footer status of viewers) · Images: chips and sidebar (3761) · Search across tabs (3887) · Delegates / Vim's window (3998) · Tear-off (4136) · Background (4318) · Quick Look (4331).
+  Setup (303) · Text attributes (990) · Session restore (1215) · Tabs (1356) · Encoding and line endings (1493) · Vim footer (1748) · Files (2070, open/save/close, sniff → viewer kinds, `importRTF` for `.rtf`/RTFD) · External changes (2246) · Persistence (2387) · Font size and zoom (2495) · Menu actions (2576) · Bookmarks (2591) · Zen mode (2659) · Tab picker (3045, `@` headings incl. EPUB contents) · Markdown preview (3152, modes, split, footer status of viewers) · Images: chips and sidebar (3761) · Search across tabs (3887) · Delegates / Vim's window (3998) · Tear-off (4136) · Background (4318) · Quick Look (4331).
   Footer regions: `statusLabel` (counts, `updateCountsLabel` / `availableCountsWidth`), `footerTrailingStack` (encoding · line ending · cursor), `modeBadge` (vim).
 - `TabBarView.swift` (~1600) — the strip: `TabBarItem`, `TabItemView` (icon, dot, ✕, bookmark badge), drag/reorder, tear-off, + button, bookmark and Settings-gear buttons at the trailing edge, context menu.
 - `TabStripLayout.swift` (~200) — pure width arithmetic for the strip.
@@ -80,8 +82,9 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `Note.swift` (~530) — `PreviewMode`, `RenderedPreviewKind`, `NoteKind` (`text`/`pdf`/`image`/`epub`), `Note` (storage, file, dirty, watcher, cached PDF/image/book, `sessionTab()`).
 - `NoteText.swift` (~240) — `![](nota://id)` tokens ↔ attachments.
 - `Assets.swift` (~250) — `NotaImageAttachment` chips, `AssetStore` on disk.
-- `TextFile.swift` (~390) — `LineEnding`, `TextFileFormat`, encoding detection, `FileSniff.classify` (PDF, image, EPUB, text, binary), `FileClass`.
+- `TextFile.swift` (~420) — `LineEnding`, `TextFileFormat`, encoding detection, `FileSniff.classify` (PDF, image, EPUB, text, binary), `FileClass`, `rtfPlainText` (RTF/RTFD import).
 - `Session.swift` (~520) — `TextStats` (footer count phrases incl. pages/chapters), `SessionTab` / `SessionWindow` codables, `SessionStore`.
+- `SaveNameComposer.swift` (~55) — pure logic for the save panel's Format combo: known extensions, splitting a name from its extension, composing the final name.
 - `FileWatcher.swift` (~230) — `FileStamp`, watching a path for change.
 - `Bookmarks.swift` (~120) — pinned paths store. `BookmarksMenu.swift` (~130) — the File submenu + ⇧⌘D toggle.
 - `RecentDocumentsMenu.swift` (~55) — File › Open Recent.
@@ -94,6 +97,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `LineOperations.swift` (~380) — move/duplicate/comment/indent as pure functions.
 - `HTMLClipboard.swift` (~290) — reading `public.html` / web archives on paste.
 - `TaskList.swift` (~200) — `- [ ]` boxes in render and source.
+- `ListContinuation.swift` (~365) — what Return means on a list item, as pure functions: `ListMarker.parse(line:above:)`, `.next()`, `.prefix`, and `ListContinuation.edit(forReturnIn:at:)`. The header explains how a lone `i.` is read.
 
 ### Find, go-to-line, pills
 - `Pill.swift` (~300) — `PillView` chrome, `PillFieldEditor`, `PillActionResponder`, `floatBottom`.
@@ -134,8 +138,8 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `MarkdownPreviewTests.swift` (~140) — preview modes, split, picker rows, sidebar.
 - `HTMLPreviewTests.swift`, `PDFTests.swift`, `ImageTests.swift`, `EPUBTests.swift` — the viewer tabs.
 - `LaTeXTests.swift`, `MathTests.swift`, `MarkdownMathTests.swift`, `MarkdownHeadingsTests.swift`, `TaskListTests.swift` — renderers.
-- `TextFileTests.swift`, `FileSniffTests.swift`, `FileKindIconTests.swift`, `LineIndexTests.swift`, `LineOperationsTests.swift` — files and editor logic.
-- `BookmarksTests.swift` (also the ⌘P picker tests), `OpenRecentTests.swift`, `ShortcutsTests.swift`, `MultiWindowTests.swift`, `ExternalChangeTests.swift`, `ZoomTests.swift`, `TabStripLayoutTests.swift`, `BigFileTests.swift`, `NoteBigFileTests.swift`, `SpellCheckPolicyTests.swift`.
+- `TextFileTests.swift`, `FileSniffTests.swift`, `FileKindIconTests.swift`, `LineIndexTests.swift`, `LineOperationsTests.swift`, `ListContinuationTests.swift` — files and editor logic.
+- `BookmarksTests.swift` (also the ⌘P picker tests), `OpenRecentTests.swift`, `ShortcutsTests.swift`, `MultiWindowTests.swift`, `ExternalChangeTests.swift`, `ZoomTests.swift`, `TabStripLayoutTests.swift`, `DropOnStripTests.swift`, `BigFileTests.swift`, `NoteBigFileTests.swift`, `SpellCheckPolicyTests.swift`.
 - `VimTests.swift`, `VimStage2Tests.swift`, `VimStage3Tests.swift`.
 - Helpers: `OffscreenWindow.swift` (`makeKeyAndOrderFrontOffscreen()` — tests never launch the app), `DirtyProbe.swift`.
 - Gotcha: a hanging test is a modal alert; stub `confirmDiscardOverrideForTesting` / `savePanelProvider`.

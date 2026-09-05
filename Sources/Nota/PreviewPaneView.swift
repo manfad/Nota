@@ -65,6 +65,14 @@ final class PreviewPaneView: NSView {
     var onPositionChange: ((Int) -> Void)?
     var onZoomChange: ((CGFloat) -> Void)?
 
+    /// Files let go on the drag band the column carries in zen. Nothing to
+    /// do with the content in it, so the column only passes them on: the
+    /// window opens each one as a tab, the same as on the strip.
+    var onDropFiles: (([URL]) -> Void)? {
+        get { zenDragRegion.onDropFiles }
+        set { zenDragRegion.onDropFiles = newValue }
+    }
+
     // MARK: - What is true of the column
 
     /// Laid on every content view rather than the one in front, so a view

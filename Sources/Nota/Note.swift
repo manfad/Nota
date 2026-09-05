@@ -441,7 +441,14 @@ final class Note {
     /// them — an RTF's own markup is ASCII, but it is not a note. Only when
     /// the bytes cannot say anything — the file is missing, unreadable, or a
     /// real binary — does the old name-based guess take over.
+    ///
+    /// A real RTF or RTFD is the one exception to the refusal above: it is
+    /// openable after all, since `MainWindowController.open(url:)` imports
+    /// it into a new untitled tab rather than editing the file itself. Asked
+    /// by content, the same check that open(url:) makes, so a `.rtf` that is
+    /// not really RTF still falls through to the ordinary rules.
     static func isOpenable(_ url: URL) -> Bool {
+        if TextFile.rtfPlainText(at: url) != nil { return true }
         switch FileSniff.classify(at: url) {
         case .pdf, .image, .epub:
             return true
