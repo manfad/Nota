@@ -466,6 +466,20 @@ final class NotaTests: XCTestCase {
         XCTAssertEqual(sidebarSide.selectedItem?.representedObject as? String, "right",
                        "the popup shows the side that is live")
 
+        // A window that is already open, built with the column on the right:
+        // the one that has to move without a relaunch.
+        let mainController = MainWindowController(
+            store: SessionStore(directory: try makeTemporaryDirectory())
+        )
+        let split = try XCTUnwrap(mainController.window?.contentViewController as? NSSplitViewController)
+        func roles() -> [String] {
+            split.splitViewItems.map { item in
+                descendant(of: item.viewController.view, ofType: ImageSidebarView.self) != nil
+                    ? "sidebar" : "workspace"
+            }
+        }
+        XCTAssertEqual(roles(), ["workspace", "sidebar"], "built on the right")
+
         sidebarSide.selectItem(at: 0)
         _ = NSApp.sendAction(
             try XCTUnwrap(sidebarSide.action), to: sidebarSide.target, from: sidebarSide
@@ -473,16 +487,16 @@ final class NotaTests: XCTestCase {
         XCTAssertTrue(save.isEnabled)
         save.performClick(nil)
         XCTAssertEqual(Preferences.shared.sidebarSide, .left)
+        XCTAssertEqual(roles(), ["sidebar", "workspace"],
+                       "the open window's sidebar is now first, on the left — no relaunch")
 
-        let mainController = MainWindowController(
-            store: SessionStore(directory: try makeTemporaryDirectory())
+        // And back again, the same way.
+        sidebarSide.selectItem(at: 1)
+        _ = NSApp.sendAction(
+            try XCTUnwrap(sidebarSide.action), to: sidebarSide.target, from: sidebarSide
         )
-        let split = try XCTUnwrap(mainController.window?.contentViewController as? NSSplitViewController)
-        let roles = split.splitViewItems.map { item in
-            descendant(of: item.viewController.view, ofType: ImageSidebarView.self) != nil
-                ? "sidebar" : "workspace"
-        }
-        XCTAssertEqual(roles, ["sidebar", "workspace"], "the sidebar is now first, on the left")
+        save.performClick(nil)
+        XCTAssertEqual(roles(), ["workspace", "sidebar"])
     }
 
     @MainActor

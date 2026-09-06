@@ -1030,6 +1030,12 @@ final class MainWindowController: NSWindowController {
             splitViewController.addSplitViewItem(item)
         }
         sidebarItem = item
+        // Written down here, where the side is actually installed, and not
+        // read lazily later: the first read used to happen inside
+        // `preferencesChanged`, after the side had already been switched, so
+        // it initialised to the new side, saw nothing to do, and the column
+        // moved only on the next launch.
+        installedSidebarSide = side
         updateTabStripInset()
     }
 
