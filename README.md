@@ -68,3 +68,7 @@ scratch folder instead of your notes. Needs macOS 14+ and Swift 5.9+.
 `./release.sh`: it builds a universal `Nota.app`, zips it, tags, pushes, creates
 the GitHub release and updates the Homebrew tap `manfad/homebrew-nota`.
 `RELEASE_NOTES=notes.md` and `TAP_DIR=path` override the defaults.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
