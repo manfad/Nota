@@ -294,6 +294,8 @@ final class EPUBPreviewView: NSView, PreviewContent {
         set { page.zoom = newValue }
     }
 
+    var zoomPercent: Int? { page.zoomPercent }
+
     /// The pane the chapter is drawn in — for the tests, which have no other
     /// way to ask a web view what it holds.
     var chapterPage: HTMLPreviewView { page }

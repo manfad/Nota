@@ -200,6 +200,10 @@ final class ImagePreviewView: NSView, PreviewContent {
         }
     }
 
+    /// The zoom as the pill in the corner says it: a whole number of percent
+    /// of the fit, so a picture fitted to the column reads 100%.
+    var zoomPercent: Int? { canZoom ? Int((zoom * 100).rounded()) : nil }
+
     /// The size the picture is actually drawn at, for the tests.
     var drawnSize: NSSize { imageView.frame.size }
 

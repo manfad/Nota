@@ -252,6 +252,10 @@ final class PDFPreviewView: NSView, PreviewContent {
 
     var onZoomChange: ((CGFloat) -> Void)?
 
+    /// The zoom as the pill in the corner says it: a whole number of percent
+    /// of the fit, so a page fitted to the column reads 100%.
+    var zoomPercent: Int? { canZoom ? Int((zoom * 100).rounded()) : nil }
+
     /// Fits the page to the column's width, never larger than actual size,
     /// and then applies whatever zoom the reader has asked for on top.
     ///
