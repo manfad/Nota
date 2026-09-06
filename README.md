@@ -19,7 +19,7 @@ under System Settings › Privacy & Security.
 
 ## What it opens
 
-- **Edit:** any UTF-8 text file. `.txt`, `.json`, `.yaml`, `.toml`, `.xml`, code, `README`, `.gitignore`.
+- **Edit:** any UTF-8 text file. `.txt`, `.json`, `.yaml`, `.toml`, `.xml`, `README`.
 - **Split, source beside a preview:** `.md`, `.html`, `.tex`, `.csv`, `.tsv`, `.sql`, `.svg`.
 - **Read only:** `.pdf`, `.epub`, `.rtf`, images (`.png`, `.jpg`, `.gif`, `.webp`, `.heic`, `.bmp`).
 
