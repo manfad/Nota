@@ -102,7 +102,7 @@ cask "nota" do
     strategy :github_latest
   end
 
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "Nota.app"
 
