@@ -296,6 +296,10 @@ final class HTMLPreviewView: NSView, PreviewContent {
         }
     }
 
+    /// The zoom as the pill in the corner says it: a whole number of percent
+    /// of the page's own size, so an unzoomed page reads 100%.
+    var zoomPercent: Int? { canZoom ? Int((zoom * 100).rounded()) : nil }
+
     // MARK: - Content
 
     /// Puts the tab's text in the pane as a page, unless the page already

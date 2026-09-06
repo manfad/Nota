@@ -240,6 +240,14 @@ protocol PreviewContent: NSView {
     /// same number `zoom` answers with, so the tab can keep it.
     var onZoomChange: ((CGFloat) -> Void)? { get set }
 
+    /// The zoom as the pill in the column's corner says it: a whole number of
+    /// percent of the content's own actual size, so a page fitted to the
+    /// column reads 100% whatever scale that actually is. `nil` where there
+    /// is nothing to say — a render, a grid, a document that cannot be
+    /// zoomed yet — and a `nil` takes the pill away rather than showing a
+    /// number nobody can change.
+    var zoomPercent: Int? { get }
+
     /// Where the tab was left, when the content is the only thing that knows:
     /// the page a PDF is open at. `nil` when it is not — a render is read
     /// against the editor's caret, and the window already has that.
@@ -404,6 +412,8 @@ extension PreviewContent {
         get { nil }
         set { }
     }
+
+    var zoomPercent: Int? { nil }
 
     var rememberedPosition: Int? { nil }
 

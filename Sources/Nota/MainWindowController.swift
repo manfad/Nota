@@ -903,6 +903,16 @@ final class MainWindowController: NSWindowController {
         previewColumn.onZoomChange = { [weak self] zoom in
             self?.previewZoomDidChange(zoom)
         }
+        // The pill in the column's other corner presses the same three keys
+        // the reader would: one path through the window for a zoom, whichever
+        // hand asked for it.
+        previewColumn.onZoomCommand = { [weak self] command in
+            switch command {
+            case .zoomOut: self?.zoomOut()
+            case .actualSize: self?.actualSize()
+            case .zoomIn: self?.zoomIn()
+            }
+        }
         // The content wrote something on the note itself — the table a dump
         // is open at, the query beside it. Nothing to apply here; the note
         // already holds it, and all that is left is the session.
@@ -3092,12 +3102,14 @@ final class MainWindowController: NSWindowController {
         var content = previewColumn.content(for: note)
         content.zoom = zoom
         note.previewZoom = content.zoom
+        previewColumn.noteZoomChanged()
     }
 
     /// The content zoomed itself — a pinch on a document. Where the reader
     /// left it is the tab's, the same as the page they left it on.
     private func previewZoomDidChange(_ zoom: CGFloat) {
         currentNote?.previewZoom = zoom
+        previewColumn.noteZoomChanged()
     }
 
     @objc private func openSettings(_ sender: Any?) {
@@ -4174,6 +4186,10 @@ extension MainWindowController {
     /// thing that puts the document there.
     var previewPanes: PreviewPaneView.Panes { previewColumn.panes }
 
+    /// The zoom pill in the preview column's bottom-leading corner — for the
+    /// tests, which are the only thing that reaches into it.
+    var zoomPill: ZoomPillOverlay { previewColumn.zoomPill }
+
     /// Both overlays, for the tests: the editor column's and the preview
     /// column's. Split has both up, one per column; the editor mode has only
     /// the first, reading only the second.
@@ -4418,6 +4434,9 @@ extension MainWindowController {
         var content = previewColumn.content(for: note)
         content.zoom = note.previewZoom
         note.previewZoom = content.zoom
+        // The pill says the tab in front's zoom or nothing at all, so a tab
+        // or a mode that has no zoom to report takes it away at once.
+        previewColumn.refreshZoomPill(zoomsContent: zoomsContent)
         highlightPreviewBlock()
     }
 

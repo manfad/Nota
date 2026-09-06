@@ -58,6 +58,12 @@ final class PreviewPaneView: NSView {
     /// zen's drop clear of the traffic-light zone at the top. One pair of
     /// constraints, whatever the column happens to be holding.
     private let contentContainer = NSView()
+
+    /// The zoom pill in the column's bottom-leading corner — the corner
+    /// slot's twin at the other end of the diagonal. The column owns it
+    /// because the column is what knows which content is in front, and the
+    /// pill says that content's zoom or nothing at all.
+    let zoomPill = ZoomPillOverlay()
     private let zenDragRegion = DragRegionView()
     private let dragBandHeight: CGFloat
     private var contentTopToPane: NSLayoutConstraint?
@@ -80,6 +86,13 @@ final class PreviewPaneView: NSView {
     var onPositionChange: ((Int) -> Void)?
     var onZoomChange: ((CGFloat) -> Void)?
     var onStateChange: (() -> Void)?
+
+    /// A segment of the zoom pill was pressed. It is the same three keys the
+    /// reader would have pressed, so it goes to the window rather than to the
+    /// content: one path for a zoom, whichever hand asked for it.
+    var onZoomCommand: ((ZoomPillOverlay.Command) -> Void)? {
+        didSet { zoomPill.onCommand = onZoomCommand }
+    }
 
     /// Files let go anywhere over the column — on the render, on the page, on
     /// the document, on the picture, and on the drag band the column carries
@@ -150,6 +163,11 @@ final class PreviewPaneView: NSView {
         zenDragRegion.isHidden = true
         addSubview(zenDragRegion)
 
+        // Last, so it is over the content it floats on — and over the drag
+        // band, which zen lays across the top and never the bottom.
+        zoomPill.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(zoomPill)
+
         NSLayoutConstraint.activate([
             contentContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
             contentContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -159,6 +177,10 @@ final class PreviewPaneView: NSView {
             zenDragRegion.leadingAnchor.constraint(equalTo: leadingAnchor),
             zenDragRegion.trailingAnchor.constraint(equalTo: trailingAnchor),
             zenDragRegion.heightAnchor.constraint(equalToConstant: dragBandHeight),
+
+            zoomPill.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
+            zoomPill.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
+            zoomPill.bottomAnchor.constraint(equalTo: contentContainer.bottomAnchor),
         ])
 
         // Under the tab strip normally, and at the very top in zen, where
@@ -278,6 +300,20 @@ final class PreviewPaneView: NSView {
     /// through the one in front on the way.
     func show(_ note: Note, in context: PreviewContext) {
         bringForward(note).show(note, in: context)
+    }
+
+    /// The zoom pill re-reads the content in front. Called with whether the
+    /// keys are the content's at all — a page beside an editor zooms with
+    /// ⌘+ nowhere, so it has no pill — and a content with nothing to say
+    /// takes the pill away on the spot rather than fading it out.
+    func refreshZoomPill(zoomsContent: Bool) {
+        zoomPill.setPercent(zoomsContent ? current.zoomPercent : nil)
+    }
+
+    /// The content in front was just zoomed. The pill shows the new number
+    /// and starts its second and a half again.
+    func noteZoomChanged() {
+        zoomPill.noteZoomChanged(percent: current.zoomPercent)
     }
 
     /// The band goes out everywhere, not only in front: a view that comes
