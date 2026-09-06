@@ -173,6 +173,13 @@ enum L10n {
         "Type to search all notes": "输入以搜索所有笔记",
         "No results": "没有结果",
         "Find in note": "在笔记中查找",
+        // The corner slot's action segment, and what a tree preview says when
+        // its file will not parse. The format's own name is passed in.
+        "Beautify %@": "美化 %@",
+        "Compact %@": "压缩 %@",
+        "Minify %@": "精简 %@",
+        "Not valid %@: line %d": "%@ 无效：第 %d 行",
+        "Not valid %@: line %d — %@": "%@ 无效：第 %d 行 — %@",
     ]
 
     /// Taiwan/Hong Kong vocabulary, not a character-by-character conversion of
@@ -322,6 +329,11 @@ enum L10n {
         "Type to search all notes": "輸入以搜尋所有筆記",
         "No results": "沒有結果",
         "Find in note": "在筆記中尋找",
+        "Beautify %@": "美化 %@",
+        "Compact %@": "壓縮 %@",
+        "Minify %@": "精簡 %@",
+        "Not valid %@: line %d": "%@ 無效：第 %d 行",
+        "Not valid %@: line %d — %@": "%@ 無效：第 %d 行 — %@",
     ]
 
     /// Bahasa Melayu. A few entries are the English word itself — "Editor",
@@ -472,6 +484,11 @@ enum L10n {
         "Type to search all notes": "Taip untuk mencari semua nota",
         "No results": "Tiada hasil",
         "Find in note": "Cari dalam nota",
+        "Beautify %@": "Cantikkan %@",
+        "Compact %@": "Padatkan %@",
+        "Minify %@": "Kecilkan %@",
+        "Not valid %@: line %d": "%@ tidak sah: baris %d",
+        "Not valid %@: line %d — %@": "%@ tidak sah: baris %d — %@",
     ]
 
     /// Keys whose translation is legitimately the English word — Malay spells

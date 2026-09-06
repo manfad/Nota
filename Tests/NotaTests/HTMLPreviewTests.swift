@@ -34,10 +34,14 @@ final class HTMLPreviewTests: XCTestCase {
             XCTAssertEqual(RenderedPreviewKind(fileExtension: spelling), .markdown,
                            "\(spelling) is Markdown")
         }
-        for spelling in ["css", "js", "txt", "json", "xml"] {
+        for spelling in ["css", "js", "txt"] {
             XCTAssertNil(RenderedPreviewKind(fileExtension: spelling),
                          "\(spelling) is source, and source has no preview")
         }
+        // A `.json` and an `.xml` are trees of tags too, but they are read as
+        // the trees they are rather than drawn as pages (2026-09-06).
+        XCTAssertEqual(RenderedPreviewKind(fileExtension: "json"), .tree(.json))
+        XCTAssertEqual(RenderedPreviewKind(fileExtension: "xml"), .tree(.xml))
     }
 
     func testAPageIsAPreviewTabAndAnUntitledNoteIsNot() throws {

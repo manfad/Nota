@@ -3056,11 +3056,11 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(overlay.bounds.maxY - bezel.maxY, 8, accuracy: 0.5)
         XCTAssertEqual(overlay.frame.height, ModeControlOverlay.hoverBandHeight)
 
-        // One layer: whatever the slot is holding is the whole of it, with no
-        // plate behind it. The other thing it can hold is in the hierarchy
-        // and hidden — a slot carries both and shows one.
-        XCTAssertEqual(overlay.subviews, [overlay.modeControl, overlay.jsonButton])
-        XCTAssertTrue(overlay.jsonButton.isHidden, "not over a Markdown tab")
+        // One layer: the capsule is the whole of what stands in the slot,
+        // with no plate behind it and nothing beside it. A file with an
+        // action of its own grows the same control by a segment.
+        XCTAssertEqual(overlay.subviews, [overlay.modeControl])
+        XCTAssertEqual(overlay.modeControl.segmentCount, 3, "not over a Markdown tab")
     }
 
     /// The unselected segments' bezel is drawn with some translucency, so

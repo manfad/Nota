@@ -171,9 +171,17 @@ final class MainWindowController: NSWindowController {
     private var previewWorkItem: DispatchWorkItem?
     /// The find bar's own re-scan after an edit, while one is waiting.
     private var findRefreshWorkItem: DispatchWorkItem?
-    /// The `.json` corner button's re-parse after an edit, while one is
-    /// waiting. Same beat as the footer's counts.
-    private var jsonSlotWorkItem: DispatchWorkItem?
+    /// The corner action's re-parse after an edit, while one is waiting.
+    /// Same beat as the footer's counts.
+    private var formatSlotWorkItem: DispatchWorkItem?
+    /// The two formatters the corner's action segment drives, behind one
+    /// seam. The real ones unless a test puts its own in — a test about the
+    /// *slot* must not wait on a formatter that is being written beside it.
+    struct FormatSeam {
+        var state: (String) -> ModeControlOverlay.FormatState
+        var reformat: (String, ModeControlOverlay.FormatAction) -> String?
+    }
+    var formatSeamsForTesting: [ModeControlOverlay.FormatKind: FormatSeam] = [:]
     /// The preview's share of the document split, as the divider was last
     /// left. Read on the way out of split and pinned back on the way in.
     private var splitPreviewFraction: CGFloat = 0.5
@@ -790,10 +798,9 @@ final class MainWindowController: NSWindowController {
     /// it.
     private func installModeOverlay(_ overlay: ModeControlOverlay, over container: NSView) {
         overlay.translatesAutoresizingMaskIntoConstraints = false
-        // The other thing the slot can hold. Only the editor column ever does
-        // — a `.json` tab has no preview column — but the wiring costs a
-        // closure, and a slot that could not answer would be the odder shape.
-        overlay.onJSONFormat = { [weak self] action in self?.applyJSONFormat(action) }
+        // The action on the end of the capsule, where the front tab's format
+        // has one. Both columns carry it, so both are wired.
+        overlay.onFormat = { [weak self] kind, action in self?.applyFormat(action, of: kind) }
         container.addSubview(overlay)
         // The band's height is the overlay's own: it grows while that
         // column's find bar is up, so the whole top of the column is still
@@ -805,12 +812,19 @@ final class MainWindowController: NSWindowController {
         ])
     }
 
-    /// A segment clicked in either column's control.
+    /// A segment clicked in either column's control — one of the three modes,
+    /// or the format action standing on the end of them.
     @objc private func previewModeControlChanged(_ sender: NSSegmentedControl) {
         let modes = PreviewMode.allCases
-        guard modes.indices.contains(sender.selectedSegment) else { return }
         let clicked = [editorModeOverlay, previewModeOverlay]
             .first { $0.modeControl === sender }
+        // The action is a button living in a `.selectOne` control: it fires,
+        // and the selection goes straight back to the mode the tab is in.
+        if sender.selectedSegment == ModeControlOverlay.formatSegment,
+           let clicked, clicked.handleFormatSegmentClick(restoringMode: previewMode) {
+            return
+        }
+        guard modes.indices.contains(sender.selectedSegment) else { return }
         setPreviewMode(modes[sender.selectedSegment])
         // The pointer is still on the control that was just clicked. If that
         // column survived the mode change it stays up without waiting to be
@@ -4196,27 +4210,33 @@ extension MainWindowController {
 
     /// What the front tab puts in the corner, asked of the note rather than of
     /// a list of extensions kept here. A tab with a render gets the mode
-    /// control; a `.json` tab gets its Beautify / Compact button; everything
-    /// else — a `.txt`, an untitled note, a PDF, a picture, a book — gets
-    /// nothing, and zen gets nothing whatever the tab is.
-    ///
-    /// The order matters only in that a rendered tab wins: nothing is spelled
-    /// both ways today, and if something ever is, its render is the bigger
-    /// thing to offer.
+    /// control; a `.json` or `.html` tab gets that control with its own
+    /// Beautify / Compact action on the end; everything else — a `.txt`, an
+    /// untitled note, a PDF, a picture, a book — gets nothing, and zen gets
+    /// nothing whatever the tab is.
     private var cornerSlotContent: ModeControlOverlay.Content {
-        guard !isZenMode, let note = currentNote else { return .none }
-        if note.supportsRenderedPreview { return .modeControl }
-        if note.isJSON { return .jsonFormat }
-        return .none
+        guard !isZenMode, let note = currentNote, note.supportsRenderedPreview
+        else { return .none }
+        guard let kind = cornerFormatKind else { return .modeControl }
+        return .modeControlWithFormat(kind)
+    }
+
+    /// Which format the front tab can be laid out both ways, if either. Both
+    /// of them have a render behind them now, so the action never stands on
+    /// its own — it is always the fourth segment of a mode control.
+    private var cornerFormatKind: ModeControlOverlay.FormatKind? {
+        guard let note = currentNote else { return nil }
+        if note.isJSON { return .json }
+        if note.isHTML { return .html }
+        return nil
     }
 
     /// Which columns carry a slot, what is in it, and how far down their
     /// column it sits.
     ///
-    /// The mode control is per column: the editor's goes in reading, the
-    /// preview's is there in split and reading. The JSON button is the editor
-    /// column's alone — a `.json` tab has no render, so there is no second
-    /// column for it to stand in.
+    /// The slot is per column: the editor's goes in reading, where that column
+    /// is collapsed, and the preview's is there in split and reading. Both
+    /// carry whatever the tab put in the corner, action segment included.
     ///
     /// A ⌘F bar takes its column's corner but not its control. The control
     /// drops the height of the pill and goes on working underneath it, which
@@ -4225,22 +4245,18 @@ extension MainWindowController {
         let content = cornerSlotContent
         // In reading the editor column is collapsed, so its slot is empty
         // however the tab would otherwise have filled it.
-        editorModeOverlay.setContent(
-            installedPreviewMode == .reading && content == .modeControl ? .none : content
-        )
+        editorModeOverlay.setContent(installedPreviewMode == .reading ? .none : content)
         // Worked out on the spot — a tab arriving in front, a file reloaded
         // off disk — unless a re-parse is already on its way, which is what
         // keeps a burst of typing to one walk over the text.
-        if content == .jsonFormat, jsonSlotWorkItem == nil { refreshJSONSlotState() }
+        if content.format != nil, formatSlotWorkItem == nil { refreshFormatSlotState() }
         // Whichever pill stack is standing in the editor's corner — ⌘F's one
         // or two, or ⌘L's one — is what the control clears.
         let editorStack: CGFloat = findSession.isVisible ? findBar.stackHeight
             : (goToLineSession.isVisible ? PillView.height : 0)
         editorModeOverlay.findBarClearance = editorStack > 0
             ? ModeControlOverlay.drop(forFindBarOfHeight: editorStack) : 0
-        previewModeOverlay.setContent(
-            content == .modeControl && installedPreviewMode != .off ? .modeControl : .none
-        )
+        previewModeOverlay.setContent(installedPreviewMode != .off ? content : .none)
         let preview = previewColumn.current
         previewModeOverlay.findBarClearance = preview.isFindBarVisible
             ? ModeControlOverlay.drop(forFindBarOfHeight: preview.findBarHeight) : 0
@@ -4259,53 +4275,82 @@ extension MainWindowController {
         updateModeControlOverlays()
     }
 
-    // MARK: - JSON in the corner
+    // MARK: - The action in the corner
 
-    /// Which way round the `.json` button points, or the line the parse gave
+    /// Which way round the action segment points, or the line the parse gave
     /// up on. One linear walk over the text, so it is asked when the tab
     /// changes and on the debounce after typing, never per keystroke.
-    private func refreshJSONSlotState() {
-        jsonSlotWorkItem?.cancel()
-        jsonSlotWorkItem = nil
-        guard let note = currentNote, note.isJSON else { return }
-        let text = note.storage.string
-        let state: ModeControlOverlay.JSONState
-        if let line = JSONFormat.errorLine(in: text) {
-            state = .invalid(line: line)
-        } else {
-            // The button offers the shape the file is *not* in.
-            state = .action(JSONFormat.isPretty(text) ? .compact : .beautify)
+    ///
+    /// Both columns are told: in split a `.json` tab has the same capsule in
+    /// each of its two corners, and a segment that said "Beautify" in one and
+    /// "Compact" in the other would be a bug you could see.
+    private func refreshFormatSlotState() {
+        formatSlotWorkItem?.cancel()
+        formatSlotWorkItem = nil
+        guard let note = currentNote, let kind = cornerFormatKind else { return }
+        let state = formatState(of: note.storage.string, as: kind)
+        for overlay in [editorModeOverlay, previewModeOverlay] { overlay.setFormatState(state) }
+    }
+
+    /// What the formatter says about the text: the shape the file is *not* in,
+    /// or the line it could not be read past.
+    private func formatState(
+        of text: String, as kind: ModeControlOverlay.FormatKind
+    ) -> ModeControlOverlay.FormatState {
+        if let seam = formatSeamsForTesting[kind] { return seam.state(text) }
+        switch kind {
+        case .json:
+            if let line = JSONFormat.errorLine(in: text) { return .invalid(line: line) }
+            return .action(JSONFormat.isPretty(text) ? .compact : .beautify)
+        case .html:
+            if let line = HTMLFormat.errorLine(in: text) { return .invalid(line: line) }
+            return .action(HTMLFormat.isPretty(text) ? .compact : .beautify)
         }
-        editorModeOverlay.setJSONState(state)
+    }
+
+    /// The same text the other way round, or `nil` where the formatter will
+    /// not have it.
+    private func reformatted(
+        _ text: String, as action: ModeControlOverlay.FormatAction,
+        of kind: ModeControlOverlay.FormatKind
+    ) -> String? {
+        if let seam = formatSeamsForTesting[kind] { return seam.reformat(text, action) }
+        switch kind {
+        case .json:
+            return try? JSONFormat.reformat(text, as: action == .beautify ? .pretty : .compact)
+        case .html:
+            return try? HTMLFormat.reformat(text, as: action == .beautify ? .pretty : .minified)
+        }
     }
 
     /// Typing debounces, on the beat the footer's own counts use: a burst of
     /// keystrokes re-parses once, about half a second after it stops, rather
     /// than once a key.
-    private func scheduleJSONSlotRefresh() {
-        guard case .jsonFormat = editorModeOverlay.content else { return }
-        jsonSlotWorkItem?.cancel()
-        let item = DispatchWorkItem { [weak self] in self?.refreshJSONSlotState() }
-        jsonSlotWorkItem = item
+    private func scheduleFormatSlotRefresh() {
+        guard cornerFormatKind != nil else { return }
+        formatSlotWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.refreshFormatSlotState() }
+        formatSlotWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
     }
 
-    /// The button was pressed. The whole note is replaced through the editor's
-    /// own undoable path — `shouldChangeText` / `didChangeText`, the way a
-    /// line operation replaces its lines — so the tab goes dirty, ⌘Z puts the
-    /// file back exactly as it was, and the save, vim and the footer all see
-    /// one edit rather than a document swapped out from under them.
+    /// The action segment was pressed. The whole note is replaced through the
+    /// editor's own undoable path — `shouldChangeText` / `didChangeText`, the
+    /// way a line operation replaces its lines — so the tab goes dirty, ⌘Z
+    /// puts the file back exactly as it was, and the save, vim and the footer
+    /// all see one edit rather than a document swapped out from under them.
     ///
     /// The caret goes to the top: every line has moved, so the place it was
     /// no longer means anything, and the top is where a reader starts reading
     /// a file that has just been laid out.
-    private func applyJSONFormat(_ action: ModeControlOverlay.JSONAction) {
-        guard let note = currentNote, note.isJSON,
+    private func applyFormat(
+        _ action: ModeControlOverlay.FormatAction, of kind: ModeControlOverlay.FormatKind
+    ) {
+        guard let note = currentNote, cornerFormatKind == kind,
               let storage = textView.textStorage, storage === note.storage
         else { return }
         let text = storage.string
-        let style: JSONFormat.Style = action == .beautify ? .pretty : .compact
-        guard let formatted = try? JSONFormat.reformat(text, as: style), formatted != text
+        guard let formatted = reformatted(text, as: action, of: kind), formatted != text
         else { return }
         let whole = NSRange(location: 0, length: storage.length)
         guard textView.shouldChangeText(in: whole, replacementString: formatted) else { return }
@@ -4317,9 +4362,9 @@ extension MainWindowController {
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.didChangeText()
         textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
-        // The file is now in the other shape, so the button is the other way
+        // The file is now in the other shape, so the segment is the other way
         // round — at once, not half a second later: this one was a click.
-        refreshJSONSlotState()
+        refreshFormatSlotState()
     }
 
     /// The matches have moved under an open find bar. Debounced like the
@@ -5050,7 +5095,7 @@ extension MainWindowController: NSTextViewDelegate {
         // First, so that everything below which works the corner out again —
         // `refreshTabs` on the way to dirty, for one — finds a re-parse
         // already on its way and leaves it to the debounce.
-        scheduleJSONSlotRefresh()
+        scheduleFormatSlotRefresh()
         if !note.isDirty {
             note.isDirty = true
             refreshTabs()

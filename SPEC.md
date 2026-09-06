@@ -312,32 +312,41 @@
   `$$` or its fence in the source, and a caret in that source lights it. A `$$…$$` inside a sentence stays in the
   sentence, set in display style where it stands.
 
-## The corner slot (done 2026-09-05, Todo 4)
+## The corner slot (done 2026-09-05, Todo 4; four options 2026-09-06, Todo 30)
 - One band per column, and the front tab says what stands in it. The band, the hover, the fade, the hit testing and
   the drop out of ⌘F's way are exactly as the mode control's above; only the thing in the corner changes.
-- A tab whose note `supportsRenderedPreview` gets the mode control. A `.json` text tab gets the Beautify / Compact
-  button. Every other tab — a `.txt`, an untitled note, a PDF, a picture, a book — gets nothing: the overlay goes away
-  whole, so the band takes no clicks and the text under it stays as reachable as any other. Zen empties every slot.
+- A tab whose note `supportsRenderedPreview` gets the mode control. A `.json` or `.html` tab gets that same control
+  with a **fourth segment** on the end of it — its format's own Beautify / Compact action. Every other tab — a
+  `.txt`, an untitled note, a PDF, a picture, a book — gets nothing: the overlay goes away whole, so the band takes
+  no clicks and the text under it stays as reachable as any other. Zen empties every slot.
+- One capsule, never two pieces of chrome. Both files that carry an action have a render behind them now, so the
+  action never stands on its own: it is one more segment of the same `NSSegmentedControl`, the same 28pt width and
+  the same bezel. The control stays `.selectOne` — a click that lands on the action fires the reformat and the
+  selection goes straight back to the mode segment it was on, since nothing about a file's layout is a mode.
 - Keyed on the note, never on a list of extensions kept in the overlay, so a new kind of render is offered the mode
   control the moment `RenderedPreviewKind` learns to spell it.
-- The mode control is per column (editor's in editor and split, preview's in split and reading); the JSON button is
-  the editor column's alone, since a `.json` tab has no second column.
+- The slot is per column: the editor's in editor and split, the preview's in split and reading. Both carry the
+  action segment where they carry the modes, and both are kept in the same state — a segment that said "Beautify"
+  in one column and "Compact" in the other would be a bug you could see.
 
-## JSON — Beautify / Compact (done 2026-09-05, Todo 5)
-- A saved `.json` tab carries one small button in the corner slot, in the segmented control's own bezel and size:
-  `text.alignleft` "Beautify JSON" when the file is compact, `arrow.down.right.and.arrow.up.left` "Compact JSON" when
-  it is already laid out. One button, because the file is in one of the two shapes already and the only thing worth
-  offering is the other one. Its symbol is drawn in `secondaryLabelColor`, `tertiaryLabelColor` while disabled, and
-  re-resolved when the Mac switches between light and dark, like the segments beside it.
-- Which way it points is read off the text: a newline anywhere outside a string literal means the file is laid out,
-  and the file's own trailing newline does not count. Invalid JSON leaves the button in place but disabled, with
-  "Not valid JSON: line N" naming the 1-based line the parse stopped at.
+## Beautify / Compact — JSON and HTML (done 2026-09-05, Todo 5; HTML and the fourth segment 2026-09-06, Todo 30)
+- The action segment shows `text.alignleft` "Beautify JSON" / "Beautify HTML" when the file is pulled together, and
+  `arrow.down.right.and.arrow.up.left` "Compact JSON" / "Minify HTML" when it is already laid out. One direction,
+  because the file is in one of the two shapes already and the only thing worth offering is the other one. A page is
+  *minified*, which is the word its own tools use; a document is *compacted*. All four tool tips are localised.
+  The symbol is drawn in `secondaryLabelColor`, `tertiaryLabelColor` while disabled, and re-resolved when the Mac
+  switches between light and dark, like the mode segments beside it.
+- Which way it points is read off the text. For JSON: a newline anywhere outside a string literal means the file is
+  laid out, and the file's own trailing newline does not count. A file that will not parse leaves the segment in
+  place but disabled, with "Not valid JSON: line N" / "Not valid HTML: line N" naming the 1-based line the parse
+  stopped at; the three mode segments beside it go on working.
 - The state is worked out when the tab arrives in front and re-parsed on the same half-second debounce the footer's
   counts use after typing, never once a keystroke.
 - Clicking replaces the whole note through the editor's own undoable path — one `shouldChangeText` /
   `didChangeText` edit, the way a line operation replaces its lines — so the tab goes dirty, ⌘Z puts the file back
   exactly as it was, and the save, vim and the footer see one edit. The caret goes to the top (every line has moved)
-  and the button flips at once.
+  and the segment flips at once. One path for both formats: the segment hands its kind and its action to the window,
+  and the window asks whichever formatter that kind names (`JSONFormat`, `HTMLFormat`).
 - `JSONFormat` is Nota's own walker, not `JSONSerialization`: every token — string, number, `true`, `false`, `null`,
   and every key — is re-emitted as the byte range it occupied in the source, so key order, array order, number
   spelling (`1.50` stays `1.50`) and every escape inside a string survive both directions, and beautifying then
@@ -345,6 +354,64 @@
   with an empty `{}` or `[]` left on the line it is on; compact is no whitespace at all outside a string. The file's
   trailing newline is kept if it had one. The grammar is RFC 8259 and nothing beside it — no comments, no trailing
   commas, no single quotes, no unquoted keys.
+
+## Structured previews — `.json` `.yaml` `.toml` `.xml` (done 2026-09-06, Todo 30)
+- A `.json`, `.yaml` / `.yml`, `.toml` or `.xml` file is a tab with a preview beside it, exactly the way a `.sql` or
+  a `.csv` is: the same three modes, the same floating control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View
+  items, per tab and remembered in the session, and the "open supported files in reading mode" setting opens one in
+  reading like every other rendered kind. The View item is "Mode Toggle" there as everywhere.
+  `RenderedPreviewKind.tree(StructuredFormat)` and `PreviewContentKind.tree` are the whole of the plumbing;
+  `TreePreviewView` is the tenth content view the column holds.
+- Four grammars, one shape. A JSON object, a YAML mapping, a TOML table and an XML element are all a thing with
+  named parts; a JSON array, a YAML sequence and a TOML array are all a thing with numbered parts; the leaves are
+  strings, numbers, booleans, nulls, dates and — for XML — runs of text and comments. `StructuredDocument` is that
+  shape, a parser's whole job is to turn its own grammar into it, and the view has never heard of JSON. Every node
+  carries the 1-based line it starts on, which is what a click on a row goes to.
+- `JSONTree` is Nota's own recursive descent over the UTF-8 bytes, RFC 8259 and nothing beside it. It is a *second*
+  walker over the same grammar `JSONFormat` walks, deliberately: `JSONFormat` never looks inside a token, which is
+  what makes beautify and compact lossless, while a tree is read — strings and keys come out unescaped for display,
+  `\uD83D\uDE00` is one emoji, and numbers stay as spelled (`1.50` is `1.50`). Keys keep file order, duplicate keys
+  are both kept, nesting is refused past 256, and every failure is a line and a short reason — "Expected `:`",
+  "Unterminated string", "Control character in a string", "Extra content after the document".
+- `XMLTree` is Foundation's `XMLParser` (SAX), because it already answers the one question a tree needs and a
+  hand-written scanner would have to earn: which line every event happened on. An element is an object keyed by its
+  **qualified** name — `svg:rect` stays `svg:rect`, and namespace processing is off, so `xmlns:svg` stays the
+  attribute it is written as. Its attributes come first among its children, keyed `@name` with string values, sorted
+  by name since `XMLParser` hands them over as a dictionary. A run of text and a `<![CDATA[…]]>` block are `.text`
+  children, whitespace-only runs dropped (a pretty-printed file's indentation is layout, not content) and the rest
+  trimmed; a comment is a `.comment`; a processing instruction and the doctype are skipped. The roots are the root
+  element and any comment written beside it.
+- YAML and TOML are parsers of their own, `YAMLTree` and `TOMLTree`, written alongside these and with their own
+  rules; everything above the parser is shared.
+- The view is an `NSOutlineView` and not a render, because a tree is a thing you open and close rather than read top
+  to bottom: the disclosure triangles, ⌥-click to open a whole subtree and the arrow keys are all AppKit's own. One
+  column, no header, not a source list, the document's own `textBackgroundColor` and the editor's margin, starting
+  below the corner slot's hover band the way the dump's and the table's bars do.
+- A row is the key in the system font in `labelColor` — an array item shows its own index in `secondaryLabelColor`
+  instead, since that is the tree counting rather than the file saying something — then the value in the editor's
+  monospaced face, coloured by what it is: `systemRed` for a string (in its quotes, so an empty one is still
+  visible), `systemBlue` for a number, `systemPurple` for `true` / `false` / `null` / a date, `labelColor` for a run
+  of XML text and `secondaryLabelColor` for a comment. A closed branch says how much is inside it after its key —
+  `{3}` for three members, `[12]` for twelve items — in `tertiaryLabelColor`; a branch with no name at all, the
+  document's own root, says it either way, since the row would otherwise be blank.
+- The document opens expanded whole below 400 nodes and to its first two levels above that: a settings file opens
+  showing everything, a big export opens showing its shape. It is re-parsed on the render's own key and debounce, so
+  it follows the file as it is typed, and what was open is remembered **by node path** — a path that no longer
+  exists is simply gone, a branch that has just been typed into being arrives closed — as is the scroll position.
+- Both halves of the block sync a render has. Clicking a row walks the editor to the line the node is written on,
+  in split only and *without* taking the keyboard — the `onSourceReveal` a dump's cell click uses, so the arrows go
+  on walking the tree; a click on a disclosure triangle opens a branch and goes nowhere. And the caret's own line
+  lights the outermost node that line begins, with a quiet selection wash, scrolled into view; a row inside a closed
+  branch is not on screen to light, so the deepest ancestor that *is* stands in for it. Outermost rather than
+  innermost because a line usually begins exactly one node and the two are then the same thing, while a compact
+  file, whose every node begins on line 1, would otherwise open scrolled to its last leaf.
+- A file that will not parse shows one centred line in the editor's font in place of the tree —
+  "Not valid JSON: line 3 — Expected `:`", the format named by how the file is spelled, localised — and the last
+  good tree is *not* kept: a tree that no longer matched the text beside it would be a map of somewhere else.
+- ⌘+ / ⌘- are the editor's font size here, as they are for Markdown: the tree's own fonts follow it. Nothing new is
+  persisted — the mode the tab is in is all the session keeps. The file stays a text note in the editor; the preview
+  is read-only and dirty and save semantics are untouched. Untitled notes have no tree; Save As to `.json` is what
+  makes one.
 
 ## PDF
 - A PDF opens in a tab of its own and is read there, whatever it is named — its magic bytes decide, not its
@@ -962,10 +1029,37 @@
    A PDF tab prints the PDF itself rather than a render — the open half of Done 12.
 2. **Ship it, signed.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on
    another Mac without the Gatekeeper allow-once dance (see Done 28 for the ad-hoc release itself).
-3. **Tab strip overflow chevron.** The one piece of the Chromium strip still open (Done 15-A): a chevron at the
+3. **⌘F over a tree preview.** A structured tab's ⌘F is the editor's, in every mode — the tree pane leaves the
+   find members at their protocol defaults. Searching the rows themselves (and reading mode, where there is no
+   editor on screen to search) is still open.
+4. **Tab strip overflow chevron.** The one piece of the Chromium strip still open (Done 15-A): a chevron at the
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+30. **A `.json`, `.yaml`, `.toml` or `.xml` is read as the tree it is, and the corner slot grew a fourth option
+    (done 2026-09-06).** Four of the commonest files a developer opens were bare text notes: a compact
+    `Settings.json` was one 900-character line, and the only thing Nota offered it was a lone Beautify button in
+    the corner. They are tabs with a preview beside them now — the tenth content view the column holds — and the
+    preview is the document as a collapsible tree. `StructuredDocument.swift` is the shape all four parsers hand
+    back, which is what lets one `TreePreviewView` serve four grammars: named parts, numbered parts, leaves, and
+    the 1-based line every node starts on. `JSONTree` is Nota's own recursive descent over the bytes and a second
+    walker beside `JSONFormat` on purpose — that one keeps tokens verbatim so beautify and compact are lossless,
+    this one unescapes them so a row can be read — and `XMLTree` is Foundation's `XMLParser`, taken for the one
+    thing it already knows and a scanner would have to earn: the line every event happened on. `YAMLTree` and
+    `TOMLTree` are their own files with their own rules, written alongside.
+    The view is an `NSOutlineView` rather than a render, because a tree is opened and closed rather than read: the
+    triangles, ⌥-click and the arrow keys all come with it. It opens whole below 400 nodes and two levels deep
+    above that, re-parses on the render's own debounce keeping what was open by node path and where the reader had
+    scrolled to, colours values by type in system colours that read in both appearances, and carries both halves of
+    the block sync — a click reveals the node's line without taking the keyboard, and the caret's line lights the
+    node that line begins.
+    Because a `.json` now has a render, the corner could no longer offer it a lone button beside a mode control it
+    had just earned. So the slot holds one capsule with a fourth segment on the end: the three modes, then the
+    file's own Beautify / Compact, `.selectOne` still, the click firing the action and the selection going straight
+    back to the mode it was on. `.html` joins it with Beautify / Minify through `HTMLFormat`, so `ModeControlOverlay`
+    lost `.jsonFormat` and its button and gained `.modeControlWithFormat(FormatKind)`, and the window's
+    `refreshJSONSlotState` / `applyJSONFormat` became `refreshFormatSlotState` / `applyFormat` over a format kind —
+    one path, two formatters, both columns kept in step.
 29. **A PDF's sidebar lists its pages, and the outline it listed before is dropped (done 2026-09-06).** Done 22, a
     day earlier, gave the column a PDF's own outline. It was the wrong list: most PDFs carry no bookmarks at all, so
     the commonest document of all had an empty column and a `No contents` hint, and even where there was an outline

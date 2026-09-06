@@ -50,8 +50,14 @@ enum PreviewMode: String, Codable, CaseIterable {
 /// three. What differs is what does the drawing: Nota's own renderer reads
 /// Markdown or LaTeX into its reading layout, and HTML is already a page, so
 /// WebKit draws it as it stands.
-enum RenderedPreviewKind {
+enum RenderedPreviewKind: Equatable {
     case markdown, latex, html, svg, sql, csv
+    /// A `.json`, `.yaml`, `.toml` or `.xml` file: four grammars with one
+    /// shape, drawn as the collapsible tree they are. Which of the four is
+    /// carried along rather than spelled as four cases, because everything
+    /// downstream — the modes, the control, the column's content view — is
+    /// the same for all of them, and only the parser differs.
+    case tree(StructuredFormat)
 
     init?(fileExtension: String) {
         // The spellings the icon already knows (`FileKindIcon`): a file
@@ -92,6 +98,13 @@ enum RenderedPreviewKind {
         // nothing to lay out, only rows to be read as the rows they are.
         if CSVTable.Separator(fileExtension: fileExtension) != nil {
             self = .csv
+            return
+        }
+        // And a structured file is a tree already: the preview is that tree,
+        // read out of the source by whichever of the four parsers the name
+        // asks for.
+        if let format = StructuredFormat(fileExtension: fileExtension) {
+            self = .tree(format)
             return
         }
         return nil
@@ -408,14 +421,28 @@ final class Note {
     /// Whether the tab has a preview beside its source.
     var supportsRenderedPreview: Bool { previewKind != nil }
 
-    /// Whether the tab is a JSON file being edited. There is no render behind
-    /// one — JSON is read as the source it is — but it is the one text file
-    /// with something of its own to put in the corner slot: the Beautify /
-    /// Compact button. Spelled, like every other question about how a file is
-    /// *treated* rather than what it is, by the name its author gave it.
+    /// Whether the tab is a JSON file being edited. It has a tree preview
+    /// like any other structured file, and on top of that it is one of the
+    /// two files with an action of its own in the corner slot: Beautify /
+    /// Compact, in a fourth segment beside the three modes. Spelled, like
+    /// every other question about how a file is *treated* rather than what it
+    /// is, by the name its author gave it.
     var isJSON: Bool {
         guard kind == .text, let fileURL else { return false }
         return fileURL.pathExtension.caseInsensitiveCompare("json") == .orderedSame
+    }
+
+    /// The same question for a page. A `.json` and a `.html` tab are the two
+    /// that carry a Beautify / Compact action in the corner beside their mode
+    /// segments; an `.svg` is a tree of tags too but has no formatter of its
+    /// own, so it is not one of them.
+    var isHTML: Bool {
+        guard kind == .text, let fileURL else { return false }
+        for spelling in ["html", "htm", "xhtml"]
+        where fileURL.pathExtension.caseInsensitiveCompare(spelling) == .orderedSame {
+            return true
+        }
+        return false
     }
 
     /// Whether the footer counts this tab's task items. `- [ ]` is Markdown's

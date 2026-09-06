@@ -4,8 +4,9 @@ import XCTest
 @testable import Nota
 
 /// The corner slot: one band per column, and the front tab saying what stands
-/// in it. A tab with a render gets the mode control, a `.json` tab gets its
-/// Beautify / Compact button, and everything else gets nothing at all.
+/// in it. A tab with a render gets the mode control; a `.json` or `.html` tab
+/// gets that same control with its format's Beautify / Compact action on the
+/// end of it; everything else gets nothing at all.
 final class CornerSlotTests: XCTestCase {
     private var temporaryDirectories: [URL] = []
 
@@ -19,7 +20,7 @@ final class CornerSlotTests: XCTestCase {
     // MARK: - What the slot holds
 
     @MainActor
-    func testARenderedTabGetsTheModeControl() throws {
+    func testARenderedTabGetsTheThreeModeSegmentsAndNoMore() throws {
         let controller = try makeController()
         try open("notes.md", holding: "# Title", in: controller)
 
@@ -27,23 +28,54 @@ final class CornerSlotTests: XCTestCase {
         let overlay = controller.modeControlOverlays.editor
         XCTAssertFalse(overlay.isHidden)
         XCTAssertFalse(overlay.modeControl.isHidden)
-        XCTAssertTrue(overlay.jsonButton.isHidden, "one slot, one thing in it")
+        XCTAssertEqual(overlay.modeControl.segmentCount, 3,
+                       "Markdown has no second shape to be laid out in")
     }
 
     @MainActor
-    func testAJSONTabGetsTheFormatButton() throws {
+    func testAJSONTabGetsAFourthSegmentInBothColumns() throws {
         let controller = try makeController()
         try open("data.json", holding: #"{"a":1}"#, in: controller)
+        controller.setPreviewMode(.split)
+        controller.window?.layoutIfNeeded()
 
-        XCTAssertEqual(controller.cornerSlotContents.editor, .jsonFormat)
-        let overlay = controller.modeControlOverlays.editor
-        XCTAssertFalse(overlay.isHidden)
-        XCTAssertTrue(overlay.modeControl.isHidden, "there is no render behind JSON")
-        XCTAssertFalse(overlay.jsonButton.isHidden)
-        XCTAssertEqual(
-            controller.cornerSlotContents.preview, ModeControlOverlay.Content.none,
-            "and no second column for it to stand in"
+        XCTAssertEqual(controller.cornerSlotContents.editor, .modeControlWithFormat(.json))
+        XCTAssertEqual(controller.cornerSlotContents.preview, .modeControlWithFormat(.json))
+        for overlay in [controller.modeControlOverlays.editor,
+                        controller.modeControlOverlays.preview] {
+            XCTAssertFalse(overlay.isHidden)
+            XCTAssertEqual(overlay.modeControl.segmentCount, 4,
+                           "the three modes, and the file's own action after them")
+            XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 3))
+        }
+    }
+
+    /// A page is laid out two ways too, and says so in the word its own tools
+    /// use: Minify, not Compact.
+    @MainActor
+    func testAnHTMLTabGetsTheSameFourthSegmentWithItsOwnWords() throws {
+        let controller = try makeController()
+        try open("page.html", holding: "<p>hi</p>", in: controller)
+        controller.formatSeamsForTesting[.html] = MainWindowController.FormatSeam(
+            state: { _ in .action(.compact) }, reformat: { _, _ in nil }
         )
+        controller.refreshCornerSlot()
+
+        XCTAssertEqual(controller.cornerSlotContents.editor, .modeControlWithFormat(.html))
+        let overlay = controller.modeControlOverlays.editor
+        XCTAssertEqual(overlay.modeControl.segmentCount, 4)
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Minify HTML")
+    }
+
+    /// A `.yaml` has a tree preview like the other three structured files, and
+    /// no formatter behind it — so three segments and no fourth.
+    @MainActor
+    func testAYAMLTabGetsTheModesAndNoAction() throws {
+        let controller = try makeController()
+        try open("config.yaml", holding: "a: 1\n", in: controller)
+
+        XCTAssertEqual(controller.cornerSlotContents.editor, .modeControl)
+        XCTAssertEqual(controller.modeControlOverlays.editor.modeControl.segmentCount, 3)
     }
 
     @MainActor
@@ -55,7 +87,6 @@ final class CornerSlotTests: XCTestCase {
         let overlay = controller.modeControlOverlays.editor
         XCTAssertTrue(overlay.isHidden)
         XCTAssertTrue(overlay.modeControl.isHidden)
-        XCTAssertTrue(overlay.jsonButton.isHidden)
         XCTAssertNil(
             overlay.hitTest(NSPoint(x: overlay.frame.maxX - 20, y: overlay.frame.midY)),
             "the text under an empty band stays as clickable as any other"
@@ -71,7 +102,6 @@ final class CornerSlotTests: XCTestCase {
 
         XCTAssertEqual(controller.cornerSlotContents.editor, ModeControlOverlay.Content.none)
         XCTAssertEqual(controller.cornerSlotContents.preview, ModeControlOverlay.Content.none)
-        XCTAssertTrue(controller.modeControlOverlays.preview.jsonButton.isHidden)
     }
 
     /// A `.json` extension is not enough on its own: the tab has to be text.
@@ -81,38 +111,46 @@ final class CornerSlotTests: XCTestCase {
     func testTheSlotFollowsTheTabInFront() throws {
         let controller = try makeController()
         try open("data.json", holding: #"{"a":1}"#, in: controller)
-        XCTAssertEqual(controller.cornerSlotContents.editor, .jsonFormat)
+        XCTAssertEqual(controller.cornerSlotContents.editor, .modeControlWithFormat(.json))
 
         try open("notes.md", holding: "# Title", in: controller)
         XCTAssertEqual(controller.cornerSlotContents.editor, .modeControl)
+        XCTAssertEqual(controller.modeControlOverlays.editor.modeControl.segmentCount, 3,
+                       "the capsule shrinks back to the three modes")
 
         try open("notes.txt", holding: "text", in: controller)
         XCTAssertEqual(controller.cornerSlotContents.editor, ModeControlOverlay.Content.none)
     }
 
-    // MARK: - The button itself
+    // MARK: - The action segment itself
 
     @MainActor
     func testACompactFileIsOfferedTheLayoutAndALaidOutFileTheOtherWay() throws {
         let controller = try makeController()
         try open("compact.json", holding: #"{"a":1}"#, in: controller)
-        XCTAssertEqual(controller.modeControlOverlays.editor.jsonState, .action(.beautify))
-        XCTAssertEqual(controller.modeControlOverlays.editor.jsonButton.toolTip, "Beautify JSON")
+        var overlay = controller.modeControlOverlays.editor
+        XCTAssertEqual(overlay.formatState, .action(.beautify))
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Beautify JSON")
 
         try open("pretty.json", holding: "{\n  \"a\": 1\n}\n", in: controller)
-        XCTAssertEqual(controller.modeControlOverlays.editor.jsonState, .action(.compact))
-        XCTAssertEqual(controller.modeControlOverlays.editor.jsonButton.toolTip, "Compact JSON")
+        overlay = controller.modeControlOverlays.editor
+        XCTAssertEqual(overlay.formatState, .action(.compact))
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Compact JSON")
     }
 
     @MainActor
-    func testInvalidJSONDisablesTheButtonAndNamesTheLine() throws {
+    func testInvalidJSONDisablesTheSegmentAndNamesTheLine() throws {
         let controller = try makeController()
         try open("broken.json", holding: "{\n  \"a\": 1,\n  \"b\" 2\n}\n", in: controller)
 
-        let button = controller.modeControlOverlays.editor.jsonButton
-        XCTAssertEqual(controller.cornerSlotContents.editor, .jsonFormat, "the slot stays")
-        XCTAssertFalse(button.isEnabled)
-        XCTAssertEqual(button.toolTip, "Not valid JSON: line 3")
+        let overlay = controller.modeControlOverlays.editor
+        XCTAssertEqual(controller.cornerSlotContents.editor, .modeControlWithFormat(.json),
+                       "the slot stays")
+        XCTAssertEqual(overlay.modeControl.segmentCount, 4)
+        XCTAssertFalse(overlay.modeControl.isEnabled(forSegment: 3))
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Not valid JSON: line 3")
+        XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 1),
+                      "and the modes beside it go on working")
     }
 
     @MainActor
@@ -123,8 +161,8 @@ final class CornerSlotTests: XCTestCase {
         XCTAssertFalse(controller.currentTabState.isDirty, "as it came off disk")
 
         let overlay = controller.modeControlOverlays.editor
-        XCTAssertTrue(overlay.jsonButton.isEnabled)
-        overlay.jsonButton.performClick(nil)
+        XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 3))
+        clickFormatSegment(of: overlay)
 
         XCTAssertEqual(
             textView.string,
@@ -141,24 +179,60 @@ final class CornerSlotTests: XCTestCase {
         XCTAssertTrue(controller.currentTabState.isDirty, "the file on disk is not this")
         XCTAssertEqual(textView.selectedRange(), NSRange(location: 0, length: 0),
                        "every line moved, so the caret goes to the top")
-        XCTAssertEqual(overlay.jsonState, .action(.compact), "and the button flips")
+        XCTAssertEqual(overlay.formatState, .action(.compact), "and the segment flips")
+        XCTAssertEqual(overlay.modeControl.selectedSegment, 0,
+                       "the selection goes back to the mode it was on")
 
         textView.undoManager?.undo()
         XCTAssertEqual(textView.string, source, "one edit, one undo")
     }
 
     @MainActor
-    func testCompactingIsTheSameButtonTheOtherWayRound() throws {
+    func testCompactingIsTheSameSegmentTheOtherWayRound() throws {
         let controller = try makeController()
         let textView = try open(
             "data.json", holding: "{\n  \"a\": [\n    1\n  ]\n}\n", in: controller
         )
         let overlay = controller.modeControlOverlays.editor
-        XCTAssertEqual(overlay.jsonState, .action(.compact))
+        XCTAssertEqual(overlay.formatState, .action(.compact))
 
-        overlay.jsonButton.performClick(nil)
+        clickFormatSegment(of: overlay)
         XCTAssertEqual(textView.string, "{\"a\":[1]}\n", "the file keeps its last line ending")
-        XCTAssertEqual(overlay.jsonState, .action(.beautify))
+        XCTAssertEqual(overlay.formatState, .action(.beautify))
+    }
+
+    /// The click routes through one path for both formats: the segment hands
+    /// its kind and its action to the window, and the window asks whichever
+    /// formatter that kind names.
+    @MainActor
+    func testTheSameSegmentDrivesTheHTMLFormatter() throws {
+        let controller = try makeController()
+        let textView = try open("page.html", holding: "<p>hi</p>", in: controller)
+        controller.formatSeamsForTesting[.html] = MainWindowController.FormatSeam(
+            state: { _ in .action(.beautify) },
+            reformat: { _, action in action == .beautify ? "<p>\n  hi\n</p>" : nil }
+        )
+        controller.refreshCornerSlot()
+
+        let overlay = controller.modeControlOverlays.editor
+        XCTAssertEqual(overlay.formatState, .action(.beautify))
+        clickFormatSegment(of: overlay)
+        XCTAssertEqual(textView.string, "<p>\n  hi\n</p>", "through the reformat path")
+        XCTAssertTrue(controller.currentTabState.isDirty)
+        XCTAssertEqual(overlay.modeControl.selectedSegment, 0)
+    }
+
+    /// A mode segment is still a mode: the fourth one has not made the other
+    /// three into anything else.
+    @MainActor
+    func testTheModeSegmentsStillChangeTheModeOnAJSONTab() throws {
+        let controller = try makeController()
+        try open("data.json", holding: #"{"a":1}"#, in: controller)
+        let overlay = controller.modeControlOverlays.editor
+
+        overlay.modeControl.selectedSegment = 1
+        overlay.modeControl.sendAction(overlay.modeControl.action, to: overlay.modeControl.target)
+        XCTAssertEqual(controller.previewMode, .split)
     }
 
     /// The state is re-read from the text, not remembered: typing the file
@@ -168,18 +242,26 @@ final class CornerSlotTests: XCTestCase {
         let controller = try makeController()
         let textView = try open("data.json", holding: #"{"a":1}"#, in: controller)
         let overlay = controller.modeControlOverlays.editor
-        XCTAssertEqual(overlay.jsonState, .action(.beautify))
+        XCTAssertEqual(overlay.formatState, .action(.beautify))
 
         textView.string = #"{"a":1"#
         controller.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
-        XCTAssertEqual(overlay.jsonState, .action(.beautify), "not on the keystroke")
+        XCTAssertEqual(overlay.formatState, .action(.beautify), "not on the keystroke")
 
         RunLoop.main.run(until: Date().addingTimeInterval(0.8))
-        XCTAssertEqual(overlay.jsonState, .invalid(line: 1), "on the beat after it")
-        XCTAssertFalse(overlay.jsonButton.isEnabled)
+        XCTAssertEqual(overlay.formatState, .invalid(line: 1), "on the beat after it")
+        XCTAssertFalse(overlay.modeControl.isEnabled(forSegment: 3))
     }
 
     // MARK: - Helpers
+
+    /// A click on the action segment: the selection lands on it, and the
+    /// control's own action goes out, exactly as AppKit sends it.
+    @MainActor
+    private func clickFormatSegment(of overlay: ModeControlOverlay) {
+        overlay.modeControl.selectedSegment = ModeControlOverlay.formatSegment
+        overlay.modeControl.sendAction(overlay.modeControl.action, to: overlay.modeControl.target)
+    }
 
     @MainActor
     private func makeController() throws -> MainWindowController {

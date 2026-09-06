@@ -4,16 +4,16 @@ import AppKit
 /// tab's own kind settles it and nothing else does: a render for text — the
 /// Markdown one or the LaTeX one, by what the file is spelled — WebKit's page
 /// for HTML and for the drawing an SVG is, a grid for a dump and for a
-/// delimited file, and the
+/// delimited file, a collapsible tree for the four structured grammars, and the
 /// document, the picture, the chapter or the rich text for the four kinds
 /// Nota views rather than edits. This is the only place in the app that has
 /// to be told.
 enum PreviewContentKind: Hashable {
-    case markdown, latex, html, pdf, image, epub, sql, csv, rtf
+    case markdown, latex, html, pdf, image, epub, sql, csv, rtf, tree
 
     /// Every kind there is, in the order the column keeps them.
     static let all: [PreviewContentKind] = [
-        .markdown, .latex, .html, .pdf, .image, .epub, .sql, .csv, .rtf,
+        .markdown, .latex, .html, .pdf, .image, .epub, .sql, .csv, .rtf, .tree,
     ]
 
     init(_ note: Note) {
@@ -33,6 +33,9 @@ enum PreviewContentKind: Hashable {
             case .sql: self = .sql
             // And a delimited file is a table without a database under it.
             case .csv: self = .csv
+            // Four grammars, one tree. Which of them the file is written in
+            // is the parser's business, never the column's.
+            case .tree: self = .tree
             case .markdown, nil: self = .markdown
             }
         }

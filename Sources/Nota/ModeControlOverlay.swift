@@ -7,9 +7,17 @@ import AppKit
 /// and the drop out of ⌘F's way are all here and know nothing of what they
 /// are carrying. What stands in the corner is the tab's own business, and
 /// there are three answers (`Content`): a tab with a render gets the Editor ·
-/// Split · Reading control, a `.json` tab gets the Beautify / Compact button,
-/// and everything else gets nothing at all — the whole overlay goes away and
-/// the band takes no clicks.
+/// Split · Reading control; a `.json` or `.html` tab gets that same control
+/// with a fourth segment on the end, the Beautify / Compact action its format
+/// has; and everything else gets nothing at all — the whole overlay goes away
+/// and the band takes no clicks.
+///
+/// The fourth segment is a segment and not a button beside one. A file with a
+/// render *and* an action would otherwise carry two pieces of chrome in one
+/// corner, and two rounded bezels 4pt apart read as clutter rather than as a
+/// slot. So the capsule simply grows: the control stays `.selectOne`, a click
+/// that lands on the action fires it and the selection goes straight back to
+/// the mode it was on, and the corner keeps its one shape.
 ///
 /// The choice is made by what the note *is*, never by a list of extensions
 /// kept here: `Note.supportsRenderedPreview` answers the first, so a new kind
@@ -58,9 +66,9 @@ final class ModeControlOverlay: NSView {
     /// Close enough to the small rounded bezel's own corner radius that the
     /// fill reads as part of it, not a shape of its own.
     private static let controlFillCornerRadius: CGFloat = 5.5
-    /// One segment's width, so the button that stands where the three of them
-    /// would have stood is the same shape as one of them.
-    private static let jsonButtonWidth: CGFloat = 28
+    /// One segment's width — the same for the three modes and for the action
+    /// on the end of them.
+    private static let segmentWidth: CGFloat = 28
 
     /// What is standing in this column's corner. One slot, three answers, and
     /// the band around them is the same whichever it is.
@@ -70,13 +78,58 @@ final class ModeControlOverlay: NSView {
         case none
         /// Editor · Split · Reading, for a tab with a render beside it.
         case modeControl
-        /// Beautify / Compact, for a `.json` tab.
-        case jsonFormat
+        /// The same three, plus the action the file's own format has on the
+        /// end of them.
+        case modeControlWithFormat(FormatKind)
+
+        /// Whether the modes are in this slot at all — the question the
+        /// window's own layout asks, since it is the same answer for both of
+        /// the two that hold them.
+        var showsModes: Bool { self != .none }
+
+        /// Which format's action is on the end, if any.
+        var format: FormatKind? {
+            guard case .modeControlWithFormat(let kind) = self else { return nil }
+            return kind
+        }
     }
 
-    /// Which way the JSON button would lay the file out — the one it is not
-    /// laid out in already.
-    enum JSONAction: Equatable {
+    /// The two files that carry an action of their own beside the modes. Both
+    /// are laid out one of two ways and neither can be shown both at once, so
+    /// each gets one segment offering the shape it is not in.
+    enum FormatKind: Hashable {
+        case json, html
+
+        /// The grammar's own name, the same in every language.
+        var displayName: String {
+            switch self {
+            case .json: "JSON"
+            case .html: "HTML"
+            }
+        }
+
+        /// What pulling the file together is called. A page is *minified*,
+        /// which is the word its own tools use; a document is *compacted*.
+        func actionName(_ action: FormatAction) -> String {
+            switch (self, action) {
+            case (_, .beautify): L10n.text("Beautify %@")
+            case (.json, .compact): L10n.text("Compact %@")
+            case (.html, .compact): L10n.text("Minify %@")
+            }
+        }
+
+        func toolTip(_ action: FormatAction) -> String {
+            String(format: actionName(action), displayName)
+        }
+
+        func invalidToolTip(line: Int) -> String {
+            String(format: L10n.text("Not valid %@: line %d"), displayName, line)
+        }
+    }
+
+    /// Which way the action segment would lay the file out — the one it is
+    /// not laid out in already.
+    enum FormatAction: Equatable {
         case beautify, compact
 
         /// Outline symbols, the pair the Mac itself uses for text laid out in
@@ -87,50 +140,37 @@ final class ModeControlOverlay: NSView {
             case .compact: "arrow.down.right.and.arrow.up.left"
             }
         }
-
-        var toolTip: String {
-            switch self {
-            case .beautify: "Beautify JSON"
-            case .compact: "Compact JSON"
-            }
-        }
     }
 
-    /// What the JSON button is showing: the reformat on offer, or the line the
-    /// parse gave up on, which is the whole of what the reader needs in order
-    /// to go and look at it.
-    enum JSONState: Equatable {
-        case action(JSONAction)
+    /// What the action segment is showing: the reformat on offer, or the line
+    /// the parse gave up on, which is the whole of what the reader needs in
+    /// order to go and look at it.
+    enum FormatState: Equatable {
+        case action(FormatAction)
         case invalid(line: Int)
     }
 
     let modeControl = NSSegmentedControl()
 
-    /// The `.json` tab's button, in the same corner and the same bezel. One
-    /// button rather than two: the file is in one of the two shapes already,
-    /// so the only thing worth offering is the other one.
-    let jsonButton = NSButton()
+    /// Where the action sits: after the three modes, and always last.
+    static let formatSegment = PreviewMode.allCases.count
 
     /// Which of them is up. `.modeControl` to begin with, which is the state
     /// every overlay was in before the slot had more than one thing to hold.
     private(set) var content: Content = .modeControl
 
-    private(set) var jsonState: JSONState = .action(.beautify)
+    private(set) var formatState: FormatState = .action(.beautify)
 
-    /// What the window does when the JSON button is pressed. The button hands
-    /// on the reformat it was offering, so the window never has to ask which
-    /// way round it was.
-    var onJSONFormat: ((JSONAction) -> Void)?
+    /// What the window does when the action segment is pressed. The segment
+    /// hands on the reformat it was offering, so the window never has to ask
+    /// which way round it was.
+    var onFormat: ((FormatKind, FormatAction) -> Void)?
 
     /// The one control the slot is showing, or nothing at all. Everything
     /// about the band — the fade, the fill behind it, what a click lands on —
     /// asks this rather than naming a control.
     private var activeControl: NSControl? {
-        switch content {
-        case .none: nil
-        case .modeControl: modeControl
-        case .jsonFormat: jsonButton
-        }
+        content == .none ? nil : modeControl
     }
 
     /// An opaque fill in the editor's own background colour, sized and
@@ -191,32 +231,13 @@ final class ModeControlOverlay: NSView {
         modeControl.segmentStyle = .rounded
         modeControl.controlSize = .small
         modeControl.trackingMode = .selectOne
-        modeControl.segmentCount = PreviewMode.allCases.count
-        for (index, mode) in PreviewMode.allCases.enumerated() {
-            modeControl.setToolTip(mode.controlToolTip, forSegment: index)
-            modeControl.setWidth(28, forSegment: index)
-        }
+        applySegmentCount()
         modeControl.selectedSegment = 0
         modeControl.target = target
         modeControl.action = action
         addSubview(modeControl)
         applySegmentTints()
-
-        jsonButton.translatesAutoresizingMaskIntoConstraints = false
-        jsonButton.wantsLayer = true
-        jsonButton.alphaValue = 0
-        // The same bezel and the same control size as the segmented control
-        // beside it, so the corner reads as one slot holding different things
-        // rather than as two pieces of chrome that happen to share a corner.
-        jsonButton.bezelStyle = .rounded
-        jsonButton.controlSize = .small
-        jsonButton.imagePosition = .imageOnly
-        jsonButton.title = ""
-        jsonButton.isHidden = true
-        jsonButton.target = self
-        jsonButton.action = #selector(jsonButtonClicked)
-        addSubview(jsonButton)
-        applyJSONState()
+        applyFormatState()
 
         // The band's own height, rather than the window controller's, because
         // it grows with the control's drop and the two must move together.
@@ -232,11 +253,6 @@ final class ModeControlOverlay: NSView {
             modeControl.trailingAnchor.constraint(
                 equalTo: trailingAnchor, constant: -Self.controlInset
             ),
-            // The same corner to the pixel: whichever of the two is up, it
-            // stands where the reader's eye already goes.
-            jsonButton.topAnchor.constraint(equalTo: modeControl.topAnchor),
-            jsonButton.trailingAnchor.constraint(equalTo: modeControl.trailingAnchor),
-            jsonButton.widthAnchor.constraint(equalToConstant: Self.jsonButtonWidth),
         ])
     }
 
@@ -321,13 +337,8 @@ final class ModeControlOverlay: NSView {
         }
     }
 
-    /// Both controls carry the reveal, not only the one that is up: a slot
-    /// that changes hands while the pointer is in the band hands the new
-    /// control over already visible rather than blank.
     private func applyRevealedAlpha() {
-        let alpha: CGFloat = isRevealed ? 1 : 0
-        modeControl.alphaValue = alpha
-        jsonButton.alphaValue = alpha
+        modeControl.alphaValue = isRevealed ? 1 : 0
     }
 
     /// Only the control itself ever answers a click, and only while it is on
@@ -346,10 +357,18 @@ final class ModeControlOverlay: NSView {
     func setContent(_ content: Content) {
         guard content != self.content else { return }
         if content == .none { setRevealed(false, animated: false) }
+        let hadFormat = self.content.format != nil
         self.content = content
         isHidden = content == .none
-        modeControl.isHidden = content != .modeControl
-        jsonButton.isHidden = content != .jsonFormat
+        modeControl.isHidden = content == .none
+        // The capsule grows and shrinks by one segment. Rebuilding it costs
+        // four symbol images, so it is only done when the shape has actually
+        // changed — a tab switch between two `.md` files leaves it alone.
+        if hadFormat != (content.format != nil) {
+            applySegmentCount()
+            applySegmentTints()
+        }
+        applyFormatState()
         applyRevealedAlpha()
         needsLayout = true
         updateControlFillGeometry()
@@ -361,56 +380,91 @@ final class ModeControlOverlay: NSView {
         setContent(available ? .modeControl : .none)
     }
 
-    // MARK: - The JSON button
-
-    /// What the button offers, and what it says it cannot do. Invalid JSON
-    /// leaves it there but disabled: the corner keeps its shape, and the tool
-    /// tip names the line rather than making the reader hunt for it.
-    func setJSONState(_ state: JSONState) {
-        guard state != jsonState else { return }
-        jsonState = state
-        applyJSONState()
+    /// Three segments, or four for a file with a format of its own.
+    private func applySegmentCount() {
+        let count = PreviewMode.allCases.count + (content.format == nil ? 0 : 1)
+        guard modeControl.segmentCount != count else { return }
+        let selected = modeControl.selectedSegment
+        modeControl.segmentCount = count
+        for (index, mode) in PreviewMode.allCases.enumerated() {
+            modeControl.setToolTip(mode.controlToolTip, forSegment: index)
+            modeControl.setWidth(Self.segmentWidth, forSegment: index)
+        }
+        if count > Self.formatSegment {
+            modeControl.setWidth(Self.segmentWidth, forSegment: Self.formatSegment)
+        }
+        modeControl.selectedSegment = min(max(selected, 0), PreviewMode.allCases.count - 1)
     }
 
-    private func applyJSONState() {
-        switch jsonState {
+    // MARK: - The action on the end
+
+    /// What the action segment offers, and what it says it cannot do. A file
+    /// that will not parse leaves the segment there but disabled: the corner
+    /// keeps its shape, and the tool tip names the line rather than making the
+    /// reader hunt for it.
+    func setFormatState(_ state: FormatState) {
+        guard state != formatState else { return }
+        formatState = state
+        applyFormatState()
+    }
+
+    private func applyFormatState() {
+        guard let kind = content.format,
+              modeControl.segmentCount > Self.formatSegment else { return }
+        switch formatState {
         case .action(let action):
-            jsonButton.isEnabled = true
-            jsonButton.toolTip = action.toolTip
+            modeControl.setEnabled(true, forSegment: Self.formatSegment)
+            modeControl.setToolTip(kind.toolTip(action), forSegment: Self.formatSegment)
         case .invalid(let line):
-            jsonButton.isEnabled = false
-            jsonButton.toolTip = "Not valid JSON: line \(line)"
+            modeControl.setEnabled(false, forSegment: Self.formatSegment)
+            modeControl.setToolTip(kind.invalidToolTip(line: line), forSegment: Self.formatSegment)
         }
-        applyJSONTint()
+        applyFormatTint()
     }
 
     /// The same quiet the idle segments have — `secondaryLabelColor` over the
     /// text, a step quieter again while there is nothing to press. The colour
     /// is baked into the image rather than left to AppKit, which is what keeps
-    /// the button and the segments beside it reading as one family.
-    private func applyJSONTint() {
-        let action: JSONAction = {
-            if case .action(let action) = jsonState { return action }
+    /// the action and the modes beside it reading as one family.
+    private func applyFormatTint() {
+        guard content.format != nil, modeControl.segmentCount > Self.formatSegment else { return }
+        let enabled = modeControl.isEnabled(forSegment: Self.formatSegment)
+        let action: FormatAction = {
+            if case .action(let action) = formatState { return action }
             // A file that will not parse still shows the beautify symbol: it
             // is the shape of the offer, greyed out, not a second state.
             return .beautify
         }()
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            let colour: NSColor = jsonButton.isEnabled ? .secondaryLabelColor : .tertiaryLabelColor
+            let colour: NSColor = enabled ? .secondaryLabelColor : .tertiaryLabelColor
             let image = NSImage(
-                systemSymbolName: action.symbolName, accessibilityDescription: action.toolTip
+                systemSymbolName: action.symbolName,
+                accessibilityDescription: modeControl.toolTip(forSegment: Self.formatSegment)
             )?.withSymbolConfiguration(
                 NSImage.SymbolConfiguration(paletteColors: [colour])
             )
             // Already coloured: template would have AppKit tint it again.
             image?.isTemplate = false
-            jsonButton.image = image
+            modeControl.setImage(image, forSegment: Self.formatSegment)
         }
     }
 
-    @objc private func jsonButtonClicked() {
-        guard case .action(let action) = jsonState else { return }
-        onJSONFormat?(action)
+    /// A click landed on the action segment. The selection goes straight back
+    /// to the mode the tab is in — the segment is a button standing in a
+    /// `.selectOne` control, and nothing about the file's layout is a mode —
+    /// and the reformat it was offering goes out.
+    ///
+    /// Answers whether the click was the action's at all, so the window can
+    /// treat every other segment as the mode it is.
+    @discardableResult
+    func handleFormatSegmentClick(restoringMode mode: PreviewMode) -> Bool {
+        guard modeControl.selectedSegment == Self.formatSegment,
+              let kind = content.format
+        else { return false }
+        modeControl.selectedSegment = PreviewMode.allCases.firstIndex(of: mode) ?? 0
+        guard case .action(let action) = formatState else { return true }
+        onFormat?(kind, action)
+        return true
     }
 
     /// The idle segments are quiet — `secondaryLabelColor`, so the control sits
@@ -418,7 +472,8 @@ final class ModeControlOverlay: NSView {
     /// standard filled look, which tints a template image for itself.
     func applySegmentTints() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            for (index, mode) in PreviewMode.allCases.enumerated() {
+            for (index, mode) in PreviewMode.allCases.enumerated()
+            where index < modeControl.segmentCount {
                 let image = NSImage(
                     systemSymbolName: mode.symbolName, accessibilityDescription: mode.controlTitle
                 )
@@ -435,6 +490,9 @@ final class ModeControlOverlay: NSView {
                 }
             }
         }
+        // The action on the end is never the selected one, so it is quiet
+        // whatever the mode is.
+        applyFormatTint()
     }
 
     /// `secondaryLabelColor` is baked into the idle images, and the fill's
@@ -443,7 +501,6 @@ final class ModeControlOverlay: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         applySegmentTints()
-        applyJSONTint()
         applyControlFillColor()
     }
 }

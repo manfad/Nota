@@ -29,12 +29,14 @@ final class PreviewPaneView: NSView {
         let sql: SQLPreviewView
         let csv: CSVPreviewView
         let rtf: RTFPreviewView
+        let tree: TreePreviewView
         let kind: PreviewContentKind
         var showsPDF: Bool { kind == .pdf }
         var showsBook: Bool { kind == .epub }
         var showsDatabase: Bool { kind == .sql }
         var showsTable: Bool { kind == .csv }
         var showsRichText: Bool { kind == .rtf }
+        var showsTree: Bool { kind == .tree }
     }
 
     private let markdownContent = MarkdownPreviewView()
@@ -46,6 +48,7 @@ final class PreviewPaneView: NSView {
     private let sqlContent = SQLPreviewView()
     private let csvContent = CSVPreviewView()
     private let rtfContent = RTFPreviewView()
+    private let treeContent = TreePreviewView()
     private var currentKind: PreviewContentKind = .markdown
 
     /// The content on screen.
@@ -240,6 +243,7 @@ final class PreviewPaneView: NSView {
         case .sql: sqlContent
         case .csv: csvContent
         case .rtf: rtfContent
+        case .tree: treeContent
         }
     }
 
@@ -308,6 +312,6 @@ final class PreviewPaneView: NSView {
     var panes: Panes {
         Panes(markdown: markdownContent, latex: latexContent, html: htmlContent,
               pdf: pdfContent, image: imageContent, epub: epubContent, sql: sqlContent,
-              csv: csvContent, rtf: rtfContent, kind: currentKind)
+              csv: csvContent, rtf: rtfContent, tree: treeContent, kind: currentKind)
     }
 }
