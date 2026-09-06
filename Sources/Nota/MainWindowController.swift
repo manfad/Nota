@@ -113,7 +113,7 @@ final class MainWindowController: NSWindowController {
     /// takes for as long as it is up.
     private let findBar = FindBarView(placeholder: L10n.text("Find in note"))
     private lazy var findSession = TextFindSession(bar: findBar, textView: textView)
-    /// ⌘L's pill, sharing that corner with the find bar: one or the other, and
+    /// ⌘J's pill, sharing that corner with the find bar: one or the other, and
     /// opening either sends the other away.
     private let goToLinePill = GoToLinePill()
     private lazy var goToLineSession = GoToLineSession(
@@ -129,7 +129,7 @@ final class MainWindowController: NSWindowController {
     }()
     /// The offer a dirty tab whose file has changed under it gets: Reload, or
     /// Keep mine. It stands in the editor column's bottom-trailing corner, so
-    /// it never has to argue with ⌘F and ⌘L for the other one.
+    /// it never has to argue with ⌘F and ⌘J for the other one.
     private let externalChangePill = ExternalChangePill()
     /// Fired once a watched file's change has been dealt with — reloaded, or
     /// marked and offered. The tests wait on it; nothing in the app sets it.
@@ -736,13 +736,13 @@ final class MainWindowController: NSWindowController {
             trailingInset: ModeControlOverlay.controlInset
         )
 
-        // ⌘L stands in the same corner, on its own.
+        // ⌘J stands in the same corner, on its own.
         goToLineSession.lineIndexProvider = { [weak self] in self?.currentNote?.lineIndex }
         goToLineSession.onVisibilityChange = { [weak self] shown in
             if shown { self?.findSession.hide() }
             self?.updateModeControlOverlays()
         }
-        // ⌘F asked for from inside ⌘L's field: this one goes, that one comes.
+        // ⌘F asked for from inside ⌘J's field: this one goes, that one comes.
         goToLineSession.onFindRequested = { [weak self] action in
             self?.findSession.perform(action)
         }
@@ -772,7 +772,7 @@ final class MainWindowController: NSWindowController {
         )
     }
 
-    /// ⌘L. Only where there is an editor on screen to jump about in, and only
+    /// ⌘J. Only where there is an editor on screen to jump about in, and only
     /// in a tab that is text — a PDF and a picture have no lines.
     var canGoToLine: Bool {
         installedPreviewMode != .reading && currentNote?.kind == .text
@@ -1177,6 +1177,7 @@ final class MainWindowController: NSWindowController {
         scrollView.rulersVisible = preferences.showsLineNumbers && !isZenMode
         lineNumberRuler?.showsSeparator = preferences.showsGutterSeparator
         lineNumberRuler?.setFontSize(preferences.fontSize)
+        textView.highlightsCurrentLine = preferences.highlightsCurrentLine
         applyEditorInsets()
     }
 
@@ -1694,7 +1695,7 @@ final class MainWindowController: NSWindowController {
     private func installCurrentNote() {
         guard let note = currentNote, let layoutManager = textView.layoutManager else { return }
         // The bar was searching the tab you are leaving, and its bands are
-        // laid on the storage about to be swapped out from under them. ⌘L's
+        // laid on the storage about to be swapped out from under them. ⌘J's
         // line number belonged to that note's table just as much.
         findSession.close()
         goToLineSession.hide(restoring: false)
@@ -3699,10 +3700,10 @@ private final class VimModeBadge: NSView {
 
 extension MainWindowController {
 
-    /// The ⌘P panel itself, for the tests to type at.
+    /// The ⇧⌘J panel itself, for the tests to type at.
     var tabPickerPanel: TabPickerPanel { tabPicker }
 
-    /// ⌘P.
+    /// ⇧⌘J.
     func showTabPicker() {
         guard let window else { return }
         showWindow(nil)
@@ -3734,7 +3735,7 @@ extension MainWindowController {
         )
     }
 
-    /// What ⌘P offers under the open tabs: the bookmarks this window does
+    /// What ⇧⌘J offers under the open tabs: the bookmarks this window does
     /// not already have a tab for. One that is open is reachable as a tab,
     /// and listing it twice would only make the list longer.
     private var unopenedBookmarks: [String] {
@@ -3845,19 +3846,19 @@ extension MainWindowController {
     /// Whether the render is one of the two modes that show it.
     var showsMarkdownPreview: Bool { previewMode != .off }
 
-    /// ⇧⌘P. Editor → split → reading → editor. The mode belongs to the tab,
+    /// ⌘P. Editor → split → reading → editor. The mode belongs to the tab,
     /// not to the app: a Markdown note keeps it — across relaunches, through
     /// the session — while the next ⌘T opens in the editor.
     func toggleMarkdownPreview() {
         setPreviewMode(previewMode.next)
     }
 
-    /// ⌥⇧⌘P. Straight to the render, and straight back out of it.
+    /// ⇧⌘P. Straight to the render, and straight back out of it.
     func toggleReadingMode() {
         setPreviewMode(previewMode == .reading ? .off : .reading)
     }
 
-    /// The one way the mode ever changes: the menu, ⇧⌘P, either column's
+    /// The one way the mode ever changes: the menu, ⌘P, either column's
     /// control, a block click and a keystroke in reading mode all come
     /// through here.
     func setPreviewMode(_ mode: PreviewMode) {
@@ -3903,7 +3904,7 @@ extension MainWindowController {
         // A second slide started over a first would fight it for the same
         // divider, and the two would land wherever they met. So a mode asked
         // for mid-slide is only written down here; the slide applies it as it
-        // lands, and a key held on ⇧⌘P arrives as two slides rather than
+        // lands, and a key held on ⌘P arrives as two slides rather than
         // twenty.
         guard !previewModeIsSliding else {
             deferredPreviewModeSlides = (deferredPreviewModeSlides ?? true) && animated
@@ -4208,7 +4209,7 @@ extension MainWindowController {
     /// is what a test asking about the layout wants.
     var previewModeControl: NSSegmentedControl { visibleModeControlOverlay.modeControl }
 
-    /// Both overlays' controls follow the tab in front — a tab switch, ⇧⌘P, a
+    /// Both overlays' controls follow the tab in front — a tab switch, ⌘P, a
     /// block click, a keystroke in reading mode, a restored session. The tints
     /// go with the selection: the idle segments are the quiet ones.
     private func updatePreviewModeControl() {
@@ -4269,7 +4270,7 @@ extension MainWindowController {
         // keeps a burst of typing to one walk over the text.
         if content.format != nil, formatSlotWorkItem == nil { refreshFormatSlotState() }
         // Whichever pill stack is standing in the editor's corner — ⌘F's one
-        // or two, or ⌘L's one — is what the control clears.
+        // or two, or ⌘J's one — is what the control clears.
         let editorStack: CGFloat = findSession.isVisible ? findBar.stackHeight
             : (goToLineSession.isVisible ? PillView.height : 0)
         editorModeOverlay.findBarClearance = editorStack > 0
@@ -4547,7 +4548,7 @@ extension MainWindowController {
         revealInEditor(textView.selectedRange())
     }
 
-    /// A heading chosen from the ⌘P switcher's `@` list (Todo 9): the caret
+    /// A heading chosen from the ⇧⌘J switcher's `@` list (Todo 9): the caret
     /// goes to its line start and is scrolled into view, and — in split or
     /// reading, where there is a render to be pointing at — the pane is
     /// walked to that block by hand, the same `highlightBlock(containingSource:)`
@@ -4856,35 +4857,50 @@ extension MainWindowController: PageListSidebarViewDelegate {
 
 extension MainWindowController {
 
-    /// ⇧⌘F. The ⌘P panel again, in its search mode: the query runs over every
-    /// open tab's text and each row is a hit. The per-note find bar (⌘F) is
-    /// untouched.
+    /// ⇧⌘F. The ⇧⌘J panel again, in its search mode: the query runs over every
+    /// open tab and each row is a hit. A note is searched by its text, a
+    /// document by its pages and a book by its chapters — each tab says what
+    /// it has (SPEC Done 37). The per-tab find bar (⌘F) is untouched.
     func beginSearchAllNotes() {
         guard let window else { return }
         showWindow(nil)
-        // The storage string, not the serialized text: an image is one
-        // character there, so every range lines up with the text view.
         tabPicker.showSearch(
-            notes: notes.map { (title: $0.title, text: $0.storage.string) },
+            notes: notes.map(\.searchSource),
             symbolNames: notes.map { FileKindIcon.symbolName(for: $0.fileURL) },
             over: window
         )
     }
 
-    /// Choosing a hit: switch to its tab, select the match and scroll it in.
+    /// Choosing a hit: switch to its tab, and take the reader to where the hit
+    /// lives — the match selected in the editor, on the document's page, or in
+    /// the chapter of the book it is written in.
     fileprivate func reveal(_ match: NoteSearchMatch, query: String) {
         selectTab(at: match.tabIndex)
-        focusEditor()
-        guard let storage = textView.textStorage else { return }
-        let location = min(match.rangeInText.location, storage.length)
-        let length = min(match.rangeInText.length, storage.length - location)
-        textView.setSelectedRange(NSRange(location: location, length: length))
-        textView.scrollRangeToVisible(textView.selectedRange())
 
-        // Hand the query to the find bar so ⌘G carries on from here.
+        // Hand the query to the find bar so ⌘G carries on from here. Done
+        // before the reveal, since a viewer's own find session is started with
+        // the same query and reads the board on the way past.
         let findBoard = NSPasteboard(name: .find)
         findBoard.clearContents()
         findBoard.setString(query, forType: .string)
+
+        switch match.location {
+        case .text(let range):
+            focusEditor()
+            guard let storage = textView.textStorage else { return }
+            let location = min(range.location, storage.length)
+            let length = min(range.length, storage.length - location)
+            textView.setSelectedRange(NSRange(location: location, length: length))
+            textView.scrollRangeToVisible(textView.selectedRange())
+        case .pdf(let page, let range):
+            guard let note = currentNote else { return }
+            (previewColumn.content(for: note) as? PDFPreviewView)?
+                .reveal(page: page, range: range, query: query)
+        case .book(let chapter, _):
+            guard let note = currentNote else { return }
+            (previewColumn.content(for: note) as? EPUBPreviewView)?
+                .reveal(chapter: chapter, query: query)
+        }
     }
 }
 

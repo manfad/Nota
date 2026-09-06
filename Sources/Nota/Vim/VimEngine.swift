@@ -61,9 +61,9 @@ final class VimEngine {
                 resetPending()
                 applyCursorStyle()
             }
-            // The band is vim's, so it goes when vim does and comes back with
-            // it if it was on.
-            textView?.showsCursorLine = isEnabled && cursorLine
+            // Vim's own half of the band goes when vim does and comes back
+            // with it if it was on; the preference's half is untouched.
+            textView?.vimCursorLine = isEnabled && cursorLine
         }
     }
 
@@ -82,11 +82,12 @@ final class VimEngine {
     var shiftWidth = 4
 
     /// `set cursorline`: the caret's line wears a quiet band. Off by default;
-    /// the text view draws it.
+    /// the text view draws it. `:set nocursorline` only turns vim's own half
+    /// off — the Settings preference, if it is on, keeps the band lit.
     var cursorLine = false {
         didSet {
             guard cursorLine != oldValue else { return }
-            textView?.showsCursorLine = cursorLine
+            textView?.vimCursorLine = cursorLine
         }
     }
 

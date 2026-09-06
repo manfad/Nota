@@ -34,7 +34,7 @@ final class BookmarksMenu: NSObject, NSMenuDelegate {
         return item
     }()
 
-    /// ⇧⌘D by default: the ⌘P picker opened straight into its bookmarks list,
+    /// ⇧⌘D by default: the ⇧⌘J picker opened straight into its bookmarks list,
     /// the same thing the strip's bookmark button does.
     private lazy var showItem: NSMenuItem = {
         let item = NSMenuItem(

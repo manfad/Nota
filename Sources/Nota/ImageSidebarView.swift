@@ -90,6 +90,7 @@ final class ImageSidebarView: NSView {
     /// typing next to an image does not make the sidebar flicker.
     func setAssetIDs(_ ids: [String], force: Bool = false) {
         header.title = L10n.text("Images")
+        header.count = ids.count
         guard force || ids != assetIDs else { return }
         assetIDs = ids
 
@@ -138,6 +139,7 @@ final class ImageSidebarView: NSView {
     /// The title standing over the column, which a note's column always has:
     /// it says what the column is for, empty or not.
     var headerTitle: String { header.title }
+    var headerCount: Int? { header.count }
 }
 
 /// Document views are bottom-up by default; images should stack downwards.

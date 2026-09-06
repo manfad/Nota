@@ -110,6 +110,11 @@ final class ContentsSidebarView: NSView {
     /// does not throw the list away and lay it out again.
     func setEntries(_ newEntries: [ContentsEntry], force: Bool = false) {
         header.title = L10n.text("Contents")
+        // The badge counts the chapters, not every line under them: the
+        // outermost level present, so a book whose contents start one
+        // step in is still counted by its titles.
+        let outermost = newEntries.map(\.level).min()
+        header.count = newEntries.filter { $0.level == outermost }.count
         guard force || newEntries != entries else { return }
         entries = newEntries
 
@@ -167,6 +172,7 @@ final class ContentsSidebarView: NSView {
     /// The title standing over the column, which it always has: it says what
     /// the column is for, empty or not.
     var headerTitle: String { header.title }
+    var headerCount: Int? { header.count }
 
     var selectedRowTitle: String? {
         rowViews.first(where: \.isSelected)?.title
@@ -190,7 +196,7 @@ private final class FlippedContentsView: NSView {
 /// One line of the contents: the title, indented by its nesting, on a rounded
 /// wash while it names what is on screen or is the line under the pointer.
 ///
-/// The wash is grey rather than the accent colour — the ⌘P switcher's own
+/// The wash is grey rather than the accent colour — the ⇧⌘J switcher's own
 /// rows, not a document selection. Nothing here is being edited, so a blue
 /// bar would be claiming something the list cannot do.
 private final class ContentsRowView: NSView {

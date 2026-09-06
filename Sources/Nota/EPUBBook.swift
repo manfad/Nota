@@ -31,7 +31,7 @@ final class EPUBBook {
 
     /// One line of the book's own table of contents — EPUB 3's `nav`
     /// document, or EPUB 2's NCX. Flattened, with the nesting kept as a
-    /// level, because that is the shape the ⌘P switcher lists headings in.
+    /// level, because that is the shape the ⇧⌘J switcher lists headings in.
     struct TOCEntry: Equatable {
         /// 1 for a top-level entry, 2 for one nested inside it, and so on.
         let level: Int
@@ -329,6 +329,70 @@ final class EPUBBook {
     /// thing.
     func contentsLine(ofChapter index: Int) -> Int? {
         contents.firstIndex { $0.chapterIndex == index }
+    }
+
+    // MARK: - The words of a chapter
+
+    /// A chapter's words with the markup left behind — what ⇧⌘F searches a
+    /// book by (SPEC Done 37).
+    ///
+    /// Block elements are kept apart by a line break, so a hit's snippet is
+    /// the paragraph it sits in rather than the whole chapter run together;
+    /// the whitespace an indented XHTML file leaves inside a paragraph is
+    /// collapsed the way `text(of:)` collapses a contents label's. A
+    /// stylesheet and a script are not words and are left out.
+    ///
+    /// The file is read and parsed on the spot. The tab holding the book
+    /// keeps what comes back, so a chapter is read once per book rather than
+    /// once per keystroke.
+    func words(ofChapter index: Int) -> String {
+        guard chapters.indices.contains(index),
+              let document = Self.document(at: chapters[index].url),
+              let root = document.rootElement()
+        else { return "" }
+        let body = Self.elements(in: root, named: "body").first ?? root
+        var text = ""
+        Self.appendWords(of: body, to: &text)
+        return text
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+    }
+
+    /// The elements a line ends at. Everything else is inline, and its words
+    /// belong to the line around it.
+    private static let blockElements: Set<String> = [
+        "address", "article", "aside", "blockquote", "br", "dd", "div", "dl",
+        "dt", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5",
+        "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section",
+        "table", "td", "th", "tr", "ul",
+    ]
+
+    /// The elements whose contents are not the book's words at all.
+    private static let wordlessElements: Set<String> = ["head", "script", "style", "title"]
+
+    private static func appendWords(of node: XMLNode, to text: inout String) {
+        switch node.kind {
+        case .text:
+            let words = (node.stringValue ?? "")
+                .components(separatedBy: .whitespacesAndNewlines)
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            guard !words.isEmpty else { return }
+            if !text.isEmpty, !text.hasSuffix("\n"), !text.hasSuffix(" ") { text += " " }
+            text += words
+        case .element:
+            guard let element = node as? XMLElement else { return }
+            let name = (element.localName ?? element.name ?? "").lowercased()
+            guard !wordlessElements.contains(name) else { return }
+            let breaks = blockElements.contains(name)
+            if breaks, !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
+            for child in element.children ?? [] { appendWords(of: child, to: &text) }
+            if breaks, !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
+        default:
+            return
+        }
     }
 
     // MARK: - XML

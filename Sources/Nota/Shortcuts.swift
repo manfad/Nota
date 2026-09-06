@@ -21,7 +21,7 @@ struct KeyCombo: Hashable, Codable {
 
     var flags: NSEvent.ModifierFlags { NSEvent.ModifierFlags(rawValue: modifiers) }
 
-    /// Something like "⇧⌘P", in the glyph order the menu bar uses.
+    /// Something like "⌘P", in the glyph order the menu bar uses.
     var displayName: String {
         var text = ""
         if flags.contains(.control) { text += "⌃" }
@@ -108,21 +108,21 @@ enum ShortcutAction: String, CaseIterable, Codable {
         case .saveAs: "Save As…"
         case .bookmarkTab: "Bookmark This Tab"
         case .showBookmarks: "Show Bookmarks…"
-        case .goToTab: "Tabs Dialog"
+        case .goToTab: "Jump to Tab…"
         case .nextTab: "Next Tab"
         case .previousTab: "Previous Tab"
         case .find: "Find…"
         case .findNext: "Find Next"
         case .findPrevious: "Find Previous"
-        case .searchAllNotes: "Search All Notes…"
-        case .goToLine: "Go to Line…"
+        case .searchAllNotes: "Search All Tabs…"
+        case .goToLine: "Jump to Line…"
         case .toggleComment: "Toggle Comment"
         case .indent: "Indent"
         case .outdent: "Outdent"
         case .increaseFontSize: "Increase Font Size"
         case .decreaseFontSize: "Decrease Font Size"
         case .actualSize: "Actual Size"
-        case .showImages: "Image Gallery"
+        case .showImages: "Sidebar"
         case .markdownPreview: "Mode Toggle"
         case .readingMode: "Reading Mode"
         case .zenMode: "Zen Mode"
@@ -145,14 +145,14 @@ enum ShortcutAction: String, CaseIterable, Codable {
         // ⌘D and ⇧⌘D are the bookmark pair; duplicating a line is ⇧⌥↓.
         case .bookmarkTab: KeyCombo("d")
         case .showBookmarks: KeyCombo("d", [.command, .shift])
-        case .goToTab: KeyCombo("p")
+        case .goToTab: KeyCombo("j", [.command, .shift])
         case .nextTab: KeyCombo("\t", [.control])
         case .previousTab: KeyCombo("\t", [.control, .shift])
         case .find: KeyCombo("f")
         case .findNext: KeyCombo("g")
         case .findPrevious: KeyCombo("g", [.command, .shift])
         case .searchAllNotes: KeyCombo("f", [.command, .shift])
-        case .goToLine: KeyCombo("l")
+        case .goToLine: KeyCombo("j")
         case .toggleComment: KeyCombo("/")
         case .indent: KeyCombo("]")
         case .outdent: KeyCombo("[")
@@ -160,8 +160,8 @@ enum ShortcutAction: String, CaseIterable, Codable {
         case .decreaseFontSize: KeyCombo("-")
         case .actualSize: KeyCombo("0")
         case .showImages: KeyCombo("b")
-        case .markdownPreview: KeyCombo("p", [.command, .shift])
-        case .readingMode: KeyCombo("p", [.command, .shift, .option])
+        case .markdownPreview: KeyCombo("p")
+        case .readingMode: KeyCombo("p", [.command, .shift])
         case .zenMode: KeyCombo("z", [.command, .option])
         case .settings: KeyCombo(",")
         }
@@ -184,7 +184,7 @@ enum ShortcutAction: String, CaseIterable, Codable {
         // hidden window back, the two Find items that stay put, and ⌘1–⌘9,
         // which pick a tab by number.
         (KeyCombo("n"), "New Tab"),
-        (KeyCombo("f", [.command, .option]), "Find and Replace…"),
+        (KeyCombo("r"), "Find and Replace…"),
         (KeyCombo("e"), "Use Selection for Find"),
     ] + (1...9).map { (KeyCombo("\($0)"), "Tab \($0)") }
 }

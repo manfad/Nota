@@ -171,6 +171,18 @@ final class HTMLFindSession {
         }
     }
 
+    /// A hit chosen in the ⇧⌘F dialog (SPEC Done 37). The query goes straight
+    /// into the field — the reader has already said what they are looking for,
+    /// so the page is not asked what is selected in it — and the pill comes up
+    /// on it. The search runs at once, and again on `didFinish` when the page
+    /// under it is still arriving: a chapter turned to and searched in the
+    /// same breath is a document that is not there yet.
+    func find(_ query: String) {
+        bar.query = query
+        bar.setShown(true)
+        runSearch()
+    }
+
     /// ⌘G and ⇧⌘G, and Return and ⇧Return in the field. Both wrap round the
     /// end of the page, and both work with the bar closed — the query
     /// outlives it. The query goes with the step, so a page loaded again

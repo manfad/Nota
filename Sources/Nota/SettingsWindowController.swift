@@ -47,6 +47,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let wordWrapSwitch = NSSwitch()
     private let lineNumbersSwitch = NSSwitch()
     private let gutterSeparatorSwitch = NSSwitch()
+    private let highlightCurrentLineSwitch = NSSwitch()
     private let vimModeSwitch = NSSwitch()
     private let previewModeSwitch = NSSwitch()
     private let statusBarSwitch = NSSwitch()
@@ -72,7 +73,15 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let shortcutWarning = WrappingLabel(text: "")
     private let versionLabel = WrappingLabel(text: "")
     private let checkUpdatesButton = NSButton()
-    private let updateStatusLabel = WrappingLabel(text: "")
+    // Not a `WrappingLabel`: the About page centres its blocks rather than
+    // stretching them, so a label that takes whatever width it is given is
+    // given none and folds to a word a line. This one wraps at a width of
+    // its own and hugs the result.
+    private let updateStatusLabel = NSTextField(wrappingLabelWithString: "")
+    /// The `?` buttons and the sentence each one explains; one popover serves them all.
+    private var helpTexts: [ObjectIdentifier: String] = [:]
+    private let helpPopover = NSPopover()
+    private weak var summonHelpButton: NSButton?
     private let downloadUpdateButton = NSButton()
     private let brewCommandField = NSTextField(labelWithString: UpdateCheck.homebrewUpgradeCommand)
     /// Where the About page's update check has got to. Manual, and forgotten
@@ -189,6 +198,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     /// Puts the About page back the way it opens, so one test's answer is
     /// not still on screen for the next.
+    var summonHelpForTesting: (button: NSButton?, popover: NSPopover) {
+        (summonHelpButton, helpPopover)
+    }
+
     func resetUpdateStateForTesting() {
         updateCheckForTesting = nil
         homebrewOverrideForTesting = nil
@@ -358,7 +371,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         sizeStepper.target = self
         sizeStepper.action = #selector(sizeStepperChanged)
 
-        for control in [wordWrapSwitch, gutterSeparatorSwitch, vimModeSwitch, previewModeSwitch,
+        for control in [wordWrapSwitch, gutterSeparatorSwitch, highlightCurrentLineSwitch,
+                        vimModeSwitch, previewModeSwitch,
                         autoHideTabBarSwitch, trafficLightsSwitch, bookmarkButtonSwitch,
                         settingsButtonSwitch] {
             control.target = self
@@ -445,7 +459,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         let rows = [row("Language", control: languagePopUp), row("Theme", control: themePopUp)]
         return page(
             "General",
-            blocks: [groupBox(rows), footnote("System Default follows the Mac.")],
+            blocks: [groupBox(rows)],
             rows: rows
         )
     }
@@ -472,6 +486,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             row("Word wrap", control: wordWrapSwitch),
             row("Line numbers", control: lineNumbersSwitch),
             separator,
+            row("Highlight current line", control: highlightCurrentLineSwitch),
             row("Vim mode", control: vimModeSwitch),
         ]
         return page("Editor", blocks: [groupBox(rows)], rows: rows)
@@ -535,13 +550,14 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         hotKeyStack.orientation = .horizontal
         hotKeyStack.spacing = 6
 
-        let summon = row("Summon", control: hotKeyField, trailing: hotKeyStack)
+        let summon = row("Summon", control: hotKeyField, trailing: hotKeyStack,
+                         help: "Summon brings Nota to the front from any app, even while it is hidden.")
+        summonHelpButton = summon.accessory as? NSButton
         // Settings… shares the top group with Summon: a group of its own
         // would be headed "Nota", which reads as nothing on a Nota page.
         let settings = row(ShortcutAction.settings.titleKey, control: recorder(for: .settings))
         var blocks: [NSView] = [
             groupBox([summon, settings]),
-            footnote("Summon brings Nota to the front from any app, even while it is hidden."),
             hotKeyWarning,
         ]
         var rows = [summon, settings]
@@ -560,9 +576,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         resetRow.spacing = 12
 
         blocks.append(shortcutWarning)
-        blocks.append(footnote(
-            "Two commands cannot share a combination, and the Mac's own keys are off limits."
-        ))
         blocks.append(resetRow)
         return page("Shortcuts", blocks: blocks, rows: rows)
     }
@@ -585,22 +598,23 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         versionLabel.textColor = .secondaryLabelColor
         versionLabel.alignment = .center
 
-        let tagline = footnote("A plain-text notebook.")
-        tagline.alignment = .center
-
+        updateStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        updateStatusLabel.isSelectable = false
+        updateStatusLabel.font = .systemFont(ofSize: 12)
+        updateStatusLabel.textColor = .secondaryLabelColor
         updateStatusLabel.alignment = .center
-        updateStatusLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 360).isActive = true
+        updateStatusLabel.preferredMaxLayoutWidth = 360
         brewCommandField.alignment = .center
 
         let about = page(
             "About",
-            blocks: [icon, name, versionLabel, tagline,
+            blocks: [icon, name, versionLabel,
                      checkUpdatesButton, updateStatusLabel, brewCommandField,
                      downloadUpdateButton],
             rows: [], centered: true
         )
-        // The button starts a block of its own under the line about Nota.
-        (about.content as? NSStackView)?.setCustomSpacing(20, after: tagline)
+        // The button starts a block of its own under the version.
+        (about.content as? NSStackView)?.setCustomSpacing(20, after: versionLabel)
         applyUpdateState()
         return about
     }
@@ -635,10 +649,51 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     private func groupBox(_ rows: [SettingsRowView]) -> NSView { GroupBoxView(rows: rows) }
 
+    /// `help` is a sentence the row would otherwise carry as a footnote; it
+    /// goes behind a `?` after the label instead, shown in a popover on a click.
     private func row(
-        _ key: String, control: NSControl, trailing: NSView? = nil
+        _ key: String, control: NSControl, trailing: NSView? = nil, help: String? = nil
     ) -> SettingsRowView {
-        SettingsRowView(label: label(key), control: control, trailing: trailing ?? control)
+        SettingsRowView(label: label(key), control: control, trailing: trailing ?? control,
+                        accessory: help.map { helpButton(explaining: $0) })
+    }
+
+    private func helpButton(explaining key: String) -> NSButton {
+        let button = NSButton(title: "", target: self, action: #selector(showHelp(_:)))
+        button.bezelStyle = .helpButton
+        button.controlSize = .small
+        button.toolTip = nil
+        button.setAccessibilityLabel(L10n.text(key))
+        helpTexts[ObjectIdentifier(button)] = key
+        return button
+    }
+
+    /// One popover for every `?`, transient, so a click anywhere else closes it.
+    @objc private func showHelp(_ sender: NSButton) {
+        guard let key = helpTexts[ObjectIdentifier(sender)] else { return }
+        if helpPopover.isShown { helpPopover.performClose(nil) }
+        // Measured by hand and handed to the popover as a fixed size: a
+        // wrapping label left to Auto Layout inside a popover gets no width
+        // and folds to nothing, as it did the first evening.
+        let text = NSTextField(wrappingLabelWithString: L10n.text(key))
+        text.isSelectable = false
+        text.font = .systemFont(ofSize: 12)
+        text.textColor = .labelColor
+        text.preferredMaxLayoutWidth = 280
+        let inset = NSSize(width: 14, height: 12)
+        let measured = text.sizeThatFits(NSSize(width: 280, height: CGFloat.greatestFiniteMagnitude))
+        let size = NSSize(width: ceil(measured.width), height: ceil(measured.height))
+        text.frame = NSRect(origin: NSPoint(x: inset.width, y: inset.height), size: size)
+        let content = NSView(frame: NSRect(
+            x: 0, y: 0, width: size.width + inset.width * 2, height: size.height + inset.height * 2
+        ))
+        content.addSubview(text)
+        let controller = NSViewController()
+        controller.view = content
+        controller.preferredContentSize = content.frame.size
+        helpPopover.contentViewController = controller
+        helpPopover.behavior = .transient
+        helpPopover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .maxY)
     }
 
     private func recorder(for action: ShortcutAction) -> ShortcutRecorderField {
@@ -746,6 +801,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         lineNumbersSwitch.state = preferences.showsLineNumbers ? .on : .off
         gutterSeparatorSwitch.state = preferences.showsGutterSeparator ? .on : .off
         gutterSeparatorRow?.isEnabled = preferences.showsLineNumbers
+        highlightCurrentLineSwitch.state = preferences.highlightsCurrentLine ? .on : .off
         let enabled = Set(preferences.footerSegments)
         for (segment, control) in footerSwitches {
             control.state = enabled.contains(segment) ? .on : .off
@@ -1047,6 +1103,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         preferences.wrapsLines = wordWrapSwitch.state == .on
         preferences.showsLineNumbers = lineNumbersSwitch.state == .on
         preferences.showsGutterSeparator = gutterSeparatorSwitch.state == .on
+        preferences.highlightsCurrentLine = highlightCurrentLineSwitch.state == .on
         preferences.opensMarkdownInReadingMode = previewModeSwitch.state == .on
         preferences.showsStatusBar = statusBarSwitch.state == .on
         preferences.footerShowsWords = segmentStates[.words] ?? false
@@ -1125,6 +1182,8 @@ private final class FlippedView: NSView {
 private final class SettingsRowView: NSView {
     let label: NSTextField
     let control: NSControl
+    /// What follows the label, if anything — the `?` a row's help sits behind.
+    let accessory: NSView?
 
     /// Greys the label with the control, so a row switched off by another row
     /// reads as off rather than merely unresponsive.
@@ -1135,15 +1194,31 @@ private final class SettingsRowView: NSView {
         }
     }
 
-    init(label: NSTextField, control: NSControl, trailing: NSView) {
+    init(label: NSTextField, control: NSControl, trailing: NSView, accessory: NSView? = nil) {
         self.label = label
         self.control = control
+        self.accessory = accessory
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         label.translatesAutoresizingMaskIntoConstraints = false
         trailing.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         addSubview(trailing)
+        let afterLabel: NSView
+        if let accessory {
+            accessory.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(accessory)
+            accessory.setContentHuggingPriority(.required, for: .horizontal)
+            accessory.setContentCompressionResistancePriority(.required, for: .horizontal)
+            label.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            NSLayoutConstraint.activate([
+                accessory.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 6),
+                accessory.centerYAnchor.constraint(equalTo: centerYAnchor),
+            ])
+            afterLabel = accessory
+        } else {
+            afterLabel = label
+        }
 
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         trailing.setContentHuggingPriority(.defaultHigh, for: .horizontal)
@@ -1155,7 +1230,7 @@ private final class SettingsRowView: NSView {
             trailing.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             trailing.centerYAnchor.constraint(equalTo: centerYAnchor),
             trailing.leadingAnchor.constraint(
-                greaterThanOrEqualTo: label.trailingAnchor, constant: 12
+                greaterThanOrEqualTo: afterLabel.trailingAnchor, constant: 12
             ),
         ])
     }

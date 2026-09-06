@@ -61,7 +61,7 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
             guard canReplace != oldValue else { return }
             if !canReplace { setExpanded(false) }
             applySymbols()
-            magnifierButton.toolTip = canReplace ? "Replace (⌥⌘F)" : nil
+            magnifierButton.toolTip = canReplace ? "Replace (⌘R)" : nil
         }
     }
 
@@ -85,7 +85,7 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
         super.init()
 
         PillView.style(field, placeholder: placeholder, owner: self)
-        magnifierButton = glyphButton(tooltip: "Replace (⌥⌘F)", action: #selector(toggleReplace))
+        magnifierButton = glyphButton(tooltip: "Replace (⌘R)", action: #selector(toggleReplace))
         previousButton = glyphButton(
             tooltip: "Previous match "
                 + "(\(Preferences.shared.combo(for: .findPrevious).displayName))",
@@ -98,6 +98,7 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
         closeButton = glyphButton(tooltip: "Close (Esc)", action: #selector(closeBar))
 
         replacePill.onFinderAction = { [weak self] action in self?.perform(action) }
+        replacePill.onCollapse = { [weak self] in self?.perform(.hideReplaceInterface) }
         // Tab walks between the two fields, and back again.
         field.nextKeyView = replacePill.field
         replacePill.field.nextKeyView = field
@@ -238,13 +239,16 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
         }
     }
 
-    /// The magnifying glass is the one glyph that speaks up: with the replace
-    /// pill out it wears `labelColor`, which is how a toggle says it is on.
+    /// The magnifying glass stays quiet — `secondaryLabelColor` with the
+    /// replace pill away and with it out alike. Where there is anything to
+    /// replace it wears a small chevron pointing down, so it reads as the
+    /// toggle it is; the pill it opens is the one that speaks up (see
+    /// `ReplaceBarView.applySymbols`). Over a rendered page the glass is a
+    /// plain glyph.
     override func applySymbols() {
-        magnifierButton.image = Self.symbol(
-            "magnifyingglass", pointSize: 12, label: "Find",
-            colour: isExpanded ? .labelColor : .secondaryLabelColor
-        )
+        magnifierButton.image = canReplace
+            ? Self.symbolWithChevron("magnifyingglass", pointSize: 12, label: "Find", up: false)
+            : Self.symbol("magnifyingglass", pointSize: 12, label: "Find")
         previousButton.image = Self.symbol("chevron.up", pointSize: 11, label: "Previous")
         nextButton.image = Self.symbol("chevron.down", pointSize: 11, label: "Next")
         closeButton.image = Self.symbol("xmark", pointSize: 11, label: "Close")
@@ -259,23 +263,29 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
 final class ReplaceBarView: PillView, NSTextFieldDelegate, PillActionResponder {
 
     let field: PillTextField
-    private let icon: NSImageView
+    /// The arrows, with a chevron pointing up, both in the label colour: a
+    /// click folds this pill away, the mirror of the glass above that
+    /// brought it out.
+    private(set) var iconButton = NSButton()
     private var replaceButton = NSButton()
     private var replaceAllButton = NSButton()
 
     /// Handed to the query pill, which is what the session listens to.
     var onFinderAction: ((NSTextFinder.Action) -> Void)?
+    /// The icon was clicked: the query pill folds this one away.
+    var onCollapse: (() -> Void)?
 
     var replacement: String { field.stringValue }
 
     override init() {
         field = PillTextField()
-        icon = PillView.glyphView(
-            PillView.symbol("arrow.2.squarepath", pointSize: 12, label: "Replace")
-        )
         super.init()
 
         PillView.style(field, placeholder: "Replace", owner: self)
+        iconButton = glyphButton(tooltip: "Hide Replace", action: #selector(collapse))
+        iconButton.image = PillView.symbolWithChevron(
+            "arrow.2.squarepath", pointSize: 12, label: "Replace", up: true
+        )
         replaceButton = wordButton(
             title: "Replace", tooltip: "Replace this match (Return)",
             action: #selector(replaceOne)
@@ -284,13 +294,13 @@ final class ReplaceBarView: PillView, NSTextFieldDelegate, PillActionResponder {
             title: "All", tooltip: "Replace all matches (⌥Return)", action: #selector(replaceAll)
         )
 
-        for view in [icon, field, replaceButton, replaceAllButton] { addSubview(view) }
+        for view in [iconButton, field, replaceButton, replaceAllButton] { addSubview(view) }
 
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 11),
-            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            iconButton.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            field.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
+            field.leadingAnchor.constraint(equalTo: iconButton.trailingAnchor, constant: 2),
             field.centerYAnchor.constraint(equalTo: centerYAnchor),
             field.trailingAnchor.constraint(
                 equalTo: replaceButton.leadingAnchor, constant: -8
@@ -310,6 +320,8 @@ final class ReplaceBarView: PillView, NSTextFieldDelegate, PillActionResponder {
     func perform(_ action: NSTextFinder.Action) { onFinderAction?(action) }
 
     func handles(_ action: NSTextFinder.Action) -> Bool { TextFindSession.handles(action) }
+
+    @objc private func collapse() { onCollapse?() }
 
     @objc private func replaceOne() { perform(.replace) }
     @objc private func replaceAll() { perform(.replaceAll) }
@@ -334,8 +346,13 @@ final class ReplaceBarView: PillView, NSTextFieldDelegate, PillActionResponder {
         }
     }
 
+    /// The arrows and their chevron wear `labelColor`: this pill is only ever
+    /// on screen because it was asked for, and the full colour is how it
+    /// says so, while the glass above stays muted.
     override func applySymbols() {
-        icon.image = PillView.symbol("arrow.2.squarepath", pointSize: 12, label: "Replace")
+        iconButton.image = PillView.symbolWithChevron(
+            "arrow.2.squarepath", pointSize: 12, label: "Replace", colour: .labelColor, up: true
+        )
         PillView.applyTitle(to: replaceButton)
         PillView.applyTitle(to: replaceAllButton)
     }

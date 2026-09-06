@@ -1,6 +1,6 @@
 import AppKit
 
-/// The leading icon a tab — in the strip and in the ⌘P switcher — shows for
+/// The leading icon a tab — in the strip and in the ⇧⌘J switcher — shows for
 /// the kind of file behind it (SPEC Todo 15).
 ///
 /// The name is all there is to go on: a tab's title is its file's last path

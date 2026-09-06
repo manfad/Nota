@@ -1261,7 +1261,7 @@ final class NewTabButton: StripButton {
 }
 
 /// The bookmark button in the strip's top-right corner (SPEC Todo 13): the
-/// ⌘P picker, opened straight into its bookmarks list.
+/// ⇧⌘J picker, opened straight into its bookmarks list.
 final class BookmarksButton: StripButton {
     init() {
         super.init(symbolName: "bookmark", name: "Bookmarks", toolTip: "Bookmarks")

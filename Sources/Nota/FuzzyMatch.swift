@@ -1,6 +1,6 @@
 import Foundation
 
-/// Subsequence matching for the ⌘P tab picker.
+/// Subsequence matching for the ⇧⌘J tab picker.
 ///
 /// A query matches if its characters appear in order in the title, not
 /// necessarily together. Score favours matches that are early, contiguous, and

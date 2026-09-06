@@ -3,12 +3,12 @@ import PDFKit
 import UniformTypeIdentifiers
 
 /// What a tab does with the Markdown render: nothing, beside the editor, or
-/// instead of it. The case order is the order ⇧⌘P cycles them in, and the
+/// instead of it. The case order is the order ⌘P cycles them in, and the
 /// order the mode control's segments sit in.
 enum PreviewMode: String, Codable, CaseIterable {
     case off, split, reading
 
-    /// The next one round the ring — what ⇧⌘P moves to.
+    /// The next one round the ring — what ⌘P moves to.
     var next: PreviewMode {
         let all = Self.allCases
         let index = all.firstIndex(of: self) ?? 0
@@ -37,16 +37,16 @@ enum PreviewMode: String, Codable, CaseIterable {
     /// The tool tip: the state, then the keys that get to it.
     var controlToolTip: String {
         switch self {
-        case .off: controlTitle + "  ⇧⌘P"
-        case .split: controlTitle + "  ⇧⌘P"
-        case .reading: controlTitle + "  ⌥⇧⌘P"
+        case .off: controlTitle + "  ⌘P"
+        case .split: controlTitle + "  ⌘P"
+        case .reading: controlTitle + "  ⇧⌘P"
         }
     }
 }
 
 /// Which preview a file gets beside its source, decided by how it is spelled
 /// and by nothing else. Everything around them — the three modes, the mode
-/// control, ⇧⌘P, the View items, the mode kept per tab — is the same for all
+/// control, ⌘P, the View items, the mode kept per tab — is the same for all
 /// three. What differs is what does the drawing: Nota's own renderer reads
 /// Markdown or LaTeX into its reading layout, and HTML is already a page, so
 /// WebKit draws it as it stands.
@@ -204,7 +204,7 @@ final class Note {
     var sqlTable: String?
     var sqlQuery: String?
     /// What this tab does with its render — editor, split or reading. Per
-    /// tab, not per app: ⇧⌘P on a Markdown note must not follow you into the
+    /// tab, not per app: ⌘P on a Markdown note must not follow you into the
     /// next ⌘T. The editor until asked for.
     ///
     /// A PDF and a picture are the page and nothing else: they are locked in
@@ -248,6 +248,11 @@ final class Note {
     private var hasLoadedBook = false
     private var loadedRichText: NSAttributedString?
     private var hasLoadedRichText = false
+    /// A viewer's text pulled out part by part for ⇧⌘F, and whether pulling
+    /// it has been tried — the same once-and-kept rule the parsed document
+    /// and the book follow.
+    private var loadedSearchParts: [String] = []
+    private var hasLoadedSearchParts = false
 
     /// The watch on `fileURL`, while there is a file to watch.
     private var watcher: FileWatcher?
@@ -369,6 +374,8 @@ final class Note {
         hasLoadedBook = false
         loadedRichText = nil
         hasLoadedRichText = false
+        loadedSearchParts = []
+        hasLoadedSearchParts = false
     }
 
     /// Fold every character edit into the line table as the storage makes it.
@@ -601,6 +608,46 @@ final class Note {
     /// a flat `.rtf` and an `.rtfd` folder both.
     static func readRichText(at url: URL) -> NSAttributedString? {
         try? NSAttributedString(url: url, options: [:], documentAttributes: nil)
+    }
+
+    /// What this tab hands ⇧⌘F (SPEC Done 37): its title, and the text the
+    /// query runs over.
+    ///
+    /// A note hands its *storage* string rather than its text, so an image is
+    /// one character and every range lines up with the text view the hit will
+    /// be selected in. A document hands its pages and a book its chapters,
+    /// each one the smallest place the window can take the reader to. A
+    /// picture and a rich-text document hand nothing: there is nowhere in
+    /// either for a hit to be revealed.
+    var searchSource: NoteSearchSource {
+        switch kind {
+        case .text: return NoteSearchSource(title: title, text: storage.string)
+        case .pdf: return NoteSearchSource(title: title, parts: .pages(searchParts))
+        case .epub: return NoteSearchSource(title: title, parts: .chapters(searchParts))
+        case .image, .rtf: return NoteSearchSource(title: title, text: "")
+        }
+    }
+
+    /// A document's pages or a book's chapters as plain text, read the first
+    /// time the search dialog asks and held afterwards — a second ⇧⌘F over
+    /// the same tab costs nothing, and the cache goes with the rest of them
+    /// when the file changes under the tab.
+    private var searchParts: [String] {
+        if hasLoadedSearchParts { return loadedSearchParts }
+        hasLoadedSearchParts = true
+        switch kind {
+        case .pdf:
+            guard let document = pdfDocument else { break }
+            loadedSearchParts = (0 ..< document.pageCount).map {
+                document.page(at: $0)?.string ?? ""
+            }
+        case .epub:
+            guard let book = epubBook else { break }
+            loadedSearchParts = book.chapters.indices.map { book.words(ofChapter: $0) }
+        default:
+            break
+        }
+        return loadedSearchParts
     }
 
     /// Whether the editor takes the keyboard for this tab. A scratch tab is

@@ -41,7 +41,7 @@ final class CSVPreviewTests: XCTestCase {
     func testATableHasTheThreeModesAndAPlainTextFileHasNone() throws {
         let table = makeNote(named: "Products.csv", text: "a,b\n1,2\n")
         XCTAssertEqual(table.previewKind, .csv)
-        XCTAssertTrue(table.supportsRenderedPreview, "so ⇧⌘P and the control mean something")
+        XCTAssertTrue(table.supportsRenderedPreview, "so ⌘P and the control mean something")
         XCTAssertTrue(table.hasPreviewContent)
         table.previewMode = .split
         XCTAssertEqual(table.previewMode, .split)

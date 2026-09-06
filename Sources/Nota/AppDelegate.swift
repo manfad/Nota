@@ -251,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menuItem.title = L10n.text(zen ? "Exit Zen Mode" : "Zen Mode")
         }
         // The preview is a place, not a verb: the titles stay put and the
-        // checkmarks say which mode the tab in front is in. ⇧⌘P cycles
+        // checkmarks say which mode the tab in front is in. ⌘P cycles
         // through both places, so its mark is on in either of them. Neither
         // item is offered on a tab that has no render to show.
         let mode = activeController?.previewMode ?? .off
@@ -461,8 +461,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the shortcut table, so neither can move.
         findMenu.addItem(item(.find, findAction,
                               tag: NSTextFinder.Action.showFindInterface.rawValue))
-        findMenu.addItem(item("Find and Replace…", findAction, key: "f",
-                              modifiers: [.command, .option],
+        findMenu.addItem(item("Find and Replace…", findAction, key: "r",
                               tag: NSTextFinder.Action.showReplaceInterface.rawValue))
         findMenu.addItem(item(.findNext, findAction,
                               tag: NSTextFinder.Action.nextMatch.rawValue))

@@ -283,6 +283,7 @@ final class PDFTests: XCTestCase {
         XCTAssertTrue(controller.quickLookSidebar.isHidden)
         XCTAssertTrue(controller.contentsSidebarView.isHidden)
         XCTAssertEqual(sidebar.headerTitle, "Pages")
+        XCTAssertEqual(sidebar.headerCount, 3, "the badge after the title counts the pages")
         XCTAssertEqual(sidebar.pageCaptions, ["Page 1", "Page 2", "Page 3"])
         XCTAssertEqual(sidebar.selectedPageIndex, 0, "the page in front is the card that is rung")
     }
@@ -298,6 +299,7 @@ final class PDFTests: XCTestCase {
 
         XCTAssertTrue(controller.isImageSidebarVisible)
         XCTAssertEqual(sidebar.headerTitle, "Pages")
+        XCTAssertEqual(sidebar.headerCount, 6)
         XCTAssertEqual(sidebar.pageCaptions,
                        ["Page 1", "Page 2", "Page 3", "Page 4", "Page 5", "Page 6"])
         XCTAssertTrue(controller.contentsSidebarView.isHidden)
@@ -637,11 +639,61 @@ final class PDFTests: XCTestCase {
             XCTAssertFalse(pdfView.validateUserInterfaceItem(finderItem(action)),
                            "\(action) has nothing to act on")
         }
-        // And the pill's own field says the same, so ⌥⌘F is greyed out while
+        // And the pill's own field says the same, so ⌘R is greyed out while
         // the reader is typing in it too.
         let bar = try findChrome(of: controller).bar
         XCTAssertFalse(bar.handles(.showReplaceInterface))
         XCTAssertTrue(bar.handles(.nextMatch))
+    }
+
+    // MARK: - ⇧⌘F over the document
+
+    /// A document is part of the search across tabs (SPEC Done 37): its pages
+    /// are searched the way a note's text is, the row says which page the hit
+    /// is printed on, and choosing it turns to that page with the match
+    /// selected on it.
+    @MainActor
+    func testSearchAllTabsFindsAndRevealsAHitOnAPage() throws {
+        let controller = try makeKeyController()
+        let url = try makeTextPDF(
+            pages: ["alpha beta", "gamma needle delta"],
+            named: "paper.pdf", in: try makeTemporaryDirectory()
+        )
+        controller.open(url: url)
+        XCTAssertEqual(controller.previewPanes.pdf.currentPageIndex, 0)
+
+        let picker = controller.tabPickerPanel
+        controller.beginSearchAllNotes()
+        picker.query = "needle"
+
+        let matches = picker.visibleSearchMatches
+        XCTAssertEqual(matches.count, 1, "one hit, on the second page")
+        XCTAssertEqual(matches.first?.tabTitle, "paper.pdf")
+        XCTAssertEqual(matches.first?.location, .pdf(page: 1, range: NSRange(location: 6, length: 6)))
+        XCTAssertEqual(picker.visibleRowTexts, ["Page 2 · gamma needle delta"],
+                       "the row says which page it is printed on")
+
+        send(#selector(NSResponder.insertNewline(_:)), to: picker)
+
+        XCTAssertFalse(picker.isVisible, "choosing closes the panel")
+        XCTAssertEqual(controller.previewPanes.pdf.currentPageIndex, 1,
+                       "the page the hit is on came up")
+        let (pdfView, bar) = try findChrome(of: controller)
+        XCTAssertEqual(pdfView.currentSelection?.string?.lowercased(), "needle",
+                       "and the match itself is the page's selection")
+        XCTAssertFalse(bar.isShown, "a hit chosen in the dialog is not a find bar")
+        XCTAssertEqual(NSPasteboard(name: .find).string(forType: .string), "needle")
+
+        // The document took the query, so ⌘G walks on from where they landed.
+        pdfView.performTextFinderAction(finderItem(.nextMatch))
+        XCTAssertEqual(pdfView.currentSelection?.string?.lowercased(), "needle")
+    }
+
+    /// The key the picker's field would hand its delegate — the tests have no
+    /// window server to press one with.
+    @MainActor
+    private func send(_ command: Selector, to picker: TabPickerPanel) {
+        _ = picker.control(NSTextField(), textView: NSTextView(), doCommandBy: command)
     }
 
     // MARK: - How big the page is drawn

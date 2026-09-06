@@ -3,7 +3,7 @@ import XCTest
 @testable import Nota
 
 /// Todo 9's extractor: headings read straight from a note's own text, the
-/// same way `@` in the ⌘P switcher reads them — never from the render, so a
+/// same way `@` in the ⇧⌘J switcher reads them — never from the render, so a
 /// note nobody has opened the preview for still has an outline.
 final class MarkdownHeadingsTests: XCTestCase {
 

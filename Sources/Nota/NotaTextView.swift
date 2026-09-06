@@ -41,12 +41,34 @@ final class NotaTextView: NSTextView {
         }
     }
 
-    /// `set cursorline`: a quiet full-width band under the caret's line.
-    var showsCursorLine = false {
+    /// Settings › Editor › "Highlight current line". One of two inputs to
+    /// `showsCursorLine`; see it for why they are kept apart.
+    var highlightsCurrentLine = false {
         didSet {
-            guard oldValue != showsCursorLine else { return }
-            needsDisplay = true
+            guard oldValue != highlightsCurrentLine else { return }
+            refreshCursorLine()
         }
+    }
+
+    /// Vim's `set cursorline`. The other input to `showsCursorLine`.
+    var vimCursorLine = false {
+        didSet {
+            guard oldValue != vimCursorLine else { return }
+            refreshCursorLine()
+        }
+    }
+
+    /// The band actually drawn under the caret's line: on when either the
+    /// preference or vim's `:set cursorline` asks for it, so neither can turn
+    /// off a band the other one wants. Read-only — tests read it, but only
+    /// `highlightsCurrentLine` and `vimCursorLine` ever set it.
+    private(set) var showsCursorLine = false
+
+    private func refreshCursorLine() {
+        let value = highlightsCurrentLine || vimCursorLine
+        guard value != showsCursorLine else { return }
+        showsCursorLine = value
+        needsDisplay = true
     }
 
     /// Read order. The first type the pasteboard also carries wins, so a copy

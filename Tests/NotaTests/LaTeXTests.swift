@@ -595,7 +595,7 @@ final class LaTeXTests: XCTestCase {
         XCTAssertEqual(controller.previewMode, .off)
 
         controller.toggleReadingMode()
-        XCTAssertEqual(controller.previewMode, .reading, "⌥⇧⌘P jumps straight there")
+        XCTAssertEqual(controller.previewMode, .reading, "⇧⌘P jumps straight there")
         controller.toggleReadingMode()
         XCTAssertEqual(controller.previewMode, .off)
     }

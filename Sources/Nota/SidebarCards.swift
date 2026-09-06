@@ -41,11 +41,20 @@ final class SidebarSectionHeader: NSView {
     private static let bottomGap: CGFloat = 4
 
     private let label = NSTextField(labelWithString: "")
+    private let badge = SidebarCountBadge()
 
     /// What the list below is a list of.
     var title: String {
         get { label.stringValue }
         set { label.stringValue = newValue }
+    }
+
+    /// How many the list below holds, worn as a small capsule after the
+    /// title. Zero is still a count and is shown as one; only `nil` — a
+    /// column that has not been told — takes the capsule away.
+    var count: Int? {
+        get { badge.count }
+        set { badge.count = newValue }
     }
 
     /// `topPadding` is the air above: none for the first title in the column,
@@ -61,17 +70,73 @@ final class SidebarSectionHeader: NSView {
         label.alignment = .left
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        label.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         addSubview(label)
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(badge)
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.barHeight + topPadding),
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leadingInset),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -leadingInset),
             label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.bottomGap),
+            badge.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 6),
+            badge.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -leadingInset),
+            badge.centerYAnchor.constraint(equalTo: label.centerYAnchor),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+}
+
+/// The count after a column's title: a quiet capsule, the number in the
+/// title's own grey on a wash of it, sized to its digits. `0` is worn like
+/// any other number; the capsule is gone only while no count has been set.
+final class SidebarCountBadge: NSView {
+    private let label = NSTextField(labelWithString: "")
+    private static let horizontalPadding: CGFloat = 5
+    private static let height: CGFloat = 15
+
+    var count: Int? {
+        didSet {
+            isHidden = count == nil
+            label.stringValue = count.map(String.init) ?? ""
+        }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = Self.height / 2
+        layer?.cornerCurve = .continuous
+        isHidden = true
+
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
+        label.textColor = .secondaryLabelColor
+        label.alignment = .center
+        label.maximumNumberOfLines = 1
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: Self.height),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.horizontalPadding),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.horizontalPadding),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.14).cgColor
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
 }
 
 // MARK: - One card

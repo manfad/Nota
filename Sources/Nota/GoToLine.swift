@@ -1,6 +1,6 @@
 import AppKit
 
-/// ⌘L's pill: a line number, and where in the note it lands you.
+/// ⌘J's pill: a line number, and where in the note it lands you.
 ///
 /// The same chrome the find bar is made of, in the same corner — one row with
 /// a glyph, a field, the note's line total and a ✕. No chevrons: there is one
@@ -19,7 +19,7 @@ final class GoToLinePill: PillView, NSTextFieldDelegate, PillActionResponder {
     var onCommit: (() -> Void)?
     /// Escape: put the caret and the view back where they were.
     var onCancel: (() -> Void)?
-    /// ⌘F or ⌥⌘F, asked for from inside the field.
+    /// ⌘F or ⌘R, asked for from inside the field.
     var onFinderAction: ((NSTextFinder.Action) -> Void)?
 
     var query: String {
@@ -78,7 +78,7 @@ final class GoToLinePill: PillView, NSTextFieldDelegate, PillActionResponder {
 
     // MARK: - Menu actions from inside the field
 
-    /// ⌘F and ⌥⌘F reach here through the field editor. They mean "not this
+    /// ⌘F and ⌘R reach here through the field editor. They mean "not this
     /// pill, the other one", and the owner swaps them over. Nothing else in
     /// the Find menu means anything while a line number is being typed, so
     /// nothing else stays enabled.
@@ -117,7 +117,7 @@ final class GoToLinePill: PillView, NSTextFieldDelegate, PillActionResponder {
 
 // MARK: - What a line number means
 
-/// What ⌘L's pill does to the editor: the number, where it lands, and putting
+/// What ⌘J's pill does to the editor: the number, where it lands, and putting
 /// everything back if the reader changes their mind.
 ///
 /// The lines come from the note's own `LineIndex` — the table the gutter and
@@ -133,7 +133,7 @@ final class GoToLineSession {
     var lineIndexProvider: (() -> LineIndex?)?
     /// Run when the pill arrives or leaves.
     var onVisibilityChange: ((Bool) -> Void)?
-    /// ⌘F or ⌥⌘F asked for from inside the pill: this one closes and the find
+    /// ⌘F or ⌘R asked for from inside the pill: this one closes and the find
     /// bar opens in its place.
     var onFindRequested: ((NSTextFinder.Action) -> Void)?
 

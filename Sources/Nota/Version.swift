@@ -5,5 +5,5 @@ import Foundation
 /// by the same hook, so the About page, the Finder and the bundle never
 /// disagree. Set it by hand only to start a new minor or major.
 enum AppVersion {
-    static let current = "1.0.20"
+    static let current = "1.1.0"
 }

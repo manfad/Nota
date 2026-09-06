@@ -138,7 +138,7 @@ final class TextFindSession {
         textView.window?.makeFirstResponder(textView)
     }
 
-    /// ⌥⌘F. The same bar with its replace row out, and the keyboard in
+    /// ⌘R. The same bar with its replace row out, and the keyboard in
     /// whichever field there is still something to type in. Where nothing can
     /// be edited it is ⌘F and no more.
     func showReplace() {

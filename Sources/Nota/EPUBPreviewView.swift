@@ -239,6 +239,19 @@ final class EPUBPreviewView: NSView, PreviewContent {
         goToChapter(destination.chapter, fragment: destination.fragment)
     }
 
+    /// A hit chosen in the ⇧⌘F dialog (SPEC Done 37): the chapter it is
+    /// written in is turned to, and the query is put to that chapter's page
+    /// with the find pill up on it.
+    ///
+    /// The reader lands on the chapter's first occurrence rather than on the
+    /// very hit that was chosen: the dialog counted in the chapter's words and
+    /// the page counts in its own document, and the two do not share a
+    /// numbering. ⌘G walks the rest from there.
+    func reveal(chapter index: Int, query: String) {
+        goToChapter(index)
+        page.find(query)
+    }
+
     private func clamped(_ index: Int) -> Int {
         guard let book, !book.chapters.isEmpty else { return max(0, index) }
         return min(max(0, index), book.chapters.count - 1)

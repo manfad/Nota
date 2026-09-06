@@ -53,7 +53,7 @@
   dropped, since it is a list of ranges into text that is no longer there. A PDF, a picture and a book reload the
   same way, silently, since none of them is ever dirty — a book unpacks its file again, at the chapter you were on. A **dirty** tab reloads nothing: its tab wears a hairline ring round the
   unsaved dot — the dot still says "unsaved", the ring says the file has moved as well — and the editor column's
-  bottom-trailing corner, the one ⌘F and ⌘L do not use, carries a `Pill.swift` bar: a `clock.arrow.circlepath` glyph,
+  bottom-trailing corner, the one ⌘F and ⌘J do not use, carries a `Pill.swift` bar: a `clock.arrow.circlepath` glyph,
   `Changed on disk`, and the two quiet words `Reload` and `Keep mine`. Reload takes the file's text and clears dirty;
   Keep mine dismisses, keeps the ring, and the next ⌘S writes over the file. The offer stands on the tab until it is
   answered rather than being spent by being shown, so switching away and back still asks and a window coming forward
@@ -76,8 +76,8 @@
 - Closing the last window = hide (app stays alive). Closing any other window really closes it, and its tabs go to the
   end of the window that was in front before it, so nothing is lost and nothing is asked. Quit never prompts;
   everything restores.
-- Search: ⌘F opens Nota's own find bar (in note), ⌥⌘F opens it with the replace pill too; ⇧⌘F opens the search
-  dialog across all open tabs (see Tabs).
+- Search: ⌘F opens Nota's own find bar (in note), ⌘R opens it with the replace pill too; ⇧⌘F opens the search
+  dialog across all open tabs — a note's text, a PDF's pages and a book's chapters alike (see Tabs).
   In vim mode `/` `?` are vim's own search, typed in the command pane (see Vim mode); `n` `N` `*` `#` repeat it;
   `:noh` clears highlights. ⌘F is the same bar in every mode, and closing it hands the highlights back to vim.
 - The find bar is a pill floating in the top-trailing corner of the column, over the text, with that column's mode
@@ -95,24 +95,28 @@
 - Replace is a **second pill**, not a taller one: the magnifying glass fades in another 300×34 pill of the same
   surface 6pt below the find one, holding an `arrow.2.squarepath` glyph, a replace field ("Replace") and two quiet
   words, `Replace` and `All`. It goes when the glass is clicked again and when the find pill closes; neither pill ever
-  changes size, and the mode control clears the whole stack. ⌥⌘F ("Find and Replace…") opens both, with the keyboard
+  changes size, and the mode control clears the whole stack. ⌘R ("Find and Replace…") opens both, with the keyboard
   in the replace field when there is already a query. Tab walks between the fields; there Return replaces and steps
   on, ⌥Return replaces all, Esc closes. The pill is remembered per column, not per tab.
 - Replace acts on the match you are standing on; clicked away, it steps to the next instead. The replacement is
   verbatim, never a pattern, and goes in as an ordinary edit — undo, the dirty flag, the save and vim all see one.
   Replace All changes every match, not only the 2000 wearing a band, in one undo, and leaves the caret where it was.
-  Over the rendered page and in any tab that is not editable the glass is a plain glyph and ⌥⌘F is ⌘F.
-- **Go to line** is the same pill again (done 2026-09-04): ⌘L ("Go to Line…") opens one with an
+  Over the rendered page and in any tab that is not editable the glass is a plain glyph and ⌘R is ⌘F.
+- **Jump to line** is the same pill again (done 2026-09-04): ⌘J ("Jump to Line…") opens one with an
   `arrow.right.to.line` glyph, a field ("Go to line"), the note's line total (`1,234 lines`) and a ✕. It takes `N` or
   `N:M`, 1-based, and moves as you type — to the first thing on line N that is not a space, or to column M clamped to
   the line's end, centred where there is room. Past the end is the last line; junk leaves the caret alone and reads
   `Not a line`. Return and the ✕ keep the place, Esc puts the caret and the scroll position back. Editor only, so the
-  menu item is disabled in reading mode and on a PDF or a picture. ⌘L and ⌘F share the corner; vim's `:N` is its own.
+  menu item is disabled in reading mode and on a PDF or a picture. ⌘J and ⌘F share the corner; vim's `:N` is its own.
 
 ## Editor
 - System font (SF Pro) 13pt default, full-width text, no line-width cap.
 - Line numbers in a left gutter (Settings toggle, default on). One number per hard line; wrapped continuation rows are blank.
   Settings toggle "Gutter separator" (default off) draws a hairline (separatorColor) along the gutter's inner edge.
+- Settings toggle "Highlight current line" (default off) draws a quiet full-width band (labelColor at 4%) under the
+  caret's line — the same band vim's `:set cursorline` draws. The two are independent inputs to one drawn state, so
+  `:set nocursorline` never turns off a band the preference asked for, and switching the preference off never
+  touches vim's own.
 - Settings toggle "Word wrap" (default on). Off: a long line runs on and the editor scrolls sideways; the gutter stays
   pinned at the left edge. The Markdown render always wraps.
 - Settings (⌘,): a source list of eight pages down the left — General, Appearance, Editor, Preview,
@@ -123,24 +127,31 @@
   rounded row filled in the accent colour. The pane beside it carries the page's title at the top,
   centred and bold, then the controls in inset rounded groups: a 10pt-radius card, a hairline between one
   44pt row and the next, the label left and the control on the right edge, an on/off setting wearing an
-  `NSSwitch` rather than a checkbox, and a quiet footnote under the group where one is owed. **General**
-  — language and theme ("System Default follows the Mac."). The language popup lists five, each naming
+  `NSSwitch` rather than a checkbox, and no footnotes: the three there were (under General, under the
+  Shortcuts list, and the tagline on About) went on 2026-09-07. **General**
+  — language and theme. The language popup lists five, each naming
   itself in its own script: System Default, English, 简体中文, 繁體中文, Bahasa Melayu. System Default reads
   the Mac's own preferred language — `zh-Hant` / `zh-TW` / `zh-HK` → 繁體中文, `zh-Hans` / `zh-CN` / bare
   `zh` → 简体中文, `ms` → Bahasa Melayu, anything else English. **Appearance** — font family, size, line
   spacing, editor padding, sidebar side (Left / Right, default Right). **Tab bar** — a first group of "Show tab bar" and "Auto-hide tab bar", then a
   second group for what the strip shows: Traffic lights, Bookmark button, Settings button; no footnote —
-  the keys (⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W) all keep working with the strip and its buttons hidden, but the page
+  the keys (⌘T, ⇧⌘J, ⇧⌘D, ⌘, and ⌘W) all keep working with the strip and its buttons hidden, but the page
   does not say so. "Auto-hide tab bar" and "Traffic lights" are both greyed while
   "Show tab bar" is off — turning the strip off already takes the lights with it, the way zen does, so
   there is nothing left for either row to do. Whenever the lights are gone from their corner, the strip
   takes their slot, starting at the same 12pt inset it uses beside a left sidebar; a tab torn off from it
   is placed under the pointer by the strip's current inset, not always the lights' 82pt.
-  **Editor** — word wrap, line numbers, gutter separator, vim mode. **Preview** — start supported files
-  in preview mode. **Status bar** — show status bar, then which regions it shows. **About** — the app
+  **Editor** — word wrap, line numbers, gutter separator, highlight current line, vim mode. **Preview** — start supported files
+  in preview mode. **Status bar** — show status bar, then which regions it shows. **Shortcuts** — Summon
+  first, then the menu commands under the menu each lives in; the sentence explaining Summon ("Summon
+  brings Nota to the front from any app, even while it is hidden.") is not a footnote under the group but
+  sits behind a `?` after the row's label, in a transient popover a click opens and a click anywhere else
+  closes. **About** — the app
   icon at 96pt, "Nota", `Version N.N.N`, one line saying what Nota is, and a **Check for Updates**
   button under it. The check is manual and remembered nowhere: pressing the button greys it and says
-  "Checking…", then one line replaces that. "Nota is up to date." when nothing newer is published (a
+  "Checking…", then one line replaces that, centred and wrapped at 360pt at most (it folded to a word a
+  line on 2026-09-07: a label that takes any width, in a stack that centres rather than stretches, was
+  given none). "Nota is up to date." when nothing newer is published (a
   version *ahead* of the newest release counts as up to date, so a development build is never offered a
   downgrade). "Nota 1.1.0 is available." with a **Download** button that opens the release page in the
   browser. On a copy installed with Homebrew the same answer reads "Nota 1.1.0 is available. Update
@@ -180,12 +191,15 @@
   in a group of its own, then one group per menu the commands live in — File, Window, Find, Edit, View,
   Nota — each under a small caption, one row per command. The page scrolls; the rest of the window does not.
   Adjustable: New Tab ⌘T, New Window ⇧⌘N, Open… ⌘O, Close Tab ⌘W, Save ⌘S, Save As… ⇧⌘S, Bookmark This
-  Tab ⌘D, Show Bookmarks… ⇧⌘D, Tabs Dialog ⌘P, Next Tab ⌃Tab, Previous Tab ⌃⇧Tab, Find… ⌘F, Find Next ⌘G,
-  Find Previous ⇧⌘G, Search All Notes… ⇧⌘F, Go to Line… ⌘L, Toggle Comment ⌘/, Indent ⌘], Outdent ⌘[,
-  Increase Font Size ⌘+, Decrease Font Size ⌘-, Actual Size ⌘0, Image Gallery ⌘B ("Table of
-  Contents" while a book or PDF tab is in front), Mode Toggle ⇧⌘P,
-  Reading Mode ⌥⇧⌘P, Zen Mode ⌥⌘Z, Settings… ⌘,. The system-standard items are not adjustable and are
-  reserved against: ⌘Q ⌘H ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A ⌘M, and neither is ⌘N, Nota's older new-tab key.
+  Tab ⌘D, Show Bookmarks… ⇧⌘D, Jump to Tab… ⇧⌘J, Next Tab ⌃Tab, Previous Tab ⌃⇧Tab, Find… ⌘F, Find Next ⌘G,
+  Find Previous ⇧⌘G, Search All Tabs… ⇧⌘F, Jump to Line… ⌘J, Toggle Comment ⌘/, Indent ⌘], Outdent ⌘[,
+  Increase Font Size ⌘+, Decrease Font Size ⌘-, Actual Size ⌘0, Sidebar ⌘B (the row's name; the View
+  item still reads "Image Gallery", "Table of Contents" or "Page List" by the tab in front), Mode Toggle ⌘P,
+  Reading Mode ⇧⌘P, Zen Mode ⌥⌘Z, Settings… ⌘,. On 2026-09-07 the Jump to Tab… moved from ⌘P to ⇧⌘J so Mode
+  Toggle could take ⌘P and Reading Mode ⇧⌘P (they were ⇧⌘P and ⌥⇧⌘P), and Find and Replace… became ⌘R
+  instead of ⌥⌘F; ⌘M stayed Minimize's. The system-standard items are not adjustable and are reserved
+  against: ⌘Q ⌘H ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A ⌘M, and neither is ⌘N, Nota's older new-tab key, nor ⌘R and ⌘E, the
+  two Find items that stay put.
   A row records the next combination you press: ⌘ or ⌃ has to be in it (⌘ with a letter is fine), Esc
   cancels, Delete puts the command's own key back. Edits are a draft like everything else here.
   Two rows on one combination, or a row on a reserved one, shows a red line naming both and holds Save
@@ -228,14 +242,14 @@
   at whatever view holds the keyboard and grey out over a rendered page, a PDF, a picture, the find field and in every
   vim mode but insert, where the same keys are vim's own.
 
-## Markdown preview — three modes (⇧⌘P cycles, View menu; per tab, remembered in the session)
-- **Editor** (default), **Split**, **Reading**. ⇧⌘P cycles editor → split → reading → editor; ⌥⇧⌘P jumps to reading and
+## Markdown preview — three modes (⌘P cycles, View menu; per tab, remembered in the session)
+- **Editor** (default), **Split**, **Reading**. ⌘P cycles editor → split → reading → editor; ⇧⌘P jumps to reading and
   back out to the editor. The View menu keeps "Mode Toggle" (checkmarked in split and reading) and adds
   "Reading Mode" (checkmarked in reading). Both checkmarks are the front tab's.
 - Rendered files only: a note whose file is spelled `.md` (`.markdown`, `.mdown`, `.mkd`; 2026-09-06), saved — or `.tex` (`.latex`, `.ltx`), which gets the LaTeX
   render below instead, or `.html` (`.htm`, `.xhtml`), which gets the HTML preview, and everything else here unchanged. Every
   other tab — an untitled note, a `.txt`, a `.css`, anything not yet saved — has no render, no mode control, and both
-  View items are disabled there, so ⇧⌘P and ⌥⇧⌘P do nothing.
+  View items are disabled there, so ⌘P and ⇧⌘P do nothing.
 - Split: a read-only rendered pane beside the editor (trailing side, resizable, 50% default, min 240pt); the image sidebar
   stays outermost. Reading: the editor collapses and the render takes its column. Either way the window keeps its frame —
   the panes share the room out between them. A mode you ask for slides across in 0.2s (Reduce Motion snaps; a tab switch
@@ -261,7 +275,7 @@
   the pill's height plus 6pt and goes on working underneath it rather than leaving, and the hover band grows by the same
   amount so the whole top of the column still reveals it. The move is instant — the bar fades, the control is simply
   lower by the time it arrives — and only the column whose bar is up moves its own; the other column's is untouched.
-- Reading has no automatic exits. The only ways out are the mode control, ⇧⌘P / ⌥⇧⌘P and the View menu — nothing you do
+- Reading has no automatic exits. The only ways out are the mode control, ⌘P / ⇧⌘P and the View menu — nothing you do
   to the page itself changes the mode. Clicking a block does nothing: no jump, no caret move, no block lit under it
   (links still open). Typing a printable character does nothing either — there is no editor on screen for it to land in.
   Arrow and page keys scroll the render, and ⌘F searches the render itself, opening Nota's own find bar in the corner
@@ -272,7 +286,7 @@
   the editor mode is the text alone; reading is the render alone. In split each column's top edge is then the window's
   own: nothing is held back for the traffic lights (they are gone), a 12pt drag band lies over each column's top
   padding, and both use zen's wider 40pt margin, so the two bodies of text line up. Coming out of zen brings the chrome back and nothing else.
-- Per tab, not per app: ⇧⌘P sets the mode of the tab in front only, and switching tabs lays out for the tab you land on —
+- Per tab, not per app: ⌘P sets the mode of the tab in front only, and switching tabs lays out for the tab you land on —
   a new ⌘T tab and a freshly opened file start in the editor. The mode rides in `session.json`, so each tab comes back the
   way it was left (a session written when the pane was a yes/no comes back split where it was open).
 - Settings "Open Markdown, LaTeX and HTML files in reading mode" (default off): opening a `.md`, `.tex` or `.html`
@@ -379,7 +393,7 @@
 
 ## Structured previews — `.json` `.yaml` `.toml` `.xml` (done 2026-09-06, Todo 30)
 - A `.json`, `.yaml` / `.yml`, `.toml` or `.xml` file is a tab with a preview beside it, exactly the way a `.sql` or
-  a `.csv` is: the same three modes, the same floating control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View
+  a `.csv` is: the same three modes, the same floating control in each column's corner, ⌘P / ⇧⌘P and the View
   items, per tab and remembered in the session, and the "open supported files in reading mode" setting opens one in
   reading like every other rendered kind. The View item is "Mode Toggle" there as everywhere.
   `RenderedPreviewKind.tree(StructuredFormat)` and `PreviewContentKind.tree` are the whole of the plumbing;
@@ -502,7 +516,7 @@
   (declared `Viewer` / `Alternate`, so nothing is taken over), and `:e path`. Opening one that is already open comes
   back to its tab.
 - The tab is locked in reading: the document takes the whole column, the editor stays collapsed, and there is no mode
-  control in either corner. ⇧⌘P, ⌥⇧⌘P and both View items do nothing there and are disabled — a PDF has no Markdown
+  control in either corner. ⌘P, ⇧⌘P and both View items do nothing there and are disabled — a PDF has no Markdown
   render to have a mode about.
 - A page fits the column's width but is never drawn past actual size (done 2026-09-04): `autoScales` is off and the
   scale is `min(scaleFactorForSizeToFit, 1)`, refitted when the column changes size, so a portrait page in a wide
@@ -574,7 +588,7 @@
 - Entry points are the same as any other file's: ⌘O, a drag onto the strip, the band or the render column, the Dock
   icon, Finder's "Open With", and `:e path`. Opening one that is already open comes back to its tab.
 - The tab is locked in reading, exactly as a PDF's is: the document takes the whole column, the editor stays
-  collapsed, there is no mode control in either corner, and ⇧⌘P, ⌥⇧⌘P and both View items do nothing there.
+  collapsed, there is no mode control in either corner, and ⌘P, ⇧⌘P and both View items do nothing there.
 - Read once with `NSAttributedString(url:options:documentAttributes:)`, which takes both flavours by the same URL and
   brings an RTFD's pictures along as attachments, and drawn in a read-only `NSTextView` inside a scroll view on the
   editor's own background, at the editor's own left and right margin — the one viewer whose content is text, so it
@@ -636,7 +650,7 @@
   `TextFile.isDrawing` is the single place that disagrees with the system, and `AssetStore.isImageFile`,
   `Note.isImageFile` and the deliberate exclusions all ask it.
 - The tab is locked in reading, exactly as a PDF's is: the picture takes the whole column, the editor stays collapsed,
-  there is no mode control in either corner, and ⇧⌘P, ⌥⇧⌘P and both View items are disabled.
+  there is no mode control in either corner, and ⌘P, ⇧⌘P and both View items are disabled.
 - Drawn by an `NSImageView` inside a scroll view, on the editor's own background, edge to edge. Its own size when the
   column is big enough to hold it, shrunk to fit when it is not, centred either way, and never blown up past its own
   pixels — a 16pt icon is a 16pt icon. A GIF animates.
@@ -665,7 +679,7 @@
   Contents" there. The line naming the chapter on screen is rung and follows along as chapters turn; clicking one
   goes to that chapter and to the `#anchor` it named. Zen takes the column the way it takes the gallery. A book whose
   contents are empty lists nothing and the column stays away. Nothing new is persisted. See Images for the column.
-- `@` in the ⌘P switcher lists nothing for a book tab: the contents are on screen beside the chapter now, and a list
+- `@` in the ⇧⌘J switcher lists nothing for a book tab: the contents are on screen beside the chapter now, and a list
   that closes the moment you choose from it is the wrong shape for a table of contents. A text note's `@` headings
   are unchanged.
 - Chapters turn with `→` / `←` or a page key at the end of a chapter. The page reports those keys rather than
@@ -693,7 +707,7 @@
 
 ## LaTeX preview (decided 2026-09-03)
 - A `.tex` (`.latex`, `.ltx`) file is a tab with a render beside it, the way a `.md` is: the same three modes, the same
-  floating mode control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the session.
+  floating mode control in each column's corner, ⌘P / ⇧⌘P and the View items, per tab and remembered in the session.
   The setting is "Open Markdown, LaTeX and HTML files in reading mode".
 - Native, no dependency, no WebView: Nota's own parser of a LaTeX subset into attributed text, the equations drawn by the
   maths engine the Markdown render already uses. Not TeX's pixels — Nota's reading layout of the document.
@@ -725,7 +739,7 @@
 
 ## HTML preview (decided 2026-09-03)
 - A `.html` (`.htm`) file is a tab with a preview beside it, the way a `.md` is: the same three modes, the same
-  floating mode control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the session.
+  floating mode control in each column's corner, ⌘P / ⇧⌘P and the View items, per tab and remembered in the session.
   The View item is "Mode Toggle" there as everywhere. The setting is "Open Markdown, LaTeX and HTML files in reading mode".
 - Drawn by WebKit (`WKWebView`): HTML is the one place a WebView is the native answer, the way PDFKit is for a PDF.
   The page is the page — CSS, the document's own type, scripts, images and stylesheets beside the file — not Nota's
@@ -783,7 +797,7 @@
 
 ## SQL preview (done 2026-09-05, Todo 6; second pass 6-A; third pass 6-B; the query's jump 6-C)
 - A `.sql` file is a tab with a preview beside it, the way a `.md` is: the same three modes, the same floating mode
-  control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the session. The View item
+  control in each column's corner, ⌘P / ⇧⌘P and the View items, per tab and remembered in the session. The View item
   is "Mode Toggle" there as everywhere. What stands in the column is not a rendering of the text — it is the database
   the text builds.
 - Run, not drawn. A dump is a program: the only way to know what `Shop.sql` holds is to run it. `SQLDump` opens a
@@ -914,7 +928,7 @@
 
 ## CSV preview (done 2026-09-06, Todo 27)
 - A `.csv` or `.tsv` file is a tab with a preview beside it, exactly the way a `.sql` is: the same three modes, the
-  same floating mode control in each column's corner, ⇧⌘P / ⌥⇧⌘P and the View items, per tab and remembered in the
+  same floating mode control in each column's corner, ⌘P / ⇧⌘P and the View items, per tab and remembered in the
   session, and the "open supported files in reading mode" setting opens one in reading like every other rendered
   kind. The View item is "Mode Toggle" there as everywhere. `RenderedPreviewKind.csv` and `PreviewContentKind.csv`
   are the whole of the plumbing; `CSVPreviewView` is the eighth content view the column holds.
@@ -1023,7 +1037,7 @@
   and the tab's kind alone says which of the three stands in it. The lines arrive as a title, a nesting level and
   the line's own number, and the pages as a count, a thumbnail and where the reader is; the content view they came
   from is the only thing that knows what going there means, so one column serves every kind. A line is 13pt, one
-  line truncated, indented 12pt a level, and the line naming what is on screen carries a grey wash — the ⌘P
+  line truncated, indented 12pt a level, and the line naming what is on screen carries a grey wash — the ⇧⌘J
   switcher's own selection rather than a blue document one. A page card is the gallery's own card with a `Page N`
   caption, and the one in front wears the gallery's accent wash. A picture tab has nothing to list and keeps the
   column away, and every editable tab — `.md`, `.tex`, `.html`, `.svg`, a plain note — is the gallery as before.
@@ -1031,7 +1045,10 @@
   secondary, at the list's leading margin (centred for an hour on 2026-09-06, then put back), with air above and below. `Images` over a note's pictures, `Contents`
   over a book's chapters, `Pages` over a document's pages. It sits at the top of the column, outside the scroll
   view, so it is still there when the list has been scrolled and still there when there is no list — an empty
-  gallery says `Images` over its `No images`. The View menu keeps the longer names, which a menu has room for:
+  gallery says `Images` over its `No images`. After the word sits a count in a small capsule, 10pt semibold
+  monospaced digits in the title's grey on a wash of it: how many pictures, how many pages, and over a book how
+  many chapters — the outermost level of the contents, not every section under them. `0` is worn like any other
+  number; the capsule is gone only while a column has not been told. The View menu keeps the longer names, which a menu has room for:
   "Image Gallery" over a note, "Table of Contents" over a book, "Page List" over a PDF, ⌘B and its tick unchanged in
   all three.
 - ⌘A ⌘C carries images (RTFD) to other apps, and when the selection holds exactly one image the picture also goes
@@ -1047,7 +1064,7 @@
 - Orphan assets are never auto-deleted, in the store or in a sidecar folder.
 
 ## Tabs
-- One width for every tab, `clamp((viewport − plus − gaps) / n, 40, 180)`, shrinking as tabs are added; the strip never scrolls. The selected tab is raised to 60pt so its ✕ fits and the others shrink evenly to pay for it. Titles clip with a fade rather than an ellipsis; under 60pt the trailing slot goes and the unsaved dot rides on the icon. A separator hairline shows only between two plain tabs. The + rides after the last tab and pins at the trailing edge once the strip is full; it opens a new tab (same as ⌘T). ⌘P fuzzy tab switcher by title.
+- One width for every tab, `clamp((viewport − plus − gaps) / n, 40, 180)`, shrinking as tabs are added; the strip never scrolls. The selected tab is raised to 60pt so its ✕ fits and the others shrink evenly to pay for it. Titles clip with a fade rather than an ellipsis; under 60pt the trailing slot goes and the unsaved dot rides on the icon. A separator hairline shows only between two plain tabs. The + rides after the last tab and pins at the trailing edge once the strip is full; it opens a new tab (same as ⌘T). ⇧⌘J fuzzy tab switcher by title.
 - There is no colour in the strip, so how much `labelColor` a shape carries is the only thing that says what state it
   is in. The selected tab is the strongest mark in it — a rounded fill at 10% (12% dark), its title in `labelColor` —
   and the pointer's wash on an unselected tab is a clear step lighter at 3.5% (5% dark), its title staying
@@ -1055,7 +1072,7 @@
   wash fades in and out over the same 0.12s the tab's dot→✕ cross-fade takes, rather than snapping on beside it. The
   strip buttons (+, bookmark, gear) wear the same wash and fade, one step darker at 9% (11.5% dark) while held; the
   disc behind a ✕ is 10% (13% dark) and 18% (22% dark) under a press.
-- The strip's top-right corner holds two buttons past the +: the bookmark button (the ⌘P picker in bookmarks mode) and, last before the reserve, a Settings gear (⌘, by another door). Both pin at the trailing edge; the tabs and the + step left by exactly the slots they take.
+- The strip's top-right corner holds two buttons past the +: the bookmark button (the ⇧⌘J picker in bookmarks mode) and, last before the reserve, a Settings gear (⌘, by another door). Both pin at the trailing edge; the tabs and the + step left by exactly the slots they take.
 - The switcher's first row sits above its search field and never filters away: "Add new tab", with a `plus`, which ↑ from the top of the list reaches and Return (or a click) turns into a new tab, ⌘T by another door. It is there in the `@` mode too. It is a one-row table of its own, sharing the list's cell view and taking the list's own resolved table style, so it is drawn as a list row — same inset, same rounded selection highlight, icon and title at the list rows' own x. In the bookmarks panel the row is the front tab's bookmark instead: "Bookmark this tab" with a `bookmark`, or "Remove bookmark from this tab" with `bookmark.fill` once it is one, and choosing it is ⇧⌘D by another door; with no tab to bookmark it is greyed and takes no selection.
 - Every tab carries a leading icon for its kind, in the strip and in the switcher's rows, from `FileKindIcon`: most kinds (Markdown, plain text/no extension, PDF, EPUB, HTML, TeX, SQL, JSON, YAML, TOML, XML, CSV, common code and image extensions, and more — see `FileKindIcon.artStem(forExtension:)`) draw this app's own hand-drawn icon set, embedded as SVG text in the generated `FileKindArt.swift`; a kind the set has no art for falls back to an SF Symbol — pictures without art `photo`, logs `list.bullet.rectangle`, remaining code extensions `chevron.left.forwardslash.chevron.right`, an unsaved note `doc`, anything else `text.page` — with an older spelling behind any SF Symbol the running system lacks. Heading rows keep their bare indent, with no icon.
 - `@` as the switcher's first character (Done 9) swaps the list for the front `.md` tab's headings, indented by level, and the rest of the query fuzzy-filters those instead; `MarkdownHeadings` reads them straight from the note's own text — ATX and setext, fences skipped the way `MarkdownSourceMap` skips them — off the main thread once a note is past `BigFile.threshold`. A tab that is not `.md` answers with a quiet "No headings" row.
@@ -1073,23 +1090,32 @@
   its leading icon — bottom-right, moving to the bottom-left on a tab narrow enough that the unsaved dot has already
   taken that corner. A `bookmark` button pins in the strip's top-right, in a 24pt slot of its own past where the +
   pins; `TabStripLayout` reserves it, so the tabs and the + step left by exactly that much and nothing subtracts it
-  twice. Pressing it opens the ⌘P panel in bookmarks mode: every bookmark, fuzzy-filtered by file name, ⌘⌫ (or ⌫ with
+  twice. Pressing it opens the ⇧⌘J panel in bookmarks mode: every bookmark, fuzzy-filtered by file name, ⌘⌫ (or ⌫ with
   the field empty) taking one off the list without closing the panel, and "No bookmarks" when there are none. Plain
-  ⌘P lists the bookmarks this window does not already have open under the tabs — both halves ranked by the same fuzzy
+  ⇧⌘J lists the bookmarks this window does not already have open under the tabs — both halves ranked by the same fuzzy
   match and merged by score, with an open tab taking any tie — carrying the `bookmark` symbol instead of a kind icon
   so they read as not-open-yet. A bookmark whose file has gone stays in the list, greyed to tertiary in the picker and
   disabled in the menu, and Return on it does nothing; it goes when it is removed by hand or by Remove Missing
   Bookmarks. Choosing one selects the tab if this window has the file open, and otherwise opens it, which is also what
   puts it in Open Recent.
-- **Search all notes** (Done 19). ⇧⌘F opens that same panel a third way: the field reads "Search all notes" and the
-  query runs over every open tab's text through `NoteSearch`, live as it is typed and capped at
-  `NoteSearch.resultLimit`. A row is one hit — the tab's title small on top with that tab's kind icon, the line the
+- **Search all tabs** (Done 19, 37). ⇧⌘F opens that same panel a third way: the field reads "Search all tabs" and the
+  query runs over every open tab through `NoteSearch`, live as it is typed and capped at `NoteSearch.resultLimit`.
+  What each tab hands the search is its own (`Note.searchSource`): a note hands its storage string, a PDF hands its
+  pages and a book hands its chapters, and a picture and a rich-text document hand nothing, there being nowhere in
+  either to reveal a hit. A viewer's text is pulled off the file the first time the dialog asks and held with the rest
+  of that tab's cache, so a second ⇧⌘F costs nothing and a file that changes under the tab is read afresh.
+  A row is one hit — the tab's title small on top with that tab's kind icon, the line the
   hit sits on under it with the matched characters in bold — so the rows are two lines tall rather than the list's
-  usual one. There is no fixed row above the field in this mode: nothing it could mean, so ↑ from the top of the list
-  stays put. An empty query lists nothing and says "Type to search all notes"; a query with no hits says "No results".
-  ↑↓ and the pointer move the selection, Return or a click switches to that hit's tab, selects the match and scrolls
-  it into view, and the query goes onto the find pasteboard so ⌘G carries on from there. Esc closes. The per-note find
-  bar (⌘F) is untouched.
+  usual one. A hit on a page says which page it is printed on before the line ("Page 2 · …"); a note's and a
+  chapter's say the line alone. There is no fixed row above the field in this mode: nothing it could mean, so ↑ from
+  the top of the list stays put. An empty query lists nothing and says "Type to search all tabs"; a query with no hits
+  says "No results".
+  ↑↓ and the pointer move the selection, and Return or a click switches to that hit's tab and reveals it where it
+  lives (`NoteSearchMatch.location`): a note's match is selected in the editor and scrolled in, a PDF's turns to its
+  page and is selected on it, and a book's turns to its chapter and puts the query to that chapter's own find with the
+  pill up — the reader lands on the chapter's first occurrence, the dialog having counted in the chapter's words and
+  the page counting in its own document. The query goes onto the find pasteboard either way, so ⌘G carries on from
+  there. Esc closes. The per-tab find bar (⌘F) is untouched.
 - A tab can move to another window: the note keeps its id, text, unsaved edits, caret and undo history, its cached
   text is never deleted on the way, and the window it left selects the neighbour (or keeps one untitled tab if it was
   the last). Dragging a tab out of the strip is that same move by hand: 40pt clear of the strip the tab becomes a
@@ -1160,6 +1186,54 @@
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+38. **The picker keeps the keyboard (done 2026-09-07).** The ⇧⌘J / ⇧⌘D / ⇧⌘F panel is a non-activating
+    floating panel that hides with Nota and comes back with it; on the way back key went to the main window,
+    so the field had no caret and Esc closed nothing until the field was clicked. `TabPickerPanel` now
+    listens for the app becoming active and for the panel becoming key, and if the panel is showing makes it
+    key and puts the caret back in the field (`refocusIfShowing`). Pinned by
+    `NotaTests.testThePickerTakesTheKeyboardBackWhenNotaReturns`.
+37. **⇧⌘F searches documents and books too (done 2026-09-07).** The dialog was a search of open *notes*; it is a
+    search of open *tabs* now, and it says so — "Search all tabs", "Type to search all tabs", in all four languages.
+    `NoteSearch` takes a `NoteSearchSource` per tab rather than a title and a string: `.text` for a note, `.pages`
+    for a document, `.chapters` for a book, each part searched on its own so a hit can say where it lives.
+    `NoteSearchMatch.location` is that answer — `.text(NSRange)`, `.pdf(page:range:)`, `.book(chapter:range:)` —
+    and `rangeInText` is still the range inside whatever run it was found in, so nothing that only ever had text
+    had to change. `Note.searchSource` builds one: a note's storage string, a document's pages through
+    `PDFPage.string`, a book's chapters through `EPUBBook.words(ofChapter:)`, which walks the XHTML and keeps
+    block elements on lines of their own. Whatever the file had to be read for is held on the note and dropped by
+    `discardLoadedContent`, so it is one read per tab and not one per keystroke. Revealing a hit is per kind:
+    `PDFPreviewView.reveal(page:range:query:)` goes to the page and hands `PDFFindSession.reveal` the
+    `PDFSelection` that range maps to (the pill stays down; the query is adopted so ⌘G walks on), and
+    `EPUBPreviewView.reveal(chapter:query:)` turns to the chapter and calls `HTMLFindSession.find`, which puts the
+    query in the pill and searches the page as it lands — the reader gets the chapter's first occurrence, the two
+    ends counting in different text. A page's row wears its number, "Page 2 · …". Pinned in `NotaTests` (the
+    locations and the snippets), `PDFTests` (a word on the second page found, chosen, and selected there) and
+    `EPUBTests` (a chapter's words, and a hit in the second chapter turning to it with the query put to its page).
+36. **Highlight current line (done 2026-09-07).** A Settings › Editor toggle for the quiet band vim's
+    `:set cursorline` already drew. `NotaTextView` takes two inputs now, `highlightsCurrentLine` (the
+    preference) and `vimCursorLine` (vim's own), and derives the drawn `showsCursorLine` as either one being
+    on — so `:set nocursorline` never dims a band the preference asked for, and the preference going off
+    never touches vim's. `Preferences.highlightsCurrentLine`, default off; `MainWindowController` pushes it to
+    the text view alongside the gutter separator. Pinned in `NotaTests` (the Settings draft and Save reaching
+    an open window) and `VimStage3Tests` (the two inputs not fighting).
+35. **Keys and chrome (done 2026-09-07).** Jump to Line… ⌘J (was Go to Line… ⌘L), Jump to Tab… ⇧⌘J (was Tabs
+    Dialog ⌘P), Mode Toggle ⌘P, Reading Mode ⇧⌘P, Find and Replace… ⌘R; Minimize keeps ⌘M (it was briefly given
+    to Mode Toggle, then put back). "Go to" reads "Jump to" in every title and translation; the code keeps
+    `goToLine` / `goToTab` / `GoToLine.swift`. The Shortcuts row for ⌘B is "Sidebar" and
+    ⇧⌘F's is "Search All Tabs…" (`ShortcutAction.titleKey`; the View item's per-tab name is untouched). The
+    three Settings footnotes are gone. In the find bar the glass wears a chevron where there is anything to
+    replace, pointing down and muted whether the pill is away or out, and the replace pill's arrows are a
+    button with a chevron up in the label colour that folds the pill away (`ReplaceBarView.onCollapse`); both drawn by `PillView.symbolWithChevron`.
+34. **Settings tidy-ups (done 2026-09-07).** The About page's update line is a plain wrapping label with a
+    360pt `preferredMaxLayoutWidth`, not a `WrappingLabel`: that class hugs and resists at low priority so a
+    stretched page can size it, and the centred About stack stretches nothing, so it folded to a word a line
+    in every language. Pinned by `NotaTests.testTheUpdateLineIsOneLineNotAColumn`. The Shortcuts page's Summon
+    footnote moved behind a `?` — `SettingsRowView` takes an `accessory` after its label, `row(help:)` makes the
+    `helpButton`, and `showHelp` opens one transient `NSPopover` with the sentence. Pinned in `ShortcutsTests`.
+33. **A count beside every sidebar title (done 2026-09-07).** `SidebarCountBadge` in `SidebarCards.swift`, worn by
+    `SidebarSectionHeader` after its word: the gallery sets it to its pictures, the page list to its pages, the
+    contents to its top-level titles (`ContentsEntry.level`'s minimum). Zero shows as `0`; only a header never
+    given a count goes without one. Pinned in `PDFTests`, `EPUBTests` and the gallery's own title test.
 32. **"Check for Updates" on the About page (done 2026-09-06).** Nota ships as a GitHub Release and a Homebrew
     cask, and a reader who installed it once had no way to learn a newer one existed short of visiting the repo.
     The About page asks now: one button, one anonymous request to the releases API, one line of answer, and
@@ -1401,7 +1475,7 @@
    the same length. Nothing about the render changed: a chip is a chip whichever link it came from, so the preview
    draws it through the same attachment it always did.
 22. **The sidebar becomes a table of contents for the tabs that are read, and the chapter bar goes (done
-   2026-09-05).** A book's contents were reachable only through `@` in the ⌘P switcher — a list that closed the
+   2026-09-05).** A book's contents were reachable only through `@` in the ⇧⌘J switcher — a list that closed the
    moment you chose from it, which is the wrong shape for the thing you navigate a book by — a PDF's outline was not
    reachable at all, and chapters turned with a pill floating in the column's bottom-trailing corner that the reader
    had no way to put away. All three are answered at once. The column a note's pictures stand in is now the
@@ -1446,7 +1520,7 @@
    insert mode, which was always the Mac's.
 19. **Search All Notes is a dialog (done 2026-09-05).** ⇧⌘F used to reveal a small `NSSearchField` in the strip's
    trailing corner with a drop-down of results hanging under it — a second piece of chrome, in a second shape, doing
-   what the ⌘P panel already does. It is now that panel's third mode: `TabPickerPanel.showSearch(notes:…)` alongside
+   what the ⇧⌘J panel already does. It is now that panel's third mode: `TabPickerPanel.showSearch(notes:…)` alongside
    `.tabs` / `.headings` / `.bookmarks`, same chrome, same field, same ↑↓ / hover / Return / Esc handling. Only the
    rows differ — two lines rather than one, the tab's title over the line the hit sits on — and the fixed row above
    the field is taken to no height at all, since a search has nothing to put there. `NoteSearch` is untouched and
@@ -1487,7 +1561,7 @@
    conversion the text cannot survive (`TextFile.canRepresent`, an emoji into Latin-1) is refused: the menu item is
    disabled rather than offered, with a tool tip saying why, and the old encoding stands. Empty over a PDF or a
    picture, which has no format of its own.
-3. **Go to line (done 2026-09-04).** ⌘L opens a pill in the find bar's own corner — the same `PillView` chrome, one
+3. **Go to line (done 2026-09-04).** ⌘J opens a pill in the find bar's own corner — the same `PillView` chrome, one
    row — taking `N` or `N:M` and moving the caret as you type, off the note's `LineIndex` rather than a scan. See the
    Search section above for what it does; `:N` still does it in vim, untouched.
 3. **EPUB viewer (done 2026-09-04; the second Todo 3, after Go to line above — code comments citing "Todo 3" mean
@@ -1526,7 +1600,7 @@
    as before. `NoteText` skips its regex when the text has no `](nota://` in it and `serialize` hands the string back
    when nothing is attached. A big note's cache write is debounced 2 s and done off the main thread.
    The storage's `string` bridges to Swift by copying: hot paths read `mutableString` instead.
-9. **Headings outline (done 2026-09-04).** `@` in the ⌘P switcher lists the front `.md` tab's headings; choosing one puts the caret there
+9. **Headings outline (done 2026-09-04).** `@` in the ⇧⌘J switcher lists the front `.md` tab's headings; choosing one puts the caret there
    and, in split/reading, scrolls the render to the block. Over a book the same `@` lists the book's own contents
    instead, and choosing one turns to that chapter (see Done 3, EPUB).
 11. **Fix the word-wrap re-flow lag in the split slide (done 2026-09-04).** With word wrap on, the editor's text
@@ -1557,7 +1631,7 @@
     into `FileKindArt.swift`; a kind the set has no art for falls back to an SF Symbol (pictures without art `photo`,
     `.log` `list.bullet.rectangle`, remaining code extensions `chevron.left.forwardslash.chevron.right`, untitled
     `doc`, the rest `text.page`), with an older spelling behind any SF Symbol this macOS does not have — and the
-    same icon in the ⌘P rows. Then, in this order:
+    same icon in the ⇧⌘J rows. Then, in this order:
     - **C. One press to select and drag (done 2026-09-03).** The first drag on a tab moved the window: native
       title-bar dragging and the tab's reorder gesture were running at the same time. Fix: `window.isMovable = false`
       turns the native drag off for the whole window; the strip refuses `mouseDownCanMoveWindow` and a press on empty

@@ -464,7 +464,7 @@ class RenderedPreviewView: NSView, PreviewContent {
 /// It takes the keyboard in reading mode only, where the editor is collapsed
 /// and something has to answer the arrow and page keys — and ⌘F, which opens
 /// a find bar over the render itself. Nothing here reaches back to the editor:
-/// reading mode is left through the mode control, ⇧⌘P / ⌥⇧⌘P or the View menu,
+/// reading mode is left through the mode control, ⌘P / ⇧⌘P or the View menu,
 /// and by nothing else.
 private final class PreviewTextView: NSTextView {
     var onClick: ((Int) -> Void)?

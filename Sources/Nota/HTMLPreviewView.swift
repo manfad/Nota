@@ -134,6 +134,14 @@ final class HTMLPreviewView: NSView, PreviewContent {
     /// How many matches the bar is counting, for the tests.
     var findMatchCount: Int? { findSession.matchCount }
 
+    /// The query the page is being searched for. It outlives the bar, the way
+    /// ⌘G does.
+    var findQuery: String { findSession.query }
+
+    /// A hit chosen in the ⇧⌘F dialog: the query is put to this page with the
+    /// pill up on it (SPEC Done 37).
+    func find(_ query: String) { findSession.find(query) }
+
     /// Run when the page has answered the find bar — for the tests, since
     /// every one of those answers crosses a process boundary and nothing else
     /// says when one has landed.

@@ -190,7 +190,8 @@ final class NotaTests: XCTestCase {
         }
         XCTAssertEqual(titles(on: 0), ["Language", "Theme"])
         XCTAssertEqual(titles(on: 1), ["Font", "Size", "Line spacing", "Padding", "Sidebar side"])
-        XCTAssertEqual(titles(on: 2), ["Word wrap", "Line numbers", "Gutter separator", "Vim mode"])
+        XCTAssertEqual(titles(on: 2), ["Word wrap", "Line numbers", "Gutter separator",
+                                       "Highlight current line", "Vim mode"])
         XCTAssertEqual(titles(on: 3), ["Start supported files in preview mode"])
         XCTAssertEqual(titles(on: 4), ["Show tab bar", "Auto-hide tab bar", "Traffic lights",
                                        "Bookmark button", "Settings button"])
@@ -364,7 +365,6 @@ final class NotaTests: XCTestCase {
         XCTAssertTrue(strings.contains("Nota"))
         XCTAssertTrue(strings.contains("Version \(AppVersion.current)"),
                       "no version line, only \(strings)")
-        XCTAssertTrue(strings.contains("A plain-text notebook."))
     }
 
     /// Theme is General's second row: Save puts it on the app as a whole,
@@ -436,10 +436,11 @@ final class NotaTests: XCTestCase {
         XCTAssertEqual(controller.pageTitles.first, "通用")
         XCTAssertEqual(controller.rows(on: 0).map(\.title), ["语言", "主题"])
 
-        // Footnotes are translated too.
+        // The popups' own items are translated too (the General footnote that
+        // used to be checked here went on 2026-09-07).
         let translated = allViews(in: root).compactMap { ($0 as? NSTextField)?.stringValue }
-        XCTAssertTrue(translated.contains("“跟随系统”由 Mac 决定。"),
-                      "the Theme footnote is still English: \(translated)")
+        XCTAssertTrue(translated.contains("跟随系统"),
+                      "the Theme popup is still English: \(translated)")
     }
 
     /// Sidebar side is Appearance's last row: the popup shows the side that
@@ -1224,7 +1225,7 @@ final class NotaTests: XCTestCase {
         XCTAssertTrue(NoteSearch.matches(query: "   ", in: notes).isEmpty)
         XCTAssertTrue(NoteSearch.matches(query: "\n", in: notes).isEmpty)
         XCTAssertTrue(NoteSearch.matches(query: "absent", in: notes).isEmpty)
-        XCTAssertTrue(NoteSearch.matches(query: "x", in: []).isEmpty)
+        XCTAssertTrue(NoteSearch.matches(query: "x", in: [NoteSearchSource]()).isEmpty)
 
         // An image is a single object-replacement character, so a query can
         // never match "inside" a picture.
@@ -1256,6 +1257,70 @@ final class NotaTests: XCTestCase {
         )
         // The text range still points at the real offset in the note.
         XCTAssertEqual(found?.rangeInText, NSRange(location: 300, length: 6))
+    }
+
+    /// A document is searched a page at a time and a book a chapter at a
+    /// time, and a hit says which one it came out of — the tab alone is not
+    /// somewhere a reader can be taken. A page's row says its number too,
+    /// since a line of a document has no other address.
+    func testSearchLocatesHitsInPagesAndChapters() {
+        let sources = [
+            NoteSearchSource(title: "notes.md", text: "a needle here"),
+            NoteSearchSource(
+                title: "paper.pdf",
+                parts: .pages(["nothing", "the needle on two", "needle three"])
+            ),
+            NoteSearchSource(
+                title: "book.epub", parts: .chapters(["one", "chapter two's needle"])
+            ),
+        ]
+
+        let results = NoteSearch.matches(query: "needle", in: sources)
+        XCTAssertEqual(results.map(\.tabIndex), [0, 1, 1, 2])
+        XCTAssertEqual(results.map(\.tabTitle), ["notes.md", "paper.pdf", "paper.pdf", "book.epub"])
+        XCTAssertEqual(results.map(\.location), [
+            .text(NSRange(location: 2, length: 6)),
+            .pdf(page: 1, range: NSRange(location: 4, length: 6)),
+            .pdf(page: 2, range: NSRange(location: 0, length: 6)),
+            .book(chapter: 1, range: NSRange(location: 14, length: 6)),
+        ])
+
+        // The old name for the range still answers, whichever run it is in.
+        XCTAssertEqual(results.map(\.rangeInText), results.map(\.location.range))
+
+        XCTAssertEqual(results.map(\.snippet), [
+            "a needle here",
+            "Page 2 · the needle on two",
+            "Page 3 · needle three",
+            "chapter two's needle",
+        ])
+        // The bolding follows the page number along.
+        for match in results {
+            XCTAssertEqual(
+                (match.snippet as NSString).substring(with: match.rangeInSnippet).lowercased(),
+                "needle"
+            )
+        }
+    }
+
+    /// The cap is across every part of every tab, not one per page, and a
+    /// part with nothing in it contributes nothing rather than an empty row.
+    func testSearchCapsAcrossPartsAndSkipsEmptyOnes() {
+        let page = String(repeating: "hit ", count: 150)
+        let document = NoteSearchSource(title: "big.pdf", parts: .pages([page, page, page]))
+        XCTAssertEqual(
+            NoteSearch.matches(query: "hit", in: [document]).count, NoteSearch.resultLimit
+        )
+
+        let sparse = NoteSearchSource(title: "book.epub", parts: .chapters(["", "hit", ""]))
+        XCTAssertEqual(NoteSearch.matches(query: "hit", in: [sparse]).map(\.location),
+                       [.book(chapter: 1, range: NSRange(location: 0, length: 3))])
+
+        XCTAssertTrue(
+            NoteSearch.matches(query: "hit", in: [
+                NoteSearchSource(title: "empty.pdf", parts: .pages([])),
+            ]).isEmpty
+        )
     }
 
     // MARK: - Chips and sidebar
@@ -1951,7 +2016,7 @@ final class NotaTests: XCTestCase {
 
     /// ⌘F opens Nota's own pill in the top-trailing corner, with the keyboard
     /// in its field. AppKit's focus ring on a search field is a thick
-    /// light-blue slab across the whole of it — the ⌘P picker already turns
+    /// light-blue slab across the whole of it — the ⇧⌘J picker already turns
     /// that off on its own field, and so does this one.
     ///
     /// The field gets a field editor of Nota's own, which is what keeps ⌘G
@@ -2293,9 +2358,67 @@ final class NotaTests: XCTestCase {
         )
     }
 
+    // MARK: - The picker keeps the keyboard
+
+    /// The picker hides with Nota and comes back with it, but key used to go
+    /// to the main window on the way back: no caret in the field, and Esc
+    /// closing nothing until the field was clicked. Now the field takes the
+    /// keyboard again whenever Nota is active with the picker showing.
+    @MainActor
+    func testThePickerTakesTheKeyboardBackWhenNotaReturns() throws {
+        _ = NSApplication.shared
+        let controller = MainWindowController(store: SessionStore(directory: try makeTemporaryDirectory()))
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFrontOffscreen()
+        let picker = controller.tabPickerPanel
+        defer { picker.hide(); window.orderOut(nil) }
+
+        controller.showTabPicker()
+        XCTAssertTrue(picker.isVisible)
+        XCTAssertTrue(picker.fieldHasFocus, "the field has the caret as soon as the picker opens")
+
+        // Key wanders off to the main window, as it does after a trip to
+        // another app or space.
+        controller.window?.makeKey()
+        XCTAssertFalse(picker.fieldHasFocus)
+
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+        XCTAssertTrue(picker.fieldHasFocus, "Nota is back, and so is the caret")
+
+        picker.hide()
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+        XCTAssertFalse(picker.isVisible, "a hidden picker is left hidden")
+    }
+
     // MARK: - The find bar: replacing
 
-    /// ⌥⌘F opens the same pill with its second row out, and Return in the
+    /// Both toggles wear a chevron, so they read as the toggles they are:
+    /// the glass points down and stays muted whether the replace pill is
+    /// away or out, and the arrows on the replace pill point up in the full
+    /// label colour — a click there folds the pill away, the mirror of the
+    /// glass that brought it out. Over a page with nothing to replace the
+    /// glass is a plain glyph.
+    @MainActor
+    func testTheGlassAndTheArrowsWearAChevronAndBothToggleThePill() throws {
+        let (_, textView, bar) = try makeFindBarController(text: "alpha beta")
+        perform(.showFindInterface, on: textView)
+        XCTAssertFalse(bar.isExpanded)
+        let plain = PillView.symbol("magnifyingglass", pointSize: 12, label: "Find")
+        XCTAssertGreaterThan(bar.magnifierButton.image?.size.width ?? 0, plain?.size.width ?? 0,
+                             "the glass carries a chevron after it")
+        XCTAssertEqual(bar.magnifierButton.image?.accessibilityDescription, "Find")
+
+        bar.magnifierButton.performClick(nil)
+        XCTAssertTrue(bar.isExpanded)
+        XCTAssertEqual(bar.replacePill.iconButton.image?.accessibilityDescription, "Replace")
+        XCTAssertEqual(bar.replacePill.iconButton.toolTip, "Hide Replace")
+
+        bar.replacePill.iconButton.performClick(nil)
+        XCTAssertFalse(bar.isExpanded, "the arrows fold the replace pill away")
+        XCTAssertFalse(bar.replacePill.isShown)
+    }
+
+    /// ⌘R opens the same pill with its second row out, and Return in the
     /// replace field changes the match being stood on and walks to the next.
     /// The edit goes in as an ordinary edit: one undo puts it back.
     @MainActor
@@ -2305,7 +2428,7 @@ final class NotaTests: XCTestCase {
         )
         perform(.showReplaceInterface, on: textView)
         XCTAssertTrue(bar.isShown)
-        XCTAssertTrue(bar.isExpanded, "⌥⌘F brings the second pill out with it")
+        XCTAssertTrue(bar.isExpanded, "⌘R brings the second pill out with it")
         XCTAssertTrue(bar.replacePill.isShown)
         XCTAssertEqual(bar.stackHeight, PillView.height + PillView.gap + PillView.height)
 
@@ -2403,7 +2526,7 @@ final class NotaTests: XCTestCase {
 
     // MARK: - Go to line
 
-    /// ⌘L opens its own pill in the same corner, saying how many lines there
+    /// ⌘J opens its own pill in the same corner, saying how many lines there
     /// are to aim inside.
     @MainActor
     func testCommandLOpensTheGoToLinePillWithTheLineTotal() throws {
@@ -2535,10 +2658,10 @@ final class NotaTests: XCTestCase {
 
         controller.showGoToLine()
         XCTAssertTrue(pill.isShown)
-        XCTAssertFalse(bar.isShown, "and ⌘L takes it back")
+        XCTAssertFalse(bar.isShown, "and ⌘J takes it back")
     }
 
-    /// A window with a note of 200 lines in it and ⌘L's pill to hand. Line 12
+    /// A window with a note of 200 lines in it and ⌘J's pill to hand. Line 12
     /// and every other line is indented, so "the first thing that is not a
     /// space" has something to mean.
     @MainActor
@@ -2551,7 +2674,7 @@ final class NotaTests: XCTestCase {
         return (controller, textView, pill)
     }
 
-    /// A number typed into ⌘L's field, as AppKit reports it.
+    /// A number typed into ⌘J's field, as AppKit reports it.
     @MainActor
     private func type(_ number: String, into pill: GoToLinePill) {
         pill.query = number
@@ -2560,7 +2683,7 @@ final class NotaTests: XCTestCase {
         )
     }
 
-    /// Return or Escape in ⌘L's field, as AppKit hands it to the delegate.
+    /// Return or Escape in ⌘J's field, as AppKit hands it to the delegate.
     @MainActor
     private func key(_ selector: Selector, in pill: GoToLinePill) throws {
         let editor = try XCTUnwrap(pill.field.currentEditor() as? NSTextView)
@@ -2848,6 +2971,61 @@ final class NotaTests: XCTestCase {
         XCTAssertTrue(Preferences(defaults: defaults).showsGutterSeparator)
         preferences.showsGutterSeparator = false
         XCTAssertFalse(Preferences(defaults: defaults).showsGutterSeparator)
+    }
+
+    func testHighlightCurrentLinePreferenceRoundTrips() throws {
+        let suite = "NotaTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults)
+
+        // Off until asked for, and it survives a fresh reader either way.
+        XCTAssertFalse(preferences.highlightsCurrentLine)
+        preferences.highlightsCurrentLine = true
+        XCTAssertTrue(Preferences(defaults: defaults).highlightsCurrentLine)
+        preferences.highlightsCurrentLine = false
+        XCTAssertFalse(Preferences(defaults: defaults).highlightsCurrentLine)
+    }
+
+    /// The Editor page's "Highlight current line" row is a draft like every
+    /// other switch: nothing changes until Save, and Save reaches an
+    /// already-open window's text view at once.
+    @MainActor
+    func testSavingHighlightCurrentLineAppliesToTheOpenWindow() throws {
+        _ = NSApplication.shared
+        let original = Preferences.shared.highlightsCurrentLine
+        defer { Preferences.shared.highlightsCurrentLine = original }
+        Preferences.shared.highlightsCurrentLine = false
+
+        let directory = try makeTemporaryDirectory()
+        let mainController = MainWindowController(store: SessionStore(directory: directory))
+        let editor = try XCTUnwrap(mainController.editorScrolling.textView as? NotaTextView)
+        XCTAssertFalse(editor.showsCursorLine)
+
+        let controller = SettingsWindowController.shared
+        defer { controller.selectPage(at: 0) }
+        controller.selectPage(at: 2)
+        XCTAssertEqual(controller.pageTitles[2], "Editor")
+        let toggle = try XCTUnwrap(
+            controller.rows(on: 2).first { $0.title == "Highlight current line" }?.control
+                as? NSSwitch
+        )
+        let root = try XCTUnwrap(controller.window?.contentView)
+        func allViews(in view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(allViews)
+        }
+        let save = try XCTUnwrap(
+            allViews(in: root).compactMap { $0 as? NSButton }.first { $0.title == "Save" }
+        )
+
+        toggle.state = .on
+        _ = NSApp.sendAction(try XCTUnwrap(toggle.action), to: toggle.target, from: toggle)
+        XCTAssertTrue(save.isEnabled)
+        XCTAssertFalse(editor.showsCursorLine, "nothing is written until Save")
+
+        save.performClick(nil)
+        XCTAssertTrue(Preferences.shared.highlightsCurrentLine)
+        XCTAssertTrue(editor.showsCursorLine, "vim is off, so this is the preference alone")
     }
 
     @MainActor
@@ -3884,6 +4062,32 @@ final class NotaTests: XCTestCase {
     }
 
     // MARK: - Check for Updates (About page)
+
+    /// The line under the button once folded to a word a line — a label that
+    /// takes whatever width it is given, in a stack that centres its blocks
+    /// and so gives none. It wraps at a width of its own now, and one short
+    /// sentence is one line.
+    @MainActor
+    func testTheUpdateLineIsOneLineNotAColumn() throws {
+        _ = NSApplication.shared
+        let controller = SettingsWindowController.shared
+        defer {
+            controller.resetUpdateStateForTesting()
+            controller.selectPage(at: 0)
+        }
+        XCTAssertTrue(controller.selectPage(titled: "About"))
+        let controls = controller.updateControlsForTesting
+        controller.updateCheckForTesting = { answer in answer(.upToDate(AppVersion.current)) }
+        controls.check.performClick(nil)
+        XCTAssertEqual(controls.status.stringValue, "Nota is up to date.")
+
+        controller.window?.contentView?.layoutSubtreeIfNeeded()
+        let line = controls.status.font.map { NSLayoutManager().defaultLineHeight(for: $0) } ?? 15
+        XCTAssertLessThan(controls.status.frame.height, line * 2,
+                          "one sentence is one line, not a column of words")
+        XCTAssertGreaterThan(controls.status.frame.width, 100,
+                             "the label is as wide as its sentence")
+    }
 
     /// The About page carries the button, and pressing it with a stubbed
     /// check draws each answer. Nothing here reaches the network.

@@ -186,6 +186,7 @@ final class Preferences {
         static let padding = "editorPadding"
         static let lineNumbers = "showsLineNumbers"
         static let gutterSeparator = "showsGutterSeparator"
+        static let highlightsCurrentLine = "highlightsCurrentLine"
         static let wordWrap = "wrapsLines"
         static let sidebarSide = "sidebarSide"
         static let plainTextImageStyle = "plainTextImageStyle"
@@ -328,6 +329,18 @@ final class Preferences {
         set {
             guard newValue != showsGutterSeparator else { return }
             defaults.set(newValue, forKey: Key.gutterSeparator)
+            announce()
+        }
+    }
+
+    /// A quiet band under the caret's line. Off by default; vim's own
+    /// `:set cursorline` is independent and can light the same band without
+    /// touching this.
+    var highlightsCurrentLine: Bool {
+        get { defaults.object(forKey: Key.highlightsCurrentLine) as? Bool ?? false }
+        set {
+            guard newValue != highlightsCurrentLine else { return }
+            defaults.set(newValue, forKey: Key.highlightsCurrentLine)
             announce()
         }
     }

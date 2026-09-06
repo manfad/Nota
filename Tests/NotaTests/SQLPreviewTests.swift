@@ -42,7 +42,7 @@ final class SQLPreviewTests: XCTestCase {
     func testADumpHasTheThreeModesAndAPlainTextFileHasNone() throws {
         let dump = makeNote(named: "Shop.sql", text: "CREATE TABLE t (a);")
         XCTAssertEqual(dump.previewKind, .sql)
-        XCTAssertTrue(dump.supportsRenderedPreview, "so ⇧⌘P and the control mean something")
+        XCTAssertTrue(dump.supportsRenderedPreview, "so ⌘P and the control mean something")
         XCTAssertTrue(dump.hasPreviewContent)
         dump.previewMode = .split
         XCTAssertEqual(dump.previewMode, .split)

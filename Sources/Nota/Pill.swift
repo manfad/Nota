@@ -19,7 +19,7 @@ protocol PillActionResponder: AnyObject {
 /// control drops below the whole stack.
 ///
 /// A pill carries one row and no more. ⌘F's query is one, its replacement is a
-/// second below it, and ⌘L's line number is another that stands alone. What
+/// second below it, and ⌘J's line number is another that stands alone. What
 /// goes in the row is the subclass's business; the surface, the fade and the
 /// glyphs' quiet colouring are all here.
 class PillView: NSView {
@@ -218,6 +218,38 @@ class PillView: NSView {
         )
         quiet?.isTemplate = false
         return quiet
+    }
+
+    /// A symbol with a small chevron after it, drawn as one image so a
+    /// glyph button can wear both: the chevron is what says "this opens
+    /// something". `up` for a control whose something is already out.
+    static func symbolWithChevron(
+        _ name: String, pointSize: CGFloat, label: String,
+        colour: NSColor = .secondaryLabelColor, up: Bool
+    ) -> NSImage? {
+        guard let glyph = symbol(name, pointSize: pointSize, label: label, colour: colour),
+              let chevron = symbol(up ? "chevron.up" : "chevron.down", pointSize: 6,
+                                   label: "", colour: colour)
+        else { return nil }
+        let gap: CGFloat = 1
+        let size = NSSize(
+            width: glyph.size.width + gap + chevron.size.width,
+            height: max(glyph.size.height, chevron.size.height)
+        )
+        let image = NSImage(size: size, flipped: false) { _ in
+            glyph.draw(in: NSRect(
+                x: 0, y: (size.height - glyph.size.height) / 2,
+                width: glyph.size.width, height: glyph.size.height
+            ))
+            chevron.draw(in: NSRect(
+                x: glyph.size.width + gap, y: (size.height - chevron.size.height) / 2,
+                width: chevron.size.width, height: chevron.size.height
+            ))
+            return true
+        }
+        image.accessibilityDescription = label
+        image.isTemplate = false
+        return image
     }
 
     static func glyphView(_ image: NSImage?) -> NSImageView {

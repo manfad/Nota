@@ -619,7 +619,7 @@ final class MarkdownPreviewTests: XCTestCase {
     // MARK: - The window
 
     /// The menu's checkmark is the front tab's answer, not the app's, and
-    /// ⇧⌘P walks it round all three modes.
+    /// ⌘P walks it round all three modes.
     @MainActor
     func testTheViewMenuTogglesThePaneForTheTabInFront() throws {
         _ = NSApplication.shared
@@ -641,7 +641,7 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(controller.previewMode, .off)
     }
 
-    /// ⇧⌘P on one tab is about that tab. Opening the pane on a Markdown note
+    /// ⌘P on one tab is about that tab. Opening the pane on a Markdown note
     /// must not follow you into the next one.
     @MainActor
     func testThePaneBelongsToTheTabItWasOpenedOn() throws {
@@ -845,7 +845,7 @@ final class MarkdownPreviewTests: XCTestCase {
         )
     }
 
-    /// ⇧⌘P cycles through reading, where the preview holds the full column.
+    /// ⌘P cycles through reading, where the preview holds the full column.
     /// Coming back into split must not reopen at that full width — that plus
     /// the editor's minimum is what used to grow the window past the screen,
     /// and each cycle compounded it.
@@ -899,7 +899,7 @@ final class MarkdownPreviewTests: XCTestCase {
     }
 
     /// The mode you ask for slides. On a window somebody is actually looking
-    /// at, ⇧⌘P starts a 0.2s animation rather than snapping — and it is over
+    /// at, ⌘P starts a 0.2s animation rather than snapping — and it is over
     /// by the time the run loop has turned for half a second.
     @MainActor
     func testAModeSwitchYouAskForSlides() throws {
@@ -911,7 +911,7 @@ final class MarkdownPreviewTests: XCTestCase {
         try XCTSkipUnless(window.isVisible, "no window server here — nothing slides")
 
         controller.setPreviewMode(.split)
-        XCTAssertTrue(controller.isSlidingPreviewMode, "⇧⌘P slides the columns over")
+        XCTAssertTrue(controller.isSlidingPreviewMode, "⌘P slides the columns over")
         settle(0.5)
         XCTAssertFalse(controller.isSlidingPreviewMode, "and the slide finishes")
 
@@ -1025,7 +1025,7 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(controller.editorScrolling.container?.widthTracksTextView ?? false)
     }
 
-    /// ⇧⌘P is a key people hold down. At any cadence — twenty taps inside
+    /// ⌘P is a key people hold down. At any cadence — twenty taps inside
     /// one 0.2s slide, or taps spaced just under and just over it — the
     /// window comes out the size it went in, and split comes back at the
     /// divider it was left at rather than the full width reading gave the
@@ -1133,7 +1133,7 @@ final class MarkdownPreviewTests: XCTestCase {
         }
     }
 
-    /// ⇧⌘P goes round: split → reading → off → split. The divider has to be
+    /// ⌘P goes round: split → reading → off → split. The divider has to be
     /// where it was left when the cycle comes back to it — the whole way
     /// round, not only on the short hop out of reading. Going through the
     /// editor mode is the hard part: the preview is collapsed there, holding
@@ -1155,7 +1155,7 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(try splitFraction(of: controller), 0.5, accuracy: 0.02, "50/50 to start")
 
         for round in 1 ... 3 {
-            // The whole lap, one ⇧⌘P at a time.
+            // The whole lap, one ⌘P at a time.
             for mode in [PreviewMode.reading, .off, .split] {
                 controller.toggleMarkdownPreview()
                 settle(0.4)
@@ -2038,7 +2038,7 @@ final class MarkdownPreviewTests: XCTestCase {
 
     // MARK: - Headings outline (Todo 9)
 
-    /// `@` in the ⌘P switcher lists the front tab's headings, in document
+    /// `@` in the ⇧⌘J switcher lists the front tab's headings, in document
     /// order, in place of the tab list.
     @MainActor
     func testAtInThePickerListsTheFrontTabsHeadingsInOrder() throws {
@@ -2358,7 +2358,7 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(picker.visibleRowSymbolNames.isEmpty)
     }
 
-    // MARK: - Search all notes
+    // MARK: - Search all tabs
 
     /// ⇧⌘F is the same panel as ⌘P, in a mode of its own: no fixed row above
     /// the field, and nothing listed until something is typed.
@@ -2488,7 +2488,7 @@ final class MarkdownPreviewTests: XCTestCase {
 
     // MARK: - Reading mode
 
-    /// ⌥⇧⌘P is the shortcut for the render on its own: straight to it from
+    /// ⇧⌘P is the shortcut for the render on its own: straight to it from
     /// wherever the tab was, and straight back out of it.
     @MainActor
     func testReadingModeJumpsStraightThereAndBackAgain() throws {
@@ -3124,7 +3124,7 @@ final class MarkdownPreviewTests: XCTestCase {
 
     /// The rule is the file: a saved `.md` gets the control, and nothing else
     /// does — not a `.txt`, not an untitled note; `.markdown` is a spelling of
-    /// `.md` and gets it too. ⇧⌘P and ⌥⇧⌘P do nothing where there is no control.
+    /// `.md` and gets it too. ⌘P and ⇧⌘P do nothing where there is no control.
     @MainActor
     func testOnlyMarkdownTabsGetTheModeControl() throws {
         _ = NSApplication.shared
@@ -3146,9 +3146,9 @@ final class MarkdownPreviewTests: XCTestCase {
                 try hover(overlay, entering: true)
                 XCTAssertFalse(overlay.isRevealed, "\(name): hovering brings back nothing")
                 controller.toggleMarkdownPreview()
-                XCTAssertEqual(controller.previewMode, .off, "\(name): ⇧⌘P has nothing to do")
+                XCTAssertEqual(controller.previewMode, .off, "\(name): ⌘P has nothing to do")
                 controller.toggleReadingMode()
-                XCTAssertEqual(controller.previewMode, .off, "\(name): nor has ⌥⇧⌘P")
+                XCTAssertEqual(controller.previewMode, .off, "\(name): nor has ⇧⌘P")
             }
         }
 
@@ -3313,7 +3313,7 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(editorOverlay.findBarClearance, ModeControlOverlay.findBarDrop)
     }
 
-    /// There is nothing to replace on a page you are reading: ⌥⌘F there is
+    /// There is nothing to replace on a page you are reading: ⌘R there is
     /// ⌘F, and the glass is only a glass.
     @MainActor
     func testTheRenderedPageHasNoReplacePill() throws {
@@ -3334,7 +3334,7 @@ final class MarkdownPreviewTests: XCTestCase {
         rendered.performTextFinderAction(showReplace)
         window.layoutIfNeeded()
 
-        XCTAssertTrue(bar.isShown, "⌥⌘F over the page is ⌘F")
+        XCTAssertTrue(bar.isShown, "⌘R over the page is ⌘F")
         XCTAssertFalse(bar.canReplace)
         XCTAssertFalse(bar.isExpanded)
         XCTAssertFalse(bar.replacePill.isShown)
@@ -3350,7 +3350,7 @@ final class MarkdownPreviewTests: XCTestCase {
         )
     }
 
-    /// ⌘L's pill takes the same corner, and the mode control drops below it
+    /// ⌘J's pill takes the same corner, and the mode control drops below it
     /// exactly as it does for ⌘F's.
     @MainActor
     func testTheModeControlDropsForTheGoToLinePill() throws {
@@ -3389,7 +3389,7 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(editorOverlay.findBarClearance, 0)
     }
 
-    /// Reading mode has no editor on screen to jump about in, so ⌘L is not
+    /// Reading mode has no editor on screen to jump about in, so ⌘J is not
     /// offered there and does nothing if it is asked for anyway.
     @MainActor
     func testReadingModeIgnoresGoToLine() throws {
@@ -3422,7 +3422,7 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(control.selectedSegment, 0)
 
         controller.toggleMarkdownPreview()
-        XCTAssertEqual(control.selectedSegment, 1, "⇧⌘P moves the control with it")
+        XCTAssertEqual(control.selectedSegment, 1, "⌘P moves the control with it")
         controller.toggleMarkdownPreview()
         XCTAssertEqual(control.selectedSegment, 2)
 
@@ -3525,9 +3525,11 @@ final class MarkdownPreviewTests: XCTestCase {
 
         sidebar.setAssetIDs(["a.png", "b.png"])
         XCTAssertEqual(sidebar.headerTitle, "Images")
+        XCTAssertEqual(sidebar.headerCount, 2, "the badge after the title counts the pictures")
 
         sidebar.setAssetIDs([])
         XCTAssertEqual(sidebar.headerTitle, "Images", "the column still says what it is for")
+        XCTAssertEqual(sidebar.headerCount, 0, "and the badge reads 0 rather than going away")
     }
 
     // MARK: - Helpers

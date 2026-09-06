@@ -105,6 +105,7 @@ final class PageListSidebarView: NSView {
     func setPages(_ source: PageListSource?, force: Bool = false) {
         header.title = L10n.text("Pages")
         let count = source?.pageCount ?? 0
+        header.count = count
         let identity = source?.pageListIdentity
         let sameList = identity != nil && identity == pagesIdentity && count == cards.count
         pages = source
@@ -211,6 +212,7 @@ final class PageListSidebarView: NSView {
     /// The title standing over the column, which it always has: it says what
     /// the column is for, empty or not.
     var headerTitle: String { header.title }
+    var headerCount: Int? { header.count }
 
     /// As if a card had been clicked — the tests have no window server to
     /// move a pointer through.

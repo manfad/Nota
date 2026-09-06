@@ -225,6 +225,19 @@ final class PDFPreviewView: NSView, PreviewContent, PageListSource {
         onPositionChange?(currentPageIndex)
     }
 
+    /// A hit chosen in the ⇧⌘F dialog (SPEC Done 37): the page it is printed
+    /// on comes up and the match itself is selected on it. The range is into
+    /// that page's own `string` — the text the search read — so PDFKit maps it
+    /// straight back to the marks it was taken from.
+    func reveal(page index: Int, range: NSRange, query: String) {
+        guard let document = pdfView.document, index >= 0, index < document.pageCount,
+              let page = document.page(at: index)
+        else { return }
+        goToPage(index)
+        guard let selection = page.selection(for: range) else { return }
+        findSession.reveal(selection, for: query)
+    }
+
     func thumbnail(forPage index: Int, completion: @escaping (NSImage?) -> Void) {
         guard let thumbnails else { return completion(nil) }
         thumbnails.thumbnail(forPage: index, completion: completion)

@@ -3,8 +3,8 @@ import AppKit
 /// The offer a tab makes when its file has changed on disk while the tab had
 /// edits of its own: take the file's text, or keep what is in the editor.
 ///
-/// The same chrome the find bar and ⌘L's pill are made of, in the editor
-/// column's *other* corner. The top-trailing one belongs to ⌘F and ⌘L, which
+/// The same chrome the find bar and ⌘J's pill are made of, in the editor
+/// column's *other* corner. The top-trailing one belongs to ⌘F and ⌘J, which
 /// send each other away as they arrive; this is not a tool the reader opened,
 /// it is the file speaking up, and it has to be able to stand there while a
 /// search is open — so it takes the bottom-trailing corner and leaves the

@@ -91,7 +91,7 @@ final class ShortcutsTests: XCTestCase {
         let preferences = Preferences(defaults: defaults)
 
         XCTAssertEqual(preferences.shortcuts, [:], "nothing is stored until something moves")
-        XCTAssertEqual(preferences.combo(for: .goToTab), KeyCombo("p"))
+        XCTAssertEqual(preferences.combo(for: .goToTab), KeyCombo("j", [.command, .shift]))
 
         preferences.shortcuts = [.goToTab: KeyCombo("j", [.command, .option])]
         XCTAssertEqual(preferences.combo(for: .goToTab), KeyCombo("j", [.command, .option]))
@@ -116,19 +116,48 @@ final class ShortcutsTests: XCTestCase {
 
         let delegate = try makeDelegate()
         delegate.buildMenu()
-        let before = try XCTUnwrap(item(titled: "Tabs Dialog"))
-        XCTAssertEqual(before.keyEquivalent, "p")
-        XCTAssertEqual(before.keyEquivalentModifierMask, [.command])
+        let before = try XCTUnwrap(item(titled: "Jump to Tab…"))
+        XCTAssertEqual(before.keyEquivalent, "j")
+        XCTAssertEqual(before.keyEquivalentModifierMask, [.command, .shift])
 
         Preferences.shared.shortcuts = [.goToTab: KeyCombo("j", [.command, .option])]
         delegate.perform(Selector(("preferencesChanged")))
 
-        let after = try XCTUnwrap(item(titled: "Tabs Dialog"))
+        let after = try XCTUnwrap(item(titled: "Jump to Tab…"))
         XCTAssertEqual(after.keyEquivalent, "j")
         XCTAssertEqual(after.keyEquivalentModifierMask, [.command, .option])
         XCTAssertEqual(try XCTUnwrap(item(titled: "Save")).keyEquivalent, "s",
                        "the rest of the menu is unmoved")
     }
+    /// The sentence about Summon is not a footnote under the group any more:
+    /// it sits behind a `?` after the row's label, and a click on it opens a
+    /// popover that says it. The popover is transient, so a click anywhere
+    /// else puts it away.
+    @MainActor
+    func testTheSummonExplanationSitsBehindAHelpButton() throws {
+        _ = NSApplication.shared
+        let controller = SettingsWindowController.shared
+        defer { controller.selectPage(at: 0); controller.window?.orderOut(nil) }
+        XCTAssertTrue(controller.selectPage(titled: "Shortcuts"))
+        controller.window?.makeKeyAndOrderFrontOffscreen()
+
+        let help = controller.summonHelpForTesting
+        let button = try XCTUnwrap(help.button, "a ? follows the Summon label")
+        XCTAssertEqual(button.bezelStyle, .helpButton)
+        XCTAssertFalse(help.popover.isShown)
+
+        button.performClick(nil)
+        XCTAssertTrue(help.popover.isShown, "a click opens the popover")
+        XCTAssertEqual(help.popover.behavior, .transient)
+        let text = help.popover.contentViewController?.view.subviews
+            .compactMap { $0 as? NSTextField }.first?.stringValue
+        XCTAssertEqual(text, "Summon brings Nota to the front from any app, even while it is hidden.")
+        let size = help.popover.contentSize
+        XCTAssertGreaterThan(size.width, 200, "the sentence is laid out wide, not folded to nothing")
+        XCTAssertLessThan(size.height, 80, "two or three lines, not a column")
+        help.popover.performClose(nil)
+    }
+
 
     /// The bookmarks toggle is built once and kept, so its key has to be
     /// rewritten on every rebuild rather than only on the first.
@@ -204,7 +233,7 @@ final class ShortcutsTests: XCTestCase {
         XCTAssertFalse(save.isEnabled, "a fresh draft has nothing to save")
 
         let row = try XCTUnwrap(field(for: .goToTab, in: root))
-        XCTAssertEqual(row.combo, KeyCombo("p"))
+        XCTAssertEqual(row.combo, KeyCombo("j", [.command, .shift]))
         row.recordForTesting(keyEvent("j", [.command, .option]))
 
         XCTAssertEqual(row.combo, KeyCombo("j", [.command, .option]))
@@ -218,7 +247,7 @@ final class ShortcutsTests: XCTestCase {
         // Delete puts the command's own key back, which is not an override at
         // all, so the table empties again.
         row.recordForTesting(keyEvent("\u{8}", [], keyCode: 51))
-        XCTAssertEqual(row.combo, KeyCombo("p"))
+        XCTAssertEqual(row.combo, KeyCombo("j", [.command, .shift]))
         save.performClick(nil)
         XCTAssertEqual(Preferences.shared.shortcuts, [:])
     }
@@ -290,7 +319,7 @@ final class ShortcutsTests: XCTestCase {
             $0.title == "Reset to Defaults"
         })
         reset.performClick(nil)
-        XCTAssertEqual(row.combo, KeyCombo("p"))
+        XCTAssertEqual(row.combo, KeyCombo("j", [.command, .shift]))
         XCTAssertFalse(Preferences.shared.shortcuts.isEmpty, "still only a draft")
 
         let save = try XCTUnwrap(descendant(of: root, ofType: NSButton.self) {

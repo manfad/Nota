@@ -794,6 +794,30 @@ final class VimStage3Tests: XCTestCase {
         XCTAssertEqual(harness.host.messages.last, "E518: Unknown option: zebra")
     }
 
+    /// The Settings preference and vim's `cursorline` are two separate inputs
+    /// to the same band, so neither can switch off what the other asked for.
+    func testCursorlinePreferenceAndVimDoNotFightOverTheBand() throws {
+        let harness = try makeHarness("alpha")
+
+        // The preference on: vim turning its own half off leaves the band lit.
+        harness.view.highlightsCurrentLine = true
+        XCTAssertTrue(harness.view.showsCursorLine)
+        harness.run("set nocursorline")
+        XCTAssertFalse(harness.engine.cursorLine)
+        XCTAssertTrue(harness.view.showsCursorLine, "the preference keeps the band on")
+        harness.run("set cursorline")
+        XCTAssertTrue(harness.view.showsCursorLine)
+
+        // The preference off: vim's on/off still works exactly as before.
+        harness.view.highlightsCurrentLine = false
+        harness.run("set nocursorline")
+        XCTAssertFalse(harness.view.showsCursorLine)
+        harness.run("set cursorline")
+        XCTAssertTrue(harness.view.showsCursorLine)
+        harness.run("set nocursorline")
+        XCTAssertFalse(harness.view.showsCursorLine)
+    }
+
     // MARK: - The scratch tabs
 
     func testHelpRegistersAndMarksOpenScratchTabs() throws {

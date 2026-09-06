@@ -81,7 +81,7 @@ final class EPUBTests: XCTestCase {
         XCTAssertFalse(Note.isEPUBFile(URL(fileURLWithPath: "/tmp/notes.md")))
     }
 
-    /// The strip's icon, and the same one in the ⌘P switcher's rows.
+    /// The strip's icon, and the same one in the ⇧⌘J switcher's rows.
     func testABookWearsTheBookIcon() {
         XCTAssertEqual(FileKindIcon.symbolName(forTitle: "novel.epub"), "filetype-epub")
         XCTAssertEqual(
@@ -363,6 +363,8 @@ final class EPUBTests: XCTestCase {
                        "the chapter on screen is the line that is rung")
         XCTAssertEqual(controller.contentsSidebarView.headerTitle, "Contents",
                        "the one word saying what the column is listing")
+        XCTAssertEqual(controller.contentsSidebarView.headerCount, 3,
+                       "the badge after the title counts the chapters, not the sections under them")
         XCTAssertTrue(controller.pageListSidebarView.isHidden,
                       "a book is read by its chapters; it has no pages to lay out")
         XCTAssertEqual(controller.sidebarListTitle, "Table of Contents",
@@ -507,6 +509,68 @@ final class EPUBTests: XCTestCase {
         XCTAssertTrue(bar.isShown)
         XCTAssertTrue(pane.isFindBarVisible)
         XCTAssertEqual(controller.previewMode, .reading)
+    }
+
+    // MARK: - ⇧⌘F over the book
+
+    /// A book's words come out of its chapters with the markup left behind
+    /// (SPEC Done 37): block elements keep their lines apart, so a hit's
+    /// snippet is the paragraph it sits in, and a stylesheet is not words.
+    func testAChaptersWordsAreItsTextWithTheMarkupLeftBehind() throws {
+        let book = try XCTUnwrap(EPUBBook.open(try makeEPUB3(named: "novel.epub")))
+        let second = book.words(ofChapter: 1)
+        let lines = second.components(separatedBy: "\n")
+
+        XCTAssertEqual(Array(lines.prefix(4)),
+                       ["The Middle", "A Second Part", "Line 1", "Line 2"],
+                       "a heading and a paragraph are each a line of their own")
+        XCTAssertFalse(second.contains("<"), "no markup came through")
+        XCTAssertFalse(second.contains("style.css"), "and no stylesheet either")
+        XCTAssertFalse(book.words(ofChapter: 0).contains("A Second Part"),
+                       "a chapter's words are its own")
+        XCTAssertEqual(book.words(ofChapter: 9), "", "a chapter that is not there has none")
+    }
+
+    /// A book is part of the search across tabs: a hit in one of its chapters
+    /// is listed like any other, and choosing it turns to that chapter and
+    /// puts the query to it.
+    @MainActor
+    func testSearchAllTabsFindsAndRevealsAHitInAChapter() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makeEPUB3(named: "novel.epub"))
+        let pane = controller.previewPanes.epub
+        XCTAssertEqual(pane.chapterIndex, 0)
+
+        let picker = controller.tabPickerPanel
+        controller.beginSearchAllNotes()
+        picker.query = "Second"
+
+        XCTAssertEqual(picker.visibleRowTexts, ["A Second Part"],
+                       "the line the hit sits on, not the whole chapter")
+        XCTAssertEqual(picker.visibleSearchMatches.map(\.tabTitle), ["novel.epub"])
+        let match = try XCTUnwrap(picker.visibleSearchMatches.first)
+        guard case .book(let chapter, let range) = match.location else {
+            return XCTFail("a book's hit is located by its chapter")
+        }
+        XCTAssertEqual(chapter, 1)
+        XCTAssertEqual(range.length, 6)
+
+        send(#selector(NSResponder.insertNewline(_:)), to: picker)
+
+        XCTAssertFalse(picker.isVisible, "choosing closes the panel")
+        XCTAssertEqual(pane.chapterIndex, 1, "the chapter it is written in came up")
+        XCTAssertEqual(pane.chapterTitle, "The Middle")
+        XCTAssertEqual(pane.chapterPage.findQuery, "Second",
+                       "and the chapter's own find took the query")
+        XCTAssertTrue(pane.isFindBarVisible, "with the pill up on it")
+        XCTAssertEqual(NSPasteboard(name: .find).string(forType: .string), "Second")
+    }
+
+    /// The key the picker's field would hand its delegate — the tests have no
+    /// window server to press one with.
+    @MainActor
+    private func send(_ command: Selector, to picker: TabPickerPanel) {
+        _ = picker.control(NSTextField(), textView: NSTextView(), doCommandBy: command)
     }
 
     // MARK: - The session

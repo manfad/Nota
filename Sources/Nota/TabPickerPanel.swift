@@ -36,9 +36,10 @@ protocol TabPickerPanelDelegate: AnyObject {
 /// row rather than as something that only looks like one.
 ///
 /// ⇧⌘F opens the same panel in `.search` mode: the query runs over every open
-/// tab's text through `NoteSearch`, and each row is a hit — the tab's title
-/// over the line it sits on, with the matched characters in bold. That mode
-/// has no fixed row above the field; there is nothing it would mean.
+/// tab through `NoteSearch` — a note's text, a document's pages and a book's
+/// chapters alike — and each row is a hit: the tab's title over the line it
+/// sits on, with the matched characters in bold. That mode has no fixed row
+/// above the field; there is nothing it would mean.
 final class TabPickerPanel: NSObject {
     private static let panelWidth: CGFloat = 420
     private static let rowHeight: CGFloat = 26
@@ -91,9 +92,9 @@ final class TabPickerPanel: NSObject {
     private var missingBookmarks: Set<String> = []
     /// The list as it stands after the query, top to bottom.
     private var rows: [(row: Row, result: FuzzyMatch.Result)] = []
-    /// The haystack `.search` runs over: one entry per open tab, its title and
-    /// its storage string, in tab order.
-    private var searchNotes: [(title: String, text: String)] = []
+    /// The haystack `.search` runs over: one entry per open tab, in tab
+    /// order, each holding whatever text that tab has to be searched.
+    private var searchNotes: [NoteSearchSource] = []
     /// What the query found in it, top to bottom.
     private var searchMatches: [NoteSearchMatch] = []
     /// The fixed row's height, taken to nothing in `.search`, which has no
@@ -242,6 +243,20 @@ final class TabPickerPanel: NSObject {
         background.state = .active
         panel.contentView = background
 
+        // The panel hides with the app and comes back with it, but key goes to
+        // the main window on the way back, so the field had no caret and Esc
+        // went to the wrong window. Whenever the app is active again with the
+        // panel showing — or the panel itself becomes key — the caret is put
+        // back where it was.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(refocusIfShowing),
+            name: NSApplication.didBecomeActiveNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(refocusIfShowing),
+            name: NSWindow.didBecomeKeyNotification, object: panel
+        )
+
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.placeholderString = L10n.text("Go to tab")
         searchField.font = .systemFont(ofSize: 15)
@@ -354,12 +369,12 @@ final class TabPickerPanel: NSObject {
         present(over: window)
     }
 
-    /// ⇧⌘F: the same panel over every open tab's text. `notes` is each tab's
-    /// title and its *storage* string, so a hit's range lines up with the text
-    /// view it will be selected in; `symbolNames` is the kind icon per tab,
-    /// in the same order.
+    /// ⇧⌘F: the same panel over every open tab. `notes` is what each tab
+    /// hands the search — a note's storage string, a document's pages, a
+    /// book's chapters — so a hit's range lines up with whatever it will be
+    /// revealed in; `symbolNames` is the kind icon per tab, in the same order.
     func showSearch(
-        notes: [(title: String, text: String)], symbolNames: [String] = [],
+        notes: [NoteSearchSource], symbolNames: [String] = [],
         over window: NSWindow
     ) {
         titles = notes.map(\.title)
@@ -374,7 +389,7 @@ final class TabPickerPanel: NSObject {
         isLoadingHeadings = false
         headingsGeneration += 1
         mode = .search
-        searchField.placeholderString = L10n.text("Search all notes")
+        searchField.placeholderString = L10n.text("Search all tabs")
         searchField.stringValue = ""
         reload()
         present(over: window)
@@ -431,6 +446,23 @@ final class TabPickerPanel: NSObject {
 
     func hide() {
         panel.orderOut(nil)
+    }
+
+    /// The caret back in the field, and the panel key, if the panel is on
+    /// screen and lost either — after a trip to another app or space.
+    @objc func refocusIfShowing() {
+        guard panel.isVisible else { return }
+        if !panel.isKeyWindow { panel.makeKeyAndOrderFront(nil) }
+        let editing = (panel.firstResponder as? NSTextView)?.delegate === searchField
+        if !editing { panel.makeFirstResponder(searchField) }
+    }
+
+    /// Whether the field is what the keyboard reaches: the panel is key and
+    /// the field (its editor) is first responder.
+    var fieldHasFocus: Bool {
+        guard panel.isKeyWindow else { return false }
+        return (panel.firstResponder as? NSTextView)?.delegate === searchField
+            || panel.firstResponder === searchField
     }
 
     /// As if Return had been pressed on the row that is selected right now —
@@ -754,7 +786,7 @@ final class TabPickerPanel: NSObject {
         case .search:
             // Nothing typed yet is not "no results"; say what the field is for.
             return searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? L10n.text("Type to search all notes")
+                ? L10n.text("Type to search all tabs")
                 : L10n.text("No results")
         }
     }

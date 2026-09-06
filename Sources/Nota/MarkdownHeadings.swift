@@ -1,6 +1,6 @@
 import Foundation
 
-/// The headings `@` in the ⌘P switcher lists (Todo 9): taken from the note's
+/// The headings `@` in the ⇧⌘J switcher lists (Todo 9): taken from the note's
 /// own text, not the render, so it costs nothing about the pane being open
 /// and reads the same note a `.md` file that has never been rendered has.
 ///

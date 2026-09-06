@@ -188,6 +188,18 @@ final class PDFFindSession {
         if bar.isShown { runSearch(moving: true) }
     }
 
+    /// A hit chosen in the ⇧⌘F dialog (SPEC Done 37). The match is selected on
+    /// its own page and the query becomes this document's, so ⌘G walks on from
+    /// where the reader landed. The pill stays down: they chose a hit rather
+    /// than opened a find, and a ⌘F after this comes up on the selection with
+    /// the bands and the count that a real search puts there.
+    func reveal(_ selection: PDFSelection, for query: String) {
+        bar.query = query
+        self.query = query
+        if let document { anchor = Position(of: selection, in: document) }
+        select(selection)
+    }
+
     /// One pass of the query: the matches, the bands, the count, and — while
     /// the reader is typing — the first match at or after where the bar
     /// opened.
