@@ -213,6 +213,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 ## Other
 - Promo website — lives outside the repo at `../nota-web` (moved 2026-09-05); an independent static Astro page, commands and deployment notes in its own `README.md`.
 - `SPEC.md` — behaviour spec, Todo list, Done ledger (numbers reused; "Todo 3" is both Go to line and EPUB).
-- `build.sh` — release build + hand-assembled `Nota.app` (binary + `Info.plist` + `Icon/Nota.icns`; no resource bundle, so assets are embedded in Swift).
+- `build.sh` — release build + hand-assembled `Nota.app` (binary + `Info.plist` + `Icon/Nota.icns`; no resource bundle, so assets are embedded in Swift); `--universal` builds arm64+x86_64 for release.
+- `release.sh` — one-shot publisher: tags the version, `build.sh --universal`, zips it, pushes, opens the GitHub release, bumps the `manfad/homebrew-nota` tap cask.
 - `Icon/` — `logo.png` (source art) → `make-icon.swift` → `Nota.icns`; `make-file-icons.py` → `Sources/Nota/FileKindArt.swift`.
 - `Info.plist` — document types Nota registers for.

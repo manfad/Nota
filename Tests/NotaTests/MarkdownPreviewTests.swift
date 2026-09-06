@@ -3122,8 +3122,8 @@ final class MarkdownPreviewTests: XCTestCase {
     }
 
     /// The rule is the file: a saved `.md` gets the control, and nothing else
-    /// does — not a `.txt`, not `.markdown`, not an untitled note. ⇧⌘P and
-    /// ⌥⇧⌘P do nothing where there is no control.
+    /// does — not a `.txt`, not an untitled note; `.markdown` is a spelling of
+    /// `.md` and gets it too. ⇧⌘P and ⌥⇧⌘P do nothing where there is no control.
     @MainActor
     func testOnlyMarkdownTabsGetTheModeControl() throws {
         _ = NSApplication.shared
@@ -3133,7 +3133,7 @@ final class MarkdownPreviewTests: XCTestCase {
         let overlay = controller.modeControlOverlays.editor
 
         for (name, hasControl) in [("notes.md", true), ("NOTES.MD", true),
-                                   ("notes.markdown", false), ("notes.txt", false)] {
+                                   ("notes.markdown", true), ("notes.txt", false)] {
             let url = directory.appendingPathComponent(name)
             try "text".write(to: url, atomically: true, encoding: .utf8)
             controller.open(url: url)

@@ -1,5 +1,6 @@
 .build/
 Nota.app/
+Nota-*.zip
 # The app was called Jot before; a bundle from then may still be sitting here.
 Jot.app/
 .DS_Store

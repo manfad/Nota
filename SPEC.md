@@ -944,12 +944,18 @@
    Export a `.tex` tab as PDF via `pdflatex` / `tectonic` / `xelatex` if one is installed, showing the result in a PDF
    tab; with none installed it prints the native render, the same as the Markdown export.
    A PDF tab prints the PDF itself rather than a render — the open half of Done 12.
-2. **Ship it.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on another Mac
-   without the Gatekeeper dance; `Nota.app.zip` as the release artifact next to the tag.
+2. **Ship it, signed.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on
+   another Mac without the Gatekeeper allow-once dance (see Done 28 for the ad-hoc release itself).
 3. **Tab strip overflow chevron.** The one piece of the Chromium strip still open (Done 15-A): a chevron at the
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+28. **GitHub releases, ad-hoc signed (done 2026-09-06).** `release.sh` is the one-shot publisher: tags the version
+    from `Version.swift`, runs `./build.sh --universal` (see its own `--universal` flag) for an arm64+x86_64
+    `Nota.app`, zips it as `Nota-<version>.zip`, pushes, and opens a GitHub release with generated notes. A Homebrew
+    tap at `manfad/homebrew-nota` (cask `nota`) and the website's one-line `… https://nota-app.xyz/install.sh | sh`
+    (that script itself lives in the website repo) both resolve to the same zip; `release.sh` rewrites the tap's
+    `Casks/nota.rb` with the new version and sha256 on every run. Still ad-hoc signed, not notarized — see Todo 2.
 27. **A `.csv` or `.tsv` is read as the table it is (done 2026-09-06).** A delimited file was a text note and
     nothing more: a hundred and forty characters of commas per line, read by counting them. It is a tab with a
     preview beside it now, the eighth content view the column holds, and the preview is the dump's grid with the
@@ -1317,5 +1323,5 @@
     `preferencesChanged` restyles every note in full (settings only).
 
 Order from here: everything above the ledger is shipped through bookmarks and the tab strip (v0.5 and after). Next,
-in Todo order: print / PDF export → Ship it (signing, notarization, the zip) → EPUB viewer → the strip's overflow
-chevron.
+in Todo order: print / PDF export → Ship it, signed (Developer ID + notarization; the ad-hoc release itself is Done
+28) → the strip's overflow chevron.

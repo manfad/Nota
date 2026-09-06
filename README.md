@@ -23,6 +23,18 @@ read-only tab of its own — ⌘O, a drag onto the window, Finder's "Open With" 
 it, ⌘S is greyed out, it is never dirty, and the page you were on comes back
 with the session.
 
+## Install
+
+```sh
+brew install --cask manfad/nota/nota
+# or
+curl --proto '=https' --tlsv1.2 -LsSf https://nota-app.xyz/install.sh | sh
+```
+
+Or grab `Nota-<version>.zip` straight from [GitHub Releases](https://github.com/manfad/Nota/releases).
+Requires macOS 14+. Nota isn't notarized yet, so the first launch may need one
+allow under System Settings › Privacy & Security.
+
 ## The cache model
 
 1. Every tab is continuously mirrored to `~/Library/Application Support/Nota/` —
@@ -175,3 +187,15 @@ NOTA_SUPPORT_DIR=/tmp/nota-test ./Nota.app/Contents/MacOS/Nota
 
 Requires macOS 14+ (the native sidebar and inspector split items) and a
 Swift 5.9+ toolchain.
+
+## Releasing
+
+`swift test` green → commit (the pre-commit hook bumps the patch version in
+`Sources/Nota/Version.swift` and `Info.plist`) → `./release.sh`. That one
+script builds a universal `Nota.app`, zips it, tags the version, pushes,
+creates the GitHub release, and bumps the Homebrew tap cask at
+`manfad/homebrew-nota`.
+
+`RELEASE_NOTES=path/to/notes.md ./release.sh` uses those notes instead of the
+generated ones; `TAP_DIR=/path/to/homebrew-nota ./release.sh` points it at a
+different tap checkout (default `~/me/talk/homebrew-nota`).

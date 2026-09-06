@@ -1,15 +1,26 @@
 #!/bin/bash
 # Builds Nota and assembles Nota.app in the project root.
+# --universal builds an arm64+x86_64 fat binary, for release; without it,
+# a plain single-arch build for the machine running it.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-swift build -c release
+UNIVERSAL=0
+[ "${1:-}" = "--universal" ] && UNIVERSAL=1
+
+if [ "$UNIVERSAL" = "1" ]; then
+    swift build -c release --arch arm64 --arch x86_64
+    BIN=".build/apple/Products/Release/Nota"
+else
+    swift build -c release
+    BIN=".build/release/Nota"
+fi
 
 APP="Nota.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cp .build/release/Nota "$APP/Contents/MacOS/Nota"
+cp "$BIN" "$APP/Contents/MacOS/Nota"
 cp Info.plist "$APP/Contents/Info.plist"
 
 # The icon is optional so the script still works before one has been drawn.
@@ -23,3 +34,6 @@ codesign --force --sign - "$APP"
 echo
 echo "Built $PWD/$APP"
 echo "Run it with:  open $APP"
+if [ "$UNIVERSAL" = "1" ]; then
+    lipo -archs "$APP/Contents/MacOS/Nota"
+fi
