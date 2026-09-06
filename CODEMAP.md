@@ -29,8 +29,8 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | LaTeX render | `LaTeXParser.swift` → `LaTeXRenderer.swift`; formulas `MathParser.swift` + `MathLayout.swift` |
 | Preview column plumbing (which view shows, zoom, scroll memory) | `PreviewPaneView.swift`, `PreviewContent.swift`, `RenderedPreviewView.swift` |
 | PDF / picture / HTML / EPUB / RTF viewer tabs | `PDFPreviewView.swift`, `ImagePreviewView.swift`, `HTMLPreviewView.swift`, `EPUBPreviewView.swift` + `EPUBBook.swift`, `RTFPreviewView.swift` |
-| A `.sql` dump's grid: running it, paging it, sorting it, picking cells out of it | `SQLPreviewView.swift` (the pane), `SQLGridView.swift` (the grid, its header and its cells), `SQLQueryBox.swift` (the query editor), `SQLDump.swift` (the database), `SQLSourceMap.swift` (which line of the file a row was written on), `SQLQueryRewrite.swift` (the rowid spliced into a query so its rows point at the file too) |
-| A `.csv` / `.tsv` file's grid: reading it, paging it, sorting it | `CSVPreviewView.swift` (the pane, over `SQLGridView`), `CSVTable.swift` (the RFC 4180 reader and where each record is written) |
+| A `.sql` dump's grid: running it, paging it, sorting it, picking cells out of it | `SQLPreviewView.swift` (the pane), `SQLGridView.swift` (the grid, its header and its cells), `SQLQueryBox.swift` (the query editor), `SQLDump.swift` (the database), `SQLSourceMap.swift` (which line of the file a row was written on, and where in it a cell's own value is), `SQLQueryRewrite.swift` (the rowid spliced into a query so its rows point at the file too) |
+| A `.csv` / `.tsv` file's grid: reading it, paging it, sorting it | `CSVPreviewView.swift` (the pane, over `SQLGridView`), `CSVTable.swift` (the RFC 4180 reader and where each record and each field of it is written) |
 | ⌘F find bar and its match bands (incl. dark-mode colours) | `FindBar.swift` (chrome), `FindSession.swift` (editor), `HTMLFindSession.swift`, `PDFFindSession.swift` |
 | ⌘L go to line | `GoToLine.swift`, line table `LineIndex.swift` |
 | Floating pill chrome shared by find / go-to-line / external-change | `Pill.swift`, `ExternalChangePill.swift` |
@@ -169,10 +169,11 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   ⇧-arrows, ⌘C as tab-separated text), whole rows from the `#` gutter, ⇧ and Space, the cell click it reports
   (`onCellClick`) for the pane to take back to the file, `SQLCellView` drawing the accent wash
   and the rectangle's hairline, and `SQLHeaderView` / `SQLHeaderCell` — the flat header with its own sort chevron.
-- `SQLSourceMap.swift` (~315) — where each row of a dump is written: the statements `SQLDump` took down as it ran
-  (each one's own characters, and the rowids an insert made), the lookup a clicked cell is answered from, and the
-  two scanners it needs — the table an `INSERT` names, and the `(…)` tuples after `VALUES`, counted outside string
-  literals, quoted identifiers and comments. Pure text and no SQLite.
+- `SQLSourceMap.swift` (~410) — where each row of a dump is written: the statements `SQLDump` took down as it ran
+  (each one's own characters, and the rowids an insert made), the two lookups a clicked cell is answered from — the
+  row's tuple, and the one *value* inside it the clicked column stands for, quotes included — and the scanners they
+  need: the table an `INSERT` names, the column list it named, the `(…)` tuples after `VALUES`, and the values
+  inside one tuple, all counted outside string literals, quoted identifiers and comments. Pure text and no SQLite.
 - `SQLQueryRewrite.swift` (~175) — the loose read of a query that says whether it is plainly one table's rows, and
   the same query with that table's rowid spliced in after the `SELECT` keyword, so a cell of a query's result walks
   the editor to its `INSERT` the way a table's does. What it refuses — a join, a `GROUP BY`, an aggregate, a
@@ -183,16 +184,20 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `CSVTable.swift` (~330) — a `.csv` or `.tsv` read as the table it is: Nota's own RFC 4180 scanner (quoted fields,
   `""` escapes, newlines inside quotes, CRLF / CR / LF, a trailing newline, a BOM, blank lines skipped), the first
   record as the header with blanks named `Column 3`, ragged rows padded and widened, the `NSRange` of the lines each
-  record is written on, and `page(offset:sort:)` — a hundred rows, sorted numerically where the whole column parses
-  as numbers and by the reader's own collation where it does not. Pure; knows nothing of AppKit.
+  record is written on and of every *field* of it as written (`fieldSources`, quotes included — what a clicked cell
+  selects), and `page(offset:sort:)` — a hundred rows, sorted numerically where the whole column parses as numbers
+  and by the reader's own collation where it does not. Pure; knows nothing of AppKit.
 - `CSVPreviewView.swift` (~810) — the pane that draws it: the dump's pane with the database taken out — one bar of
   `Refresh` and the page arrows under the corner slot's hover band, `SQLGridView` below it unchanged, the sort a
   header click asks for, the `onSourceReveal` a cell click sends, and the read it runs on its own queue with a
   token (a big file only ever on the button).
-- `StructuredDocument.swift` (~100) — what a `.json`, `.yaml`, `.toml` or `.xml` file *is* once read: one
-  `StructuredNode` shape for four grammars (named parts, numbered parts, leaves, and the 1-based line every node
-  starts on), `StructuredDocument`, `StructuredParseError`, and `StructuredFormat` saying which parser a file's
-  name asks for. Pure; knows nothing of AppKit.
+- `StructuredDocument.swift` (~180) — what a `.json`, `.yaml`, `.toml` or `.xml` file *is* once read: one
+  `StructuredNode` shape for four grammars (named parts, numbered parts, leaves, the 1-based line every node starts
+  on, its `range` — the whole span of source it was made from, in the UTF-16 an `NSRange` counts in — and its
+  `valueRange`, the value alone, which is what a click on a leaf row selects), `StructuredDocument`,
+  `StructuredParseError`, `StructuredFormat` saying which
+  parser a file's name asks for, and `SourceOffsets`, which turns a parser's own counting (UTF-8 bytes, Characters,
+  Unicode scalars) into the editor's. Pure; knows nothing of AppKit.
 - `JSONTree.swift` (~290) — a `.json` into that shape: Nota's own recursive descent over the UTF-8 bytes, RFC 8259
   only. A second walker beside `JSONFormat` on purpose — that one keeps every token verbatim so beautify and
   compact are lossless, this one unescapes strings and keys for display. Keys in file order, duplicates kept,

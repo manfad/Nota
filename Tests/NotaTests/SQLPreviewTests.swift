@@ -942,6 +942,139 @@ final class SQLPreviewTests: XCTestCase {
         XCTAssertTrue(SQLSourceMap.valueTuples(in: "INSERT INTO t SELECT * FROM u;").isEmpty)
     }
 
+    // MARK: - Where one value is written
+
+    func testTheValueLocatorWalksATupleOnceAndHonoursWhatIsInIt() throws {
+        let tuple = "(1, 'it''s, really', NULL, -3, X'4a4b', (1 + 2), \"a,b\")"
+        let text = tuple as NSString
+        func value(_ position: Int) throws -> String {
+            text.substring(with: try XCTUnwrap(
+                SQLSourceMap.valueRange(at: position, inTuple: tuple)
+            ))
+        }
+        XCTAssertEqual(try value(0), "1")
+        XCTAssertEqual(try value(1), "'it''s, really'",
+                       "a comma and a doubled quote inside a string are text")
+        XCTAssertEqual(try value(2), "NULL")
+        XCTAssertEqual(try value(3), "-3", "the sign is part of the number")
+        XCTAssertEqual(try value(4), "X'4a4b'", "a blob is its whole literal")
+        XCTAssertEqual(try value(5), "(1 + 2)",
+                       "an expression written as a value is one value")
+        XCTAssertEqual(try value(6), "\"a,b\"")
+        XCTAssertNil(SQLSourceMap.valueRange(at: 7, inTuple: tuple),
+                     "there is no eighth value to point at")
+        XCTAssertNil(SQLSourceMap.valueRange(at: 0, inTuple: "(1, 'never closed"),
+                     "a tuple that does not close is nothing to measure from")
+        XCTAssertEqual(
+            SQLSourceMap.valueRange(at: 1, inTuple: "(1,   'a'   )"),
+            ("(1,   'a'   )" as NSString).range(of: "'a'"),
+            "the blanks around a value are none of it and its quotes are all of it"
+        )
+    }
+
+    func testTheColumnListAnInsertNamesIsReadOffIt() throws {
+        XCTAssertEqual(SQLSourceMap.insertColumns(in: "INSERT INTO t (a, B) VALUES (1, 2)"),
+                       ["a", "b"])
+        XCTAssertEqual(
+            SQLSourceMap.insertColumns(in: "insert or replace into main.\"T\" (\"od d\") VALUES (1)"),
+            ["od d"]
+        )
+        XCTAssertNil(SQLSourceMap.insertColumns(in: "INSERT INTO t VALUES (1, 2)"),
+                     "an insert that named no columns writes the table's own order")
+        XCTAssertNil(SQLSourceMap.insertColumns(in: "UPDATE t SET a = 1"))
+    }
+
+    /// A cell of a table's page is placed by its column's name, and what comes
+    /// back is that value's own text — quotes included, comma and blanks left
+    /// out.
+    func testACellOfATableIsTakenToItsOwnValue() throws {
+        let text = """
+        CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT, tag TEXT);
+        INSERT INTO notes VALUES
+          (1, 'first, really', 'a'),
+          (2, 'second', NULL);
+        """
+        let dump = SQLDump(sql: text)
+        XCTAssertNil(dump.failure)
+        let source = text as NSString
+        let columns = dump.declaredTypes(ofTable: "notes").map(\.name)
+        func value(_ rowid: Int64, _ column: String) throws -> String {
+            source.substring(with: try XCTUnwrap(dump.sourceMap.range(
+                ofRowid: rowid, inTable: "notes", column: column, tableColumns: columns
+            )))
+        }
+        XCTAssertEqual(try value(1, "body"), "'first, really'")
+        XCTAssertEqual(try value(1, "id"), "1")
+        XCTAssertEqual(try value(2, "tag"), "NULL")
+        XCTAssertEqual(try value(2, "BODY"), "'second'",
+                       "SQLite's names are not case sensitive and neither is this")
+        XCTAssertEqual(dump.sourceMap.range(ofRowid: 2, inTable: "notes",
+                                            column: "nowhere", tableColumns: columns),
+                       source.range(of: "(2, 'second', NULL)"),
+                       "a name in neither list falls back to the tuple, never to nothing")
+        XCTAssertNil(dump.sourceMap.range(ofRowid: 9, inTable: "notes",
+                                          column: "body", tableColumns: columns),
+                     "and a rowid this file never wrote is still nothing at all")
+    }
+
+    /// An insert that named its own column list writes them in its own order,
+    /// so the value is found by name and not by the table's order.
+    func testAnInsertWithAColumnListIsMappedByName() throws {
+        let text = """
+        CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT, tag TEXT);
+        INSERT INTO notes (tag, body, id) VALUES ('a', 'first', 1), ('b', 'second', 2);
+        """
+        let dump = SQLDump(sql: text)
+        XCTAssertNil(dump.failure)
+        let source = text as NSString
+        let columns = dump.declaredTypes(ofTable: "notes").map(\.name)
+        func value(_ rowid: Int64, _ column: String) throws -> String {
+            source.substring(with: try XCTUnwrap(dump.sourceMap.range(
+                ofRowid: rowid, inTable: "notes", column: column, tableColumns: columns
+            )))
+        }
+        XCTAssertEqual(try value(1, "body"), "'first'", "the second value, as the list says")
+        XCTAssertEqual(try value(1, "tag"), "'a'")
+        XCTAssertEqual(try value(2, "id"), "2")
+        XCTAssertEqual(dump.sourceMap.range(ofRowid: 1, inTable: "notes",
+                                            column: "missing", tableColumns: columns),
+                       source.range(of: "('a', 'first', 1)"),
+                       "a column the list never names is the tuple")
+    }
+
+    /// A query's own columns are placed by name too, and a column that is not
+    /// a column of the table — a computed one — is the tuple instead.
+    @MainActor
+    func testAQuerysCellIsItsValueAndAComputedColumnIsTheTuple() throws {
+        let text = """
+        CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT);
+        INSERT INTO notes VALUES (1, 'first'), (2, 'second'), (3, 'third');
+        """
+        let (pane, window) = try makePane()
+        try show(makeNote(named: "notes.sql", text: text), in: pane)
+        pane.layoutSubtreeIfNeeded()
+        let source = text as NSString
+        var reveals: [NSRange] = []
+        pane.onSourceReveal = { reveals.append($0) }
+        pane.sendsBlockClicks = true
+
+        try settle(pane) { pane.setQueryForTesting("SELECT body, id FROM notes") }
+        pane.layoutSubtreeIfNeeded()
+        pane.gridForTesting.mouseDown(
+            with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
+                                          row: 1, column: 1)))
+        XCTAssertEqual(reveals.last.map { source.substring(with: $0) }, "'second'",
+                       "the query's own first column is the table's second value")
+
+        try settle(pane) { pane.setQueryForTesting("SELECT id * 2 FROM notes") }
+        pane.layoutSubtreeIfNeeded()
+        pane.gridForTesting.mouseDown(
+            with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
+                                          row: 2, column: 1)))
+        XCTAssertEqual(reveals.last, source.range(of: "(3, 'third')"),
+                       "a computed column is no column of the table, so the tuple is the answer")
+    }
+
     func testTheTableNameIsReadOffTheInsertHoweverItIsSpelled() throws {
         XCTAssertEqual(SQLSourceMap.insertTable(in: "INSERT INTO customers VALUES (1)"),
                        "customers")
@@ -1141,7 +1274,7 @@ final class SQLPreviewTests: XCTestCase {
     /// it — its own tuple in a multi-row one — and leaves the keyboard in the
     /// grid, so the arrows go on walking the cells.
     @MainActor
-    func testClickingACellInSplitMovesTheCaretAndKeepsTheKeyboard() throws {
+    func testClickingACellInSplitSelectsThatValueAndKeepsTheKeyboard() throws {
         _ = NSApplication.shared
         let text = """
         CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT);
@@ -1158,9 +1291,9 @@ final class SQLPreviewTests: XCTestCase {
         grid.mouseDown(with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
                                                      row: 1, column: 2)))
 
-        XCTAssertEqual(controller.currentTabState.selection,
-                       (text as NSString).range(of: "(2, 'second')").location,
-                       "the second row's own tuple")
+        XCTAssertEqual(controller.editorScrolling.textView.selectedRange(),
+                       (text as NSString).range(of: "'second'"),
+                       "the clicked cell's own value inside the second row's tuple")
         XCTAssertTrue(window.firstResponder === grid,
                       "the grid keeps the keyboard: this is a look, not a jump")
     }
@@ -1215,7 +1348,7 @@ final class SQLPreviewTests: XCTestCase {
     /// its values walks the editor to the `INSERT` that wrote that row, its
     /// own tuple in a multi-row one.
     @MainActor
-    func testClickingACellOfAQuerysResultWalksTheEditorToItsRow() throws {
+    func testClickingACellOfAQuerysResultSelectsItsValue() throws {
         _ = NSApplication.shared
         let text = """
         CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT);
@@ -1234,9 +1367,9 @@ final class SQLPreviewTests: XCTestCase {
         grid.mouseDown(with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
                                                      row: 1, column: 1)))
 
-        XCTAssertEqual(controller.currentTabState.selection,
-                       (text as NSString).range(of: "(3, 'third')").location,
-                       "the third row's own tuple, through the query")
+        XCTAssertEqual(controller.editorScrolling.textView.selectedRange(),
+                       (text as NSString).range(of: "'third'"),
+                       "the third row's own body, through the query")
         XCTAssertTrue(window.firstResponder === grid, "and the grid keeps the keyboard")
     }
 
@@ -1310,10 +1443,9 @@ final class SQLPreviewTests: XCTestCase {
         grid.mouseDown(with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
                                                      row: 1, column: 1)))
         XCTAssertEqual(grid.cellCursor?.row, 1, "the cell is picked out")
-        XCTAssertEqual(controller.currentTabState.selection,
-                       (text as NSString).range(of: "INSERT INTO notes VALUES (2, 'second');")
-                           .location,
-                       "and the editor is at the row's own insert")
+        XCTAssertEqual(controller.editorScrolling.textView.selectedRange(),
+                       (text as NSString).range(of: "'second'"),
+                       "and the editor holds the clicked value of the row's own insert")
     }
 
     // MARK: - The grid with nothing in it, drawn

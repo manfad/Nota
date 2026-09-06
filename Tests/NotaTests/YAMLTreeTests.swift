@@ -779,6 +779,107 @@ final class YAMLTreeTests: XCTestCase {
                 + "not, so the anchor's answer stands, on the line the anchor was written on")
     }
 
+    // MARK: - Where each node is written
+
+    func testEveryNodeCarriesItsWholeSpan() throws {
+        let text = """
+            name: nota
+            owner:
+              who: Ada
+              tags:
+                - one
+                - name: two
+                  size: 3
+            notes: |
+              first
+              second
+            """
+        XCTAssertEqual(
+            describeSpans(try YAMLTree.parse(text), in: text),
+            """
+            \(text.debugDescription)
+              name: "name: nota"
+              owner: "owner:\\n  who: Ada\\n  tags:\\n    - one\\n    - name: two\\n      size: 3"
+                who: "who: Ada"
+                tags: "tags:\\n    - one\\n    - name: two\\n      size: 3"
+                  "one"
+                  "name: two\\n      size: 3"
+                    name: "name: two"
+                    size: "size: 3"
+              notes: "notes: |\\n  first\\n  second"
+            """,
+            "an entry brings the block written beneath it, an item is the value after "
+                + "its dash, and a block scalar is its header and its content")
+    }
+
+    func testFlowCollectionsAndAliasesSpanWhereTheyAreWritten() throws {
+        let text = """
+            base: &base {a: 1, b: [x, y]}
+            copy: *base
+            """
+        XCTAssertEqual(
+            describeSpans(try YAMLTree.parse(text), in: text),
+            """
+            \(text.debugDescription)
+              base: "base: &base {a: 1, b: [x, y]}"
+                a: "a: 1"
+                b: "b: [x, y]"
+                  "x"
+                  "y"
+              copy: "copy: *base"
+                a: "a: 1"
+                b: "b: [x, y]"
+                  "x"
+                  "y"
+            """,
+            "the alias is where it stands; what it pulled in is still written at the anchor")
+    }
+
+    func testASpanIsCountedTheWayTheEditorCounts() throws {
+        let text = """
+            名字: 😀
+            after: 1
+            """
+        XCTAssertEqual(
+            describeSpans(try YAMLTree.parse(text), in: text),
+            """
+            \(text.debugDescription)
+              名字: "名字: 😀"
+              after: "after: 1"
+            """,
+            "an emoji is one Character and two UTF-16 units, and the second entry proves it")
+    }
+
+    /// A row says `name  "Nota"`, and a click on a leaf gives the value and
+    /// nothing else — quoted as the file quotes it, and for a block scalar its
+    /// header and its content, since the header says how to read it.
+    func testALeafCarriesItsValuesOwnSpan() throws {
+        let text = """
+            名字: "😀 nota"
+            n: 14
+            ok: true
+            gone: null
+            notes: |
+              first
+            base: &b {x: 1}
+            copy: *b
+            """
+        let root = try XCTUnwrap(try YAMLTree.parse(text).roots.first)
+        let string = text as NSString
+        func value(_ index: Int) -> String? {
+            root.children[index].valueRange.map { string.substring(with: $0) }
+        }
+        XCTAssertEqual(value(0), #""😀 nota""#)
+        XCTAssertEqual(value(1), "14")
+        XCTAssertEqual(value(2), "true")
+        XCTAssertEqual(value(3), "null")
+        XCTAssertEqual(value(4), "|\n  first")
+        XCTAssertEqual(value(5), "{x: 1}", "a flow collection's brackets")
+        XCTAssertEqual(value(6), "*b", "the alias where it stands")
+        XCTAssertNil(root.valueRange,
+                     "a block mapping is its keys and its bodies, with nothing around them")
+    }
+
     // MARK: - Helpers
 
     private func assertRefused(
@@ -801,6 +902,24 @@ final class YAMLTreeTests: XCTestCase {
 /// The tree as indented lines: `key: string("v") @3`. Compact enough to write
 /// a whole expectation out, and it shows the two things a tree preview lives
 /// or dies by — the shape and the line each row points at.
+/// The same shape, said with the source each node points at rather than with
+/// its value: one line per node, two spaces a level, the text its range cuts
+/// out of the file. A span is right exactly when the text it cuts out is the
+/// node, so this is the whole of what a range test has to look at.
+func describeSpans(_ document: StructuredDocument, in text: String) -> String {
+    let string = text as NSString
+    var out: [String] = []
+    func walk(_ node: StructuredNode, depth: Int) {
+        var row = String(repeating: "  ", count: depth)
+        if let key = node.key { row += key + ": " }
+        row += node.range.map { string.substring(with: $0).debugDescription } ?? "no range"
+        out.append(row)
+        for child in node.children { walk(child, depth: depth + 1) }
+    }
+    for root in document.roots { walk(root, depth: 0) }
+    return out.joined(separator: "\n")
+}
+
 func describe(_ document: StructuredDocument) -> String {
     var out: [String] = []
     func walk(_ node: StructuredNode, depth: Int) {

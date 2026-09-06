@@ -36,7 +36,7 @@ import Foundation
 enum TOMLTree {
 
     static func parse(_ text: String) throws -> StructuredDocument {
-        var walker = Walker(characters: Array(text))
+        var walker = Walker(characters: Array(text), offsets: .characters(of: text))
         return StructuredDocument(roots: [try walker.parseDocument()])
     }
 
@@ -57,6 +57,15 @@ enum TOMLTree {
 
         var kind: Kind
         var line: Int
+        /// The node's span, in the Characters the walk counts in: a pair from
+        /// its key through the end of its value, a header's table from the
+        /// `[` through the last pair written under it, an inline table or an
+        /// array through its own closing bracket.
+        var start = 0
+        /// Where the value itself begins — the same as `start` until the pair
+        /// that owns it pulls `start` back to its key.
+        var valueStart = 0
+        var end = 0
         var children: [(key: String?, node: Node)] = []
         /// Written out — `[table]`, `[[table]]`, `{ }` — rather than conjured
         /// as a super-table on the way to one. An explicit table may not be
@@ -82,17 +91,25 @@ enum TOMLTree {
 
     private struct Walker {
         let characters: [Character]
+        /// The same source, measured the way the editor measures it.
+        let offsets: SourceOffsets
         var index = 0
         var line = 1
         let root: Node
         /// Where a key/value pair goes: the root, or the table the last header
         /// opened.
         var current: Node
+        /// The tables the last header opened, root-most first — the ones a
+        /// pair written now belongs to. A table's span runs to the last pair
+        /// inside it, and this is who that pair has to tell.
+        var open: [Node] = []
 
-        init(characters: [Character]) {
+        init(characters: [Character], offsets: SourceOffsets) {
             self.characters = characters
+            self.offsets = offsets
             let root = Node(kind: .table, line: 1)
             root.explicit = true
+            root.end = characters.count
             self.root = root
             self.current = root
         }
@@ -154,16 +171,19 @@ enum TOMLTree {
                     try parseHeader()
                 } else {
                     try parseKeyValue(into: current)
+                    // The pair is the last line of every table it is inside.
+                    for table in open { table.end = index }
                 }
                 try endOfLine()
             }
-            return TOMLTree.convert(root, key: nil)
+            return TOMLTree.convert(root, key: nil, offsets: offsets)
         }
 
         // MARK: Headers
 
         mutating func parseHeader() throws {
             let headerLine = line
+            let from = index
             advance()  // [
             var arrayOfTables = false
             if peek == "[" {
@@ -178,18 +198,23 @@ enum TOMLTree {
                 guard peek == "]" else { throw error("Expected `]]`") }
                 advance()
             }
-            current = try open(path: path, arrayOfTables: arrayOfTables, line: headerLine)
+            open = []
+            current = try openTable(
+                path: path, arrayOfTables: arrayOfTables, line: headerLine, from: from)
+            for table in open { table.end = index }
         }
 
         /// The table a header names, made if it is not there yet — and, on the
         /// way, every super-table it implies, each remembering the line it was
         /// first mentioned on.
-        mutating func open(
-            path: [String], arrayOfTables: Bool, line headerLine: Int
+        mutating func openTable(
+            path: [String], arrayOfTables: Bool, line headerLine: Int, from: Int
         ) throws -> Node {
             var node = root
             for segment in path.dropLast() {
-                node = try descend(node, segment, line: headerLine, viaDottedKey: false)
+                node = try descend(
+                    node, segment, line: headerLine, from: from, viaDottedKey: false)
+                open.append(node)
             }
             guard let last = path.last else { throw error("Expected a key", line: headerLine) }
             let name = path.joined(separator: ".")
@@ -197,17 +222,23 @@ enum TOMLTree {
             if arrayOfTables {
                 let item = Node(kind: .table, line: headerLine)
                 item.explicit = true
+                item.start = from
                 if let existing = node.child(last) {
                     guard case .arrayOfTables = existing.kind else {
                         throw error("`\(name)` is not an array of tables", line: headerLine)
                     }
                     existing.children.append((nil, item))
+                    open.append(existing)
+                    open.append(item)
                     return item
                 }
                 let array = Node(kind: .arrayOfTables, line: headerLine)
                 array.explicit = true
+                array.start = from
                 array.children.append((nil, item))
                 node.children.append((last, array))
+                open.append(array)
+                open.append(item)
                 return item
             }
 
@@ -219,11 +250,14 @@ enum TOMLTree {
                     throw error("Table `\(name)` is defined twice", line: headerLine)
                 }
                 existing.explicit = true
+                open.append(existing)
                 return existing
             }
             let table = Node(kind: .table, line: headerLine)
             table.explicit = true
+            table.start = from
             node.children.append((last, table))
+            open.append(table)
             return table
         }
 
@@ -231,7 +265,7 @@ enum TOMLTree {
         /// at the line it was first mentioned; `[[x]]` is stepped into at its
         /// last item, which is what makes `[[x]]` … `[x.y]` work.
         mutating func descend(
-            _ parent: Node, _ segment: String, line: Int, viaDottedKey: Bool
+            _ parent: Node, _ segment: String, line: Int, from: Int, viaDottedKey: Bool
         ) throws -> Node {
             if let existing = parent.child(segment) {
                 switch existing.kind {
@@ -251,6 +285,7 @@ enum TOMLTree {
             }
             let table = Node(kind: .table, line: line)
             table.dotted = viaDottedKey
+            table.start = from
             parent.children.append((segment, table))
             return table
         }
@@ -290,6 +325,7 @@ enum TOMLTree {
 
         mutating func parseKeyValue(into table: Node) throws {
             let keyLine = line
+            let keyStart = index
             let path = try parseKeyPath()
             skipSpace()
             guard peek == "=" else { throw error("Expected `=`", line: keyLine) }
@@ -297,8 +333,13 @@ enum TOMLTree {
             skipSpace()
 
             var target = table
+            // The objects a dotted key conjures run from the key that first
+            // mentioned them to the last pair written inside them.
+            var conjured: [Node] = []
             for segment in path.dropLast() {
-                target = try descend(target, segment, line: keyLine, viaDottedKey: true)
+                target = try descend(
+                    target, segment, line: keyLine, from: keyStart, viaDottedKey: true)
+                conjured.append(target)
             }
             guard let last = path.last else { throw error("Expected a key", line: keyLine) }
             guard target.child(last) == nil else {
@@ -306,14 +347,27 @@ enum TOMLTree {
             }
             let value = try parseValue()
             // A pair is written down at its key: that is where the reader's
-            // eye is, and where a click on the row goes.
+            // eye is, where a click on the row goes, and where its own span
+            // begins — through the end of the value.
             value.line = keyLine
+            value.start = keyStart
+            value.end = index
             target.children.append((last, value))
+            for node in conjured { node.end = index }
         }
 
         // MARK: Values
 
         mutating func parseValue() throws -> Node {
+            let from = index
+            let node = try readValue()
+            node.start = from
+            node.valueStart = from
+            node.end = index
+            return node
+        }
+
+        mutating func readValue() throws -> Node {
             let valueLine = line
             guard let ch = peek else { throw error("Expected a value") }
             switch ch {
@@ -571,18 +625,35 @@ enum TOMLTree {
 
     // MARK: - Finishing the tree
 
-    private static func convert(_ node: Node, key: String?) -> StructuredNode {
+    private static func convert(
+        _ node: Node, key: String?, offsets: SourceOffsets
+    ) -> StructuredNode {
+        let range = offsets.range(from: node.start, to: node.end)
+        // The value alone is the whole of what a pair's node covers *before*
+        // the pair widened it to take the key in — so a leaf keeps its token,
+        // and a `{…}` or a `[…]` keeps its brackets. A table a header opened
+        // is its header and its body with nothing around them, and has no
+        // value part to point at.
+        let value = offsets.range(from: node.valueStart, to: node.end)
         switch node.kind {
         case .table:
             return StructuredNode(
                 key: key, value: .object,
-                children: node.children.map { convert($0.node, key: $0.key) }, line: node.line)
-        case .arrayOfTables, .array:
+                children: node.children.map { convert($0.node, key: $0.key, offsets: offsets) },
+                line: node.line, range: range, valueRange: node.inline ? value : nil)
+        case .arrayOfTables:
             return StructuredNode(
                 key: key, value: .array,
-                children: node.children.map { convert($0.node, key: nil) }, line: node.line)
-        case .leaf(let value):
-            return StructuredNode(key: key, value: value, line: node.line)
+                children: node.children.map { convert($0.node, key: nil, offsets: offsets) },
+                line: node.line, range: range)
+        case .array:
+            return StructuredNode(
+                key: key, value: .array,
+                children: node.children.map { convert($0.node, key: nil, offsets: offsets) },
+                line: node.line, range: range, valueRange: value)
+        case .leaf(let leaf):
+            return StructuredNode(
+                key: key, value: leaf, line: node.line, range: range, valueRange: value)
         }
     }
 

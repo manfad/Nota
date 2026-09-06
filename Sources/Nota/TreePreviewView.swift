@@ -21,11 +21,14 @@ import AppKit
 /// A path that no longer exists is simply gone; a branch that has just been
 /// typed into being arrives closed.
 ///
-/// Both halves of the block sync a render has: clicking a row walks the
-/// editor to the line the node is written on, and the caret's own line lights
-/// the deepest row that starts on it. The click reveals rather than jumps —
-/// the `onSourceReveal` a dump's cell click uses — so the keyboard stays in
-/// the tree and the arrows go on walking it.
+/// Both halves of the block sync a render has: clicking a row selects the
+/// node in the source beside it, and the caret lights the deepest row whose
+/// own source it is standing in. Both work off the span every node carries,
+/// which is what makes a one-line file — a whole JSON export on one line —
+/// behave like any other: the line alone would say nothing about where a
+/// member is. The click reveals rather than jumps — the `onSourceReveal` a
+/// dump's cell click uses — so the keyboard stays in the tree and the arrows
+/// go on walking it.
 final class TreePreviewView: NSView, PreviewContent {
 
     // MARK: - The chrome
@@ -66,6 +69,10 @@ final class TreePreviewView: NSView, PreviewContent {
         /// by, so a re-render after a keystroke reopens the same branches.
         let path: String
         let depth: Int
+        /// Nothing of the file is written before this node on the line it
+        /// starts, so the indentation in front of it is the node's own
+        /// run-up: a caret in it is a caret on this row.
+        var startsItsLine = false
         private(set) var children: [Row] = []
         weak var parent: Row?
 
@@ -83,8 +90,8 @@ final class TreePreviewView: NSView, PreviewContent {
 
     private weak var note: Note?
     private var rows: [Row] = []
-    /// Every row in the tree, by path — for the caret's own lookup, which
-    /// asks by line rather than by walking.
+    /// Every row in the tree, by the line it starts on — what the caret falls
+    /// back to for a node whose parser could not say how wide it is.
     private var rowsByLine: [Int: [Row]] = [:]
     private var expandedPaths: Set<String> = []
     /// Whether the expansion set has been seeded for the document on screen.
@@ -309,6 +316,12 @@ final class TreePreviewView: NSView, PreviewContent {
         }
 
         rows = makeRows(document.roots, parentPath: "", depth: 0)
+        for (_, sharing) in byLine {
+            let first = sharing
+                .filter { $0.node.range != nil }
+                .min { ($0.node.range?.location ?? 0) < ($1.node.range?.location ?? 0) }
+            first?.startsItsLine = true
+        }
         rowsByLine = byLine
         rowsAreStale = false
         if !hasSeededExpansion {
@@ -463,27 +476,47 @@ final class TreePreviewView: NSView, PreviewContent {
 
     // MARK: - Both halves of the block sync
 
-    /// A row was clicked: the editor's caret goes to the line the node is
-    /// written on, and the keyboard stays here. The tree is walked with the
-    /// arrows and opened with the triangles, and a click that took the
-    /// keyboard away would end the walk — the same reason a dump's cell click
-    /// reveals rather than jumps.
+    /// A row was clicked: the source it stands for is selected in the editor,
+    /// and the keyboard stays here. The tree is walked with the arrows and
+    /// opened with the triangles, and a click that took the keyboard away
+    /// would end the walk — the same reason a dump's cell click reveals
+    /// rather than jumps.
+    ///
+    /// A leaf gives its **value** and nothing else, quotes and all, the way a
+    /// dump's cell click gives the one value it stands over: the row says
+    /// `name  "Nota"`, and `"Nota"` is what the reader pointed at. A branch
+    /// gives the whole of itself, key and body together — its value part is
+    /// only its brackets, if it has any, and nobody clicking `owner` means
+    /// the punctuation around it.
+    ///
+    /// The line stands in where a parser could not say: a member of a compact
+    /// file shares its line with the whole document, so that is the last
+    /// resort and not the rule.
     private func reveal(row index: Int) {
         guard sendsBlockClicks, !rowsAreStale, let onSourceReveal, let note,
               let row = outlineView.item(atRow: index) as? Row
         else { return }
-        onSourceReveal(note.lineIndex.range(ofLine: row.node.line))
+        let node = row.node
+        let source = (node.isBranch ? node.range : node.valueRange ?? node.range)
+            ?? note.lineIndex.range(ofLine: node.line)
+        onSourceReveal(source)
     }
 
-    /// Lights the outermost node the caret's own line begins, and brings it
-    /// into view. A row inside a closed branch is not on screen to light, so
-    /// the deepest one that *is* stands in for it.
+    /// Lights the deepest node the caret is standing in, and brings it into
+    /// view. A row inside a closed branch is not on screen to light, so the
+    /// deepest one that *is* stands in for it.
     ///
-    /// Outermost rather than innermost, because a line usually begins exactly
-    /// one node and the two are then the same thing — while a line that
-    /// begins several is a run of the document rather than one node's, and a
-    /// compact file, whose every node begins on line 1, would otherwise open
-    /// scrolled to its last leaf.
+    /// Deepest by *span*: the caret is inside the root, inside the member of
+    /// it that holds it, inside that member's own member, and the innermost
+    /// of those is the row the reader is in. That is the answer a one-line
+    /// file needs, where every node begins on line 1 and the line says
+    /// nothing.
+    ///
+    /// Where a node has no span — a parser that could not say — the line
+    /// stands in for it, and then the *outermost* node beginning that line is
+    /// the one lit: a line usually begins exactly one node and the two are the
+    /// same thing, while a line that begins several is a run of the document
+    /// rather than one node's.
     @discardableResult
     func highlightBlock(containingSource location: Int) -> Bool {
         guard !rowsAreStale, let note, !rows.isEmpty else {
@@ -491,7 +524,9 @@ final class TreePreviewView: NSView, PreviewContent {
             return false
         }
         let line = note.lineIndex.lineNumber(at: location)
-        guard var candidate = rowsByLine[line]?.min(by: { $0.depth < $1.depth }) else {
+        guard var candidate = row(containing: location, onLine: line)
+            ?? rowsByLine[line]?.min(by: { $0.depth < $1.depth })
+        else {
             clearHighlight()
             return false
         }
@@ -509,6 +544,38 @@ final class TreePreviewView: NSView, PreviewContent {
         isSelectingForCaret = false
         outlineView.scrollRowToVisible(index)
         return true
+    }
+
+    /// The deepest row whose span holds a place in the source, found by
+    /// walking down: the caret is in one of the roots, then in one of that
+    /// row's children, and so on until nothing below holds it.
+    private func row(containing location: Int, onLine line: Int) -> Row? {
+        var found: Row?
+        var list = rows
+        while let row = Self.row(in: list, containing: location, onLine: line) {
+            found = row
+            list = row.children
+        }
+        return found
+    }
+
+    /// The one of a row's children the place is written in.
+    ///
+    /// Two edges, both of them where a caret actually sits. One exactly at
+    /// the end of a node is still in it — that is where typing leaves you —
+    /// unless the node beside it begins there, which wins. And one in the
+    /// indentation before the first node of a line is in that node: the white
+    /// space in front of `"b": 2` is nobody else's.
+    private static func row(in list: [Row], containing location: Int, onLine line: Int) -> Row? {
+        var touching: Row?
+        for row in list {
+            guard let range = row.node.range, location <= NSMaxRange(range) else { continue }
+            guard location >= range.location || (row.startsItsLine && row.node.line == line)
+            else { continue }
+            if location < NSMaxRange(range) { return row }
+            if touching == nil { touching = row }
+        }
+        return touching
     }
 
     /// Puts the lit row out without touching the tree — what reading mode

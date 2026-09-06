@@ -436,8 +436,59 @@ final class CSVPreviewTests: XCTestCase {
         XCTAssertEqual(source.substring(with: table.sources[2]), "3,Lamp")
     }
 
+    func testEachFieldKnowsWhereItIsWritten() throws {
+        let text = """
+        id,name,note
+        1,Pencil,
+        2,"Assembly required, twice.
+        Two people.","He said ""no"" twice"
+        3,Lamp,shade
+        """
+        let table = CSVTable(text: text, separator: .comma)
+        let source = text as NSString
+        func field(_ row: Int, _ column: Int) -> String {
+            source.substring(with: table.fieldSources[row][column])
+        }
+        XCTAssertEqual(table.fieldSources.count, 3, "one list of fields per record")
+        XCTAssertEqual(field(0, 0), "1")
+        XCTAssertEqual(field(0, 1), "Pencil")
+        XCTAssertEqual(field(0, 2), "", "an empty field is the empty range where it would be")
+        XCTAssertEqual(field(1, 1), "\"Assembly required, twice.\nTwo people.\"",
+                       "the quotes are the field's own characters, and so are both lines")
+        XCTAssertEqual(field(1, 2), "\"He said \"\"no\"\" twice\"",
+                       "a doubled quote inside is written as it is written")
+        XCTAssertEqual(field(2, 2), "shade")
+        XCTAssertEqual(table.fieldSources[0][1].location,
+                       source.range(of: "Pencil").location,
+                       "and each one begins where the field begins")
+    }
+
+    func testARaggedRowKnowsOnlyTheFieldsItWrote() throws {
+        let text = "a,b,c\n1,2\n3,4,5,6\n"
+        let table = CSVTable(text: text, separator: .comma)
+        XCTAssertEqual(table.columns.count, 4, "the long row widens the table")
+        XCTAssertEqual(table.fieldSources[0].count, 2,
+                       "the short row wrote two fields and the padding is nowhere in the file")
+        XCTAssertEqual(table.fieldSources[1].count, 4)
+        XCTAssertEqual((text as NSString).substring(with: table.fieldSources[1][3]), "6")
+    }
+
+    func testFieldRangesCountTheFileAsTheEditorCountsIt() throws {
+        let bom = "\u{FEFF}id,名字\r\n1,😀ok\r\n"
+        let table = CSVTable(text: bom, separator: .comma)
+        let source = bom as NSString
+        XCTAssertEqual(table.fieldSources.count, 1)
+        XCTAssertEqual(source.substring(with: table.fieldSources[0][0]), "1",
+                       "the mark is the encoding saying hello and is not counted as a letter")
+        XCTAssertEqual(source.substring(with: table.fieldSources[0][1]), "😀ok",
+                       "an emoji is two UTF-16 units, which is what an NSRange counts")
+        XCTAssertEqual(table.fieldSources[0][1].location,
+                       source.range(of: "😀ok").location,
+                       "and the CRLF before it is two units too")
+    }
+
     @MainActor
-    func testClickingACellInSplitMovesTheCaretAndKeepsTheKeyboard() throws {
+    func testClickingACellInSplitSelectsThatCellAndKeepsTheKeyboard() throws {
         _ = NSApplication.shared
         let text = """
         id,name
@@ -453,14 +504,23 @@ final class CSVPreviewTests: XCTestCase {
         try waitForPage(pane)
         window.layoutIfNeeded()
         let grid = pane.gridForTesting
+        let source = text as NSString
 
         grid.mouseDown(with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
                                                      row: 1, column: 2)))
-        XCTAssertEqual(controller.currentTabState.selection,
-                       (text as NSString).range(of: "2,\"Assembly").location,
-                       "the first line of the record, quoted field and all")
+        let selected = controller.editorScrolling.textView.selectedRange()
+        XCTAssertEqual(selected, source.range(of: "\"Assembly required.\nTwo people.\""),
+                       "the clicked cell's own text, quotes and both lines of it")
+        XCTAssertEqual(source.substring(with: selected),
+                       "\"Assembly required.\nTwo people.\"")
         XCTAssertTrue(window.firstResponder === grid,
                       "the grid keeps the keyboard: this is a look, not a jump")
+
+        grid.mouseDown(with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
+                                                     row: 2, column: 1)))
+        XCTAssertEqual(controller.editorScrolling.textView.selectedRange(),
+                       source.range(of: "3", options: .backwards),
+                       "the first column is a cell like any other")
     }
 
     @MainActor
@@ -482,8 +542,30 @@ final class CSVPreviewTests: XCTestCase {
             with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
                                           row: 1, column: 2)))
         XCTAssertEqual(reveals.count, 1, "and in split it says exactly once")
-        XCTAssertEqual(reveals.first?.location, ("a,b\n1,2\n" as NSString).length,
-                       "the second row, where the second row is written")
+        XCTAssertEqual(reveals.first?.location, ("a,b\n1,2\n" as NSString).length + 2,
+                       "the second row's second field, where that field is written")
+    }
+
+    @MainActor
+    func testAClickTheRowCannotPlaceFallsBackToTheWholeRecord() throws {
+        let (pane, window) = try makePane()
+        try show(makeNote(named: "ragged.csv", text: "a,b,c\n1,2\n"), in: pane)
+        pane.layoutSubtreeIfNeeded()
+        var reveals: [NSRange] = []
+        pane.onSourceReveal = { reveals.append($0) }
+        pane.sendsBlockClicks = true
+
+        pane.gridForTesting.mouseDown(
+            with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
+                                          row: 0, column: 3)))
+        XCTAssertEqual(reveals.last, NSRange(location: 6, length: 3),
+                       "the row never wrote a third field, so the record is what there is")
+
+        pane.gridForTesting.mouseDown(
+            with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
+                                          row: 0, column: 2)))
+        XCTAssertEqual(reveals.last, NSRange(location: 8, length: 1),
+                       "and a field it did write is that field")
     }
 
     // MARK: - The demo file

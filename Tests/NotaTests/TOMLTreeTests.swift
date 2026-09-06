@@ -502,6 +502,111 @@ final class TOMLTreeTests: XCTestCase {
                 + "and `[dependencies.tokio]` adds to the table `[dependencies]` opened above")
     }
 
+    // MARK: - Where each node is written
+
+    /// A click on a row selects the node, so every node carries its span: a
+    /// pair from its key through the end of its value, a header's table from
+    /// the `[` through the last pair under it, and the objects a dotted key
+    /// conjures from the key that first mentioned them.
+    func testEveryNodeCarriesItsWholeSpan() throws {
+        let text = """
+            name = "nota"
+            fruit.apple.colour = "red"
+            fruit.apple.taste = "sweet"
+
+            [owner]
+            who = "Ada"
+
+            [[bin]]
+            path = "a"
+
+            [[bin]]
+            path = "b"
+            """
+        XCTAssertEqual(
+            describeSpans(try TOMLTree.parse(text), in: text),
+            """
+            \(text.debugDescription)
+              name: "name = \\"nota\\""
+              fruit: "fruit.apple.colour = \\"red\\"\\nfruit.apple.taste = \\"sweet\\""
+                apple: "fruit.apple.colour = \\"red\\"\\nfruit.apple.taste = \\"sweet\\""
+                  colour: "fruit.apple.colour = \\"red\\""
+                  taste: "fruit.apple.taste = \\"sweet\\""
+              owner: "[owner]\\nwho = \\"Ada\\""
+                who: "who = \\"Ada\\""
+              bin: "[[bin]]\\npath = \\"a\\"\\n\\n[[bin]]\\npath = \\"b\\""
+                "[[bin]]\\npath = \\"a\\""
+                  path: "path = \\"a\\""
+                "[[bin]]\\npath = \\"b\\""
+                  path: "path = \\"b\\""
+            """,
+            "the root is the whole file, and an array of tables runs from its "
+                + "first header to the last pair of its last item")
+    }
+
+    func testInlineTablesAndArraysSpanTheirOwnBrackets() throws {
+        let text = """
+            pins = [1, 2]
+            who = { name = "Ada", age = 36 }
+            """
+        XCTAssertEqual(
+            describeSpans(try TOMLTree.parse(text), in: text),
+            """
+            \(text.debugDescription)
+              pins: "pins = [1, 2]"
+                "1"
+                "2"
+              who: "who = { name = \\"Ada\\", age = 36 }"
+                name: "name = \\"Ada\\""
+                age: "age = 36"
+            """)
+    }
+
+    /// The walk counts Characters and the editor counts UTF-16 units, so a
+    /// `名` and an emoji in front of a pair are what prove the conversion.
+    func testASpanIsCountedTheWayTheEditorCounts() throws {
+        let text = """
+            "名字" = "😀"
+            after = 1
+            """
+        XCTAssertEqual(
+            describeSpans(try TOMLTree.parse(text), in: text),
+            """
+            \(text.debugDescription)
+              名字: "\\"名字\\" = \\"😀\\""
+              after: "after = 1"
+            """)
+    }
+
+    /// A click on a leaf gives the value and nothing else — its quotes part of
+    /// it, and for an inline table or an array its own brackets.
+    func testALeafCarriesItsValuesOwnSpan() throws {
+        let text = """
+            "名字" = "😀 nota"
+            n = 14
+            ok = true
+            pins = [1, 2]
+            who = { name = "Ada" }
+
+            [owner]
+            age = 36
+            """
+        let root = try XCTUnwrap(try TOMLTree.parse(text).roots.first)
+        let string = text as NSString
+        func value(_ node: StructuredNode) -> String? {
+            node.valueRange.map { string.substring(with: $0) }
+        }
+        XCTAssertEqual(value(root.children[0]), #""😀 nota""#)
+        XCTAssertEqual(value(root.children[1]), "14")
+        XCTAssertEqual(value(root.children[2]), "true")
+        XCTAssertEqual(value(root.children[3]), "[1, 2]")
+        XCTAssertEqual(value(root.children[4]), #"{ name = "Ada" }"#)
+        XCTAssertEqual(value(root.children[4].children[0]), #""Ada""#)
+        XCTAssertNil(value(root.children[5]),
+                     "a table a header opened is its header and its body, with no value part")
+        XCTAssertEqual(value(root.children[5].children[0]), "36")
+    }
+
     // MARK: - Helpers
 
     private func assertRefused(

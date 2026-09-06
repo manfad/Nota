@@ -10,8 +10,10 @@ import Foundation
 /// one view serve all four, and a parser's whole job is to turn its own
 /// grammar into it.
 ///
-/// Every node remembers the line it starts on, 1-based the way the editor
-/// counts, so a click on a row can put the caret there.
+/// Every node remembers where it is written: the line it starts on, 1-based
+/// the way the editor counts, and — where its parser could say — the whole
+/// span of source it was made from, so a click on a row selects the node
+/// rather than pointing at the start of a line that may hold the whole file.
 struct StructuredNode: Equatable {
 
     /// What the node holds. A branch's parts are its `children`; a leaf's
@@ -44,12 +46,34 @@ struct StructuredNode: Equatable {
     var children: [StructuredNode]
     /// The 1-based source line the node starts on.
     var line: Int
+    /// The node's whole span in the source, in the UTF-16 units an
+    /// `NSTextStorage` counts in — a member from its key through the end of
+    /// its value, an item from the value itself, a branch through its closing
+    /// bracket. `nil` where the parser could not say, and the line stands in
+    /// for it.
+    var range: NSRange?
+    /// The *value* alone, without the key that names it: `"Nota"` of
+    /// `name = "Nota"`, quotes and all, because they are the value's own
+    /// characters and a selection that left them out would point at something
+    /// the file does not say.
+    ///
+    /// For a branch it is the bracketed form where the grammar has one — a
+    /// JSON object, a TOML inline table or array, a YAML flow collection —
+    /// and `nil` where it does not: a YAML block mapping, a TOML `[table]`
+    /// and an XML element are their key and their body with nothing around
+    /// them, so there is no "value part" to point at.
+    var valueRange: NSRange?
 
-    init(key: String? = nil, value: Value, children: [StructuredNode] = [], line: Int) {
+    init(
+        key: String? = nil, value: Value, children: [StructuredNode] = [],
+        line: Int, range: NSRange? = nil, valueRange: NSRange? = nil
+    ) {
         self.key = key
         self.value = value
         self.children = children
         self.line = line
+        self.range = range
+        self.valueRange = valueRange
     }
 
     var isBranch: Bool {
@@ -97,5 +121,78 @@ enum StructuredFormat: Equatable {
         case .toml: try TOMLTree.parse(text)
         case .xml: try XMLTree.parse(text)
         }
+    }
+}
+
+/// Where a parser's own counting lands in the editor's.
+///
+/// A node's range is an `NSRange` over the note's `NSTextStorage`, which
+/// counts in UTF-16 units, and not one parser here counts that way: the JSON
+/// walker steps over UTF-8 bytes, the TOML and YAML walkers over
+/// `Character`s, and `XMLParser` reports columns in Unicode scalars. Every one
+/// of those is the same string held against a different ruler, so the
+/// conversion is made once, in a single pass over the text, and remembers only
+/// the places where the two rulers part company — for an ASCII file, nowhere
+/// at all, and the lookup is then the identity.
+struct SourceOffsets {
+
+    /// The positions, in the parser's own units, where the running difference
+    /// between the two rulers changes, and what it becomes there. Both start
+    /// with the zero every string starts with, so a lookup always finds
+    /// something.
+    private var marks: [Int] = [0]
+    private var differences: [Int] = [0]
+
+    /// For a walk over `Array(text.utf8)` — the JSON parser's.
+    static func utf8(of text: String) -> SourceOffsets {
+        var offsets = SourceOffsets()
+        for scalar in text.unicodeScalars {
+            offsets.step(unit: UTF8.width(scalar), utf16: UTF16.width(scalar))
+        }
+        return offsets
+    }
+
+    /// For a walk over `Array(text)` — the TOML and YAML parsers'.
+    static func characters(of text: String) -> SourceOffsets {
+        var offsets = SourceOffsets()
+        for character in text { offsets.step(unit: 1, utf16: character.utf16.count) }
+        return offsets
+    }
+
+    /// For `XMLParser`'s columns, which libxml counts in Unicode scalars.
+    static func scalars(of text: String) -> SourceOffsets {
+        var offsets = SourceOffsets()
+        for scalar in text.unicodeScalars { offsets.step(unit: 1, utf16: UTF16.width(scalar)) }
+        return offsets
+    }
+
+    private mutating func step(unit: Int, utf16: Int) {
+        position += unit
+        guard unit != utf16 else { return }
+        difference += utf16 - unit
+        marks.append(position)
+        differences.append(difference)
+    }
+
+    private var position = 0
+    private var difference = 0
+
+    /// One position, in UTF-16. A position inside a unit the two rulers
+    /// disagree about — which no parser here ever hands over — comes back at
+    /// that unit's own start.
+    func utf16(_ position: Int) -> Int {
+        var low = 0
+        var high = marks.count - 1
+        while low < high {
+            let middle = (low + high + 1) / 2
+            if marks[middle] <= position { low = middle } else { high = middle - 1 }
+        }
+        return position + differences[low]
+    }
+
+    /// A span, from one position to another, as the editor counts it.
+    func range(from start: Int, to end: Int) -> NSRange {
+        let location = utf16(start)
+        return NSRange(location: location, length: max(0, utf16(end) - location))
     }
 }

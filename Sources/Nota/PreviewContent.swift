@@ -190,9 +190,10 @@ protocol PreviewContent: NSView {
     /// too: a checkbox is a control, not a jump.
     var onTaskToggle: ((NSRange) -> Void)? { get set }
 
-    /// Run when the content points at a place in the source *without* asking
-    /// for the keyboard: the editor's caret goes there and the line is
-    /// brought into view, and the content keeps the focus it has.
+    /// Run when the content points at a piece of the source *without* asking
+    /// for the keyboard: the editor selects it and brings it into view, and
+    /// the content keeps the focus it has. A range with no length is a caret,
+    /// which is all a pane with nothing wider to point at can give.
     ///
     /// A block click is a jump — the reader is done with the render and wants
     /// to type — so it takes the caret with it. A dump's row click is not: the

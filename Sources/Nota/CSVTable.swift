@@ -32,6 +32,12 @@ import Foundation
 /// to the end of the line it ends on. A record whose quoted field runs over
 /// three lines has all three, and the range's own location is the first of
 /// them — which is what a click on a cell walks the editor to.
+///
+/// `fieldSources` is the same note taken one level down: per row, where every
+/// field of it is written, *as written* — a quoted field's own quotes are part
+/// of it, because they are its text in the file. A click on a cell selects
+/// that, and only a cell that cannot be placed — a ragged row that never wrote
+/// the field, a click with no column under it — falls back to the record.
 struct CSVTable: Equatable {
 
     /// How many rows a page holds — the same hundred a dump's page holds, so
@@ -73,6 +79,11 @@ struct CSVTable: Equatable {
     /// Where each row is written, in the same order — `rows[i]` is written at
     /// `sources[i]`.
     let sources: [NSRange]
+    /// Where each field of each row is written, quotes included. As long as
+    /// the record actually was: a ragged row that wrote three fields has
+    /// three, not as many as `columns` has, since the ones it never wrote are
+    /// nowhere in the file to be pointed at.
+    let fieldSources: [[NSRange]]
 
     /// Reads the whole file. Never fails: a file this cannot make sense of is
     /// a table with odd rows in it, which is what the reader wants to see.
@@ -82,6 +93,7 @@ struct CSVTable: Equatable {
             columns = []
             rows = []
             sources = []
+            fieldSources = []
             return
         }
         // A long row widens the table rather than being clipped: the file is
@@ -98,6 +110,7 @@ struct CSVTable: Equatable {
                 : record.fields + Array(repeating: "", count: width - record.fields.count)
         }
         sources = records.dropFirst().map(\.range)
+        fieldSources = records.dropFirst().map(\.fieldRanges)
     }
 
     /// What a column with no name in the header is called. Its position,
@@ -112,6 +125,11 @@ struct CSVTable: Equatable {
         /// it begins on to the last character of the line it ends on, the
         /// terminator itself left out.
         var range: NSRange
+        /// The characters of each field, in the same order as `fields` and as
+        /// written — the opening and closing quotes of a quoted field are
+        /// part of it, and the separators between fields are part of none of
+        /// them.
+        var fieldRanges: [NSRange]
     }
 
     /// One pass over the text. UTF-16 offsets are counted as it goes, because
@@ -119,9 +137,15 @@ struct CSVTable: Equatable {
     private static func scan(_ text: String, separator: Character) -> [Record] {
         var records: [Record] = []
         var fields: [String] = []
+        var fieldRanges: [NSRange] = []
         var field = ""
         var start = 0
         var offset = 0
+        // Where the field in hand began. Every field begins somewhere — at
+        // the start of the record, or one unit past the separator before it —
+        // and ends where the next separator or terminator stands, so its
+        // range is the pair read together.
+        var fieldStart = 0
         var characters = Substring(text)
         // A byte-order mark is the encoding saying hello, not the first
         // letter of the first header.
@@ -129,16 +153,22 @@ struct CSVTable: Equatable {
             characters = characters.dropFirst()
             offset = 1
             start = 1
+            fieldStart = 1
         }
 
         /// Ends the record at `end`, unless it is a blank line.
         func endRecord(at end: Int) {
             fields.append(field)
+            fieldRanges.append(NSRange(location: fieldStart, length: end - fieldStart))
             field = ""
-            defer { fields = [] }
+            defer {
+                fields = []
+                fieldRanges = []
+            }
             guard fields != [""] else { return }
             records.append(Record(fields: fields,
-                                  range: NSRange(location: start, length: end - start)))
+                                  range: NSRange(location: start, length: end - start),
+                                  fieldRanges: fieldRanges))
         }
 
         var index = characters.startIndex
@@ -177,9 +207,11 @@ struct CSVTable: Equatable {
             switch character {
             case separator:
                 fields.append(field)
+                fieldRanges.append(NSRange(location: fieldStart, length: offset - fieldStart))
                 field = ""
                 atFieldStart = true
                 offset += width
+                fieldStart = offset
                 index = characters.index(after: index)
             // CRLF is one `Character` in Swift and two UTF-16 units, which is
             // exactly the shape the record wants: one terminator, counted as
@@ -190,6 +222,7 @@ struct CSVTable: Equatable {
                 index = characters.index(after: index)
                 endRecord(at: end)
                 start = offset
+                fieldStart = offset
                 atFieldStart = true
             default:
                 field.append(character)
@@ -223,6 +256,9 @@ struct CSVTable: Equatable {
         let rows: [[String]]
         /// Where each row of *this page* is written, in the page's own order.
         let sources: [NSRange]
+        /// Where each field of each row of *this page* is written, quotes
+        /// included — what a click on a cell selects.
+        let fieldSources: [[NSRange]]
         /// How many rows were skipped to reach this page.
         let offset: Int
         /// How many rows there are in the whole table.
@@ -246,6 +282,7 @@ struct CSVTable: Equatable {
         return Page(columns: columns,
                     rows: slice.map { rows[$0] },
                     sources: slice.map { sources[$0] },
+                    fieldSources: slice.map { fieldSources[$0] },
                     offset: offset,
                     total: rows.count)
     }

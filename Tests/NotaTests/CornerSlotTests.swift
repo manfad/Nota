@@ -5,8 +5,8 @@ import XCTest
 
 /// The corner slot: one band per column, and the front tab saying what stands
 /// in it. A tab with a render gets the mode control; a `.json` or `.html` tab
-/// gets that same control with its format's Beautify / Compact action on the
-/// end of it; everything else gets nothing at all.
+/// gets that same control with its format's Beautify / Compact action ahead
+/// of it; everything else gets nothing at all.
 final class CornerSlotTests: XCTestCase {
     private var temporaryDirectories: [URL] = []
 
@@ -45,8 +45,8 @@ final class CornerSlotTests: XCTestCase {
                         controller.modeControlOverlays.preview] {
             XCTAssertFalse(overlay.isHidden)
             XCTAssertEqual(overlay.modeControl.segmentCount, 4,
-                           "the three modes, and the file's own action after them")
-            XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 3))
+                           "the three modes, and the file's own action ahead of them")
+            XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 0))
         }
     }
 
@@ -60,12 +60,12 @@ final class CornerSlotTests: XCTestCase {
         var overlay = controller.modeControlOverlays.editor
         XCTAssertEqual(overlay.modeControl.segmentCount, 4)
         XCTAssertEqual(overlay.formatState, .action(.beautify))
-        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Beautify HTML")
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 0), "Beautify HTML")
 
         try open("laid-out.html", holding: Self.prettyPage, in: controller)
         overlay = controller.modeControlOverlays.editor
         XCTAssertEqual(overlay.formatState, .action(.compact))
-        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Minify HTML",
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 0), "Minify HTML",
                        "a page is minified, not compacted")
     }
 
@@ -132,12 +132,12 @@ final class CornerSlotTests: XCTestCase {
         try open("compact.json", holding: #"{"a":1}"#, in: controller)
         var overlay = controller.modeControlOverlays.editor
         XCTAssertEqual(overlay.formatState, .action(.beautify))
-        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Beautify JSON")
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 0), "Beautify JSON")
 
         try open("pretty.json", holding: "{\n  \"a\": 1\n}\n", in: controller)
         overlay = controller.modeControlOverlays.editor
         XCTAssertEqual(overlay.formatState, .action(.compact))
-        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Compact JSON")
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 0), "Compact JSON")
     }
 
     @MainActor
@@ -149,8 +149,8 @@ final class CornerSlotTests: XCTestCase {
         XCTAssertEqual(controller.cornerSlotContents.editor, .modeControlWithFormat(.json),
                        "the slot stays")
         XCTAssertEqual(overlay.modeControl.segmentCount, 4)
-        XCTAssertFalse(overlay.modeControl.isEnabled(forSegment: 3))
-        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Not valid JSON: line 3")
+        XCTAssertFalse(overlay.modeControl.isEnabled(forSegment: 0))
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 0), "Not valid JSON: line 3")
         XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 1),
                       "and the modes beside it go on working")
     }
@@ -163,7 +163,7 @@ final class CornerSlotTests: XCTestCase {
         XCTAssertFalse(controller.currentTabState.isDirty, "as it came off disk")
 
         let overlay = controller.modeControlOverlays.editor
-        XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 3))
+        XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 0))
         clickFormatSegment(of: overlay)
 
         XCTAssertEqual(
@@ -182,8 +182,8 @@ final class CornerSlotTests: XCTestCase {
         XCTAssertEqual(textView.selectedRange(), NSRange(location: 0, length: 0),
                        "every line moved, so the caret goes to the top")
         XCTAssertEqual(overlay.formatState, .action(.compact), "and the segment flips")
-        XCTAssertEqual(overlay.modeControl.selectedSegment, 0,
-                       "the selection goes back to the mode it was on")
+        XCTAssertEqual(overlay.modeControl.selectedSegment, 1,
+                       "the selection goes back to the mode it was on, now one segment along")
 
         textView.undoManager?.undo()
         XCTAssertEqual(textView.string, source, "one edit, one undo")
@@ -213,7 +213,7 @@ final class CornerSlotTests: XCTestCase {
         XCTAssertFalse(controller.currentTabState.isDirty, "as it came off disk")
 
         let overlay = controller.modeControlOverlays.editor
-        XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 3))
+        XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 0))
         clickFormatSegment(of: overlay)
 
         XCTAssertEqual(textView.string, Self.prettyPage)
@@ -222,9 +222,9 @@ final class CornerSlotTests: XCTestCase {
         XCTAssertEqual(textView.selectedRange(), NSRange(location: 0, length: 0),
                        "every line moved, so the caret goes to the top")
         XCTAssertEqual(overlay.formatState, .action(.compact), "and the segment flips")
-        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Minify HTML")
-        XCTAssertEqual(overlay.modeControl.selectedSegment, 0,
-                       "the selection goes back to the mode it was on")
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 0), "Minify HTML")
+        XCTAssertEqual(overlay.modeControl.selectedSegment, 1,
+                       "the selection goes back to the mode it was on, now one segment along")
 
         clickFormatSegment(of: overlay)
         XCTAssertEqual(textView.string, Self.minifiedPage,
@@ -254,8 +254,8 @@ final class CornerSlotTests: XCTestCase {
         XCTAssertEqual(controller.cornerSlotContents.editor, .modeControlWithFormat(.html),
                        "the slot stays")
         XCTAssertEqual(overlay.modeControl.segmentCount, 4)
-        XCTAssertFalse(overlay.modeControl.isEnabled(forSegment: 3))
-        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Not valid HTML: line 2")
+        XCTAssertFalse(overlay.modeControl.isEnabled(forSegment: 0))
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 0), "Not valid HTML: line 2")
         XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 1),
                       "and the modes beside it go on working")
     }
@@ -268,7 +268,9 @@ final class CornerSlotTests: XCTestCase {
         try open("data.json", holding: #"{"a":1}"#, in: controller)
         let overlay = controller.modeControlOverlays.editor
 
-        overlay.modeControl.selectedSegment = 1
+        // Split is second of the three modes, and the action ahead of them
+        // on this tab shifts every mode's segment one along.
+        overlay.modeControl.selectedSegment = overlay.segmentIndex(of: .split)
         overlay.modeControl.sendAction(overlay.modeControl.action, to: overlay.modeControl.target)
         XCTAssertEqual(controller.previewMode, .split)
     }
@@ -288,7 +290,7 @@ final class CornerSlotTests: XCTestCase {
 
         RunLoop.main.run(until: Date().addingTimeInterval(0.8))
         XCTAssertEqual(overlay.formatState, .invalid(line: 1), "on the beat after it")
-        XCTAssertFalse(overlay.modeControl.isEnabled(forSegment: 3))
+        XCTAssertFalse(overlay.modeControl.isEnabled(forSegment: 0))
     }
 
     // MARK: - Helpers
@@ -305,7 +307,7 @@ final class CornerSlotTests: XCTestCase {
     /// control's own action goes out, exactly as AppKit sends it.
     @MainActor
     private func clickFormatSegment(of overlay: ModeControlOverlay) {
-        overlay.modeControl.selectedSegment = ModeControlOverlay.formatSegment
+        overlay.modeControl.selectedSegment = ModeControlOverlay.formatSegmentIndex
         overlay.modeControl.sendAction(overlay.modeControl.action, to: overlay.modeControl.target)
     }
 

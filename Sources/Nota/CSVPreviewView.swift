@@ -195,7 +195,9 @@ final class CSVPreviewView: NSView, PreviewContent {
         grid.dataSource = self
         grid.delegate = self
         grid.copyText = { [weak self] selection in self?.text(of: selection) ?? "" }
-        grid.onCellClick = { [weak self] row, _ in self?.revealSource(ofRow: row) }
+        grid.onCellClick = { [weak self] row, column in
+            self?.revealSource(ofRow: row, column: column)
+        }
         grid.setAccessibilityIdentifier("csv-grid")
 
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -587,16 +589,29 @@ final class CSVPreviewView: NSView, PreviewContent {
 
     // MARK: - Where a row is written
 
-    /// A value clicked: the editor beside the grid goes to the line the row is
-    /// written on, the way a click on a rendered Markdown block goes to the
-    /// paragraph behind it. A record whose quoted field runs over three lines
-    /// lands on the first of them, since that is where the record begins.
-    /// Nothing here takes the keyboard: the grid keeps it, so the arrows go on
-    /// walking the cells.
-    private func revealSource(ofRow row: Int) {
+    /// A value clicked: the editor beside the grid selects that value's own
+    /// text in the file, the way a click on a rendered Markdown block goes to
+    /// the paragraph behind it. The field as it is written, quotes and all —
+    /// they are the field's characters, and a selection that left them out
+    /// would be pointing at something the file does not say.
+    ///
+    /// The record is the fallback and never nothing: a click with no column
+    /// under it, and a ragged row that never wrote the field the column
+    /// stands for, both land on the whole record. A record whose quoted field
+    /// runs over three lines has all three, and begins where the record
+    /// begins. Nothing here takes the keyboard: the grid keeps it, so the
+    /// arrows go on walking the cells.
+    private func revealSource(ofRow row: Int, column: Int) {
         guard sendsBlockClicks, let onSourceReveal, let page,
               row >= 0, row < page.sources.count
         else { return }
+        // A column of the grid is one past its column of the page: the `#`
+        // gutter is the first of them.
+        let index = column - 1
+        if index >= 0, row < page.fieldSources.count, index < page.fieldSources[row].count {
+            onSourceReveal(page.fieldSources[row][index])
+            return
+        }
         onSourceReveal(page.sources[row])
     }
 

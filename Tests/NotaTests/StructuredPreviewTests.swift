@@ -107,6 +107,63 @@ final class StructuredPreviewTests: XCTestCase {
         XCTAssertEqual(b.children[0].children[0].line, 5, "the 2 inside it")
     }
 
+    /// A click on a row selects the node, so a node carries the whole span it
+    /// was written on and not only the line it began: a member from its key
+    /// through the end of its value, a branch through its closing bracket.
+    func testEveryJSONNodeCarriesItsWholeSpan() throws {
+        let text = """
+        {
+          "a": 1,
+          "b": [true, null]
+        }
+        """
+        let root = try XCTUnwrap(try JSONTree.parse(text).roots.first)
+        XCTAssertEqual(source(text, root.range), text, "the root is its own brackets")
+        XCTAssertEqual(source(text, root.children[0].range), #""a": 1"#)
+        XCTAssertEqual(source(text, root.children[1].range), #""b": [true, null]"#)
+        XCTAssertEqual(source(text, root.children[1].children[0].range), "true")
+        XCTAssertEqual(source(text, root.children[1].children[1].range), "null")
+    }
+
+    /// The walk counts UTF-8 bytes and the editor counts UTF-16 units, so a
+    /// file with a `名` and an emoji in front of a node is the one that proves
+    /// the span was converted rather than copied. An emoji is four bytes and
+    /// two UTF-16 units; `名` is three bytes and one.
+    func testASpanIsCountedTheWayTheEditorCounts() throws {
+        let text = #"{"名字": "😀", "after": [1]}"#
+        let root = try XCTUnwrap(try JSONTree.parse(text).roots.first)
+        XCTAssertEqual(source(text, root.children[0].range), #""名字": "😀""#)
+        XCTAssertEqual(source(text, root.children[1].range), #""after": [1]"#)
+        XCTAssertEqual(source(text, root.children[1].children[0].range), "1")
+    }
+
+    /// The whole point of a span: a compact file is one line, so the line
+    /// alone would say nothing about where a node is.
+    func testACompactFilesNodesStillHaveTheirOwnSpans() throws {
+        let text = #"{"a":{"b":[1,2]},"c":"d"}"#
+        let root = try XCTUnwrap(try JSONTree.parse(text).roots.first)
+        XCTAssertEqual(source(text, root.children[0].range), #""a":{"b":[1,2]}"#)
+        XCTAssertEqual(source(text, root.children[0].children[0].range), #""b":[1,2]"#)
+        XCTAssertEqual(source(text, root.children[1].range), #""c":"d""#)
+    }
+
+    /// A row says `name  "Nota"`, and `"Nota"` is what the reader points at:
+    /// a leaf carries its value's own span beside the whole member's, quotes
+    /// and all, because they are the value's characters in the file.
+    func testALeafCarriesItsValuesOwnSpan() throws {
+        let text = #"{"名字": "😀 Nota", "n": 14, "ok": true, "gone": null, "list": [1]}"#
+        let root = try XCTUnwrap(try JSONTree.parse(text).roots.first)
+        XCTAssertEqual(value(text, root.children[0]), #""😀 Nota""#)
+        XCTAssertEqual(value(text, root.children[1]), "14")
+        XCTAssertEqual(value(text, root.children[2]), "true")
+        XCTAssertEqual(value(text, root.children[3]), "null")
+        XCTAssertEqual(value(text, root.children[4]), "[1]",
+                       "a branch's value part is its brackets, which is not what a click on "
+                           + "it gives")
+        XCTAssertEqual(source(text, root.children[0].range), #""名字": "😀 Nota""#,
+                       "the whole member is still there, key and all")
+    }
+
     func testEachKindOfFailureNamesItsLineAndSaysWhy() throws {
         let cases: [(String, Int, String)] = [
             ("", 1, "Empty file"),
@@ -215,6 +272,69 @@ final class StructuredPreviewTests: XCTestCase {
         XCTAssertEqual(root.children[0].line, 2)
         XCTAssertEqual(root.children[1].line, 3)
         XCTAssertEqual(root.children[1].children[0].line, 3, "the run inside it")
+    }
+
+    /// The reader says where an event happened and never how wide it was, so
+    /// an element's span is its `<` through its `</name>`, an attribute's is
+    /// the `name="value"` read back out of the tag, and a CDATA block is the
+    /// whole `<![CDATA[…]]>` rather than the text inside it.
+    func testEveryXMLNodeCarriesItsWholeSpan() throws {
+        let text = """
+        <shop open="yes">
+          <!-- a note -->
+          <item id="1">Pencil</item>
+          <empty/>
+          <raw><![CDATA[a < b]]></raw>
+        </shop>
+        """
+        let root = try XCTUnwrap(try XMLTree.parse(text).roots.first)
+        XCTAssertEqual(source(text, root.range), text)
+        XCTAssertEqual(source(text, root.children[0].range), #"open="yes""#)
+        XCTAssertEqual(source(text, root.children[1].range), "<!-- a note -->")
+        let item = root.children[2]
+        XCTAssertEqual(source(text, item.range), #"<item id="1">Pencil</item>"#)
+        XCTAssertEqual(source(text, item.children[0].range), #"id="1""#)
+        XCTAssertEqual(source(text, item.children[1].range), "Pencil")
+        XCTAssertEqual(source(text, root.children[3].range), "<empty/>")
+        XCTAssertEqual(source(text, root.children[4].children[0].range), "<![CDATA[a < b]]>")
+    }
+
+    /// `XMLParser` counts its columns in Unicode scalars, and an `NSRange` is
+    /// counted in UTF-16 units — an emoji is one column and two of those — so
+    /// a file with one in front of a node is what proves the conversion.
+    func testAnXMLSpanIsCountedTheWayTheEditorCounts() throws {
+        let text = "<r>名字😀<a x=\"y\">hi</a></r>"
+        let root = try XCTUnwrap(try XMLTree.parse(text).roots.first)
+        XCTAssertEqual(source(text, root.children[0].range), "名字😀")
+        let a = root.children[1]
+        XCTAssertEqual(source(text, a.range), #"<a x="y">hi</a>"#)
+        XCTAssertEqual(source(text, a.children[0].range), #"x="y""#)
+        XCTAssertEqual(source(text, a.children[1].range), "hi")
+    }
+
+    /// A start tag written across lines: the element begins at its `<`, which
+    /// is where its line is too, and not at the `>` the reader reports.
+    func testAnElementSpansFromItsOpeningAngleBracket() throws {
+        let text = "<r>\n  <a\n    x=\"1\"\n    y=\"2\">t</a>\n</r>"
+        let root = try XCTUnwrap(try XMLTree.parse(text).roots.first)
+        let a = root.children[0]
+        XCTAssertEqual(a.line, 2)
+        XCTAssertEqual(source(text, a.range), "<a\n    x=\"1\"\n    y=\"2\">t</a>")
+        XCTAssertEqual(source(text, a.children[0].range), #"x="1""#)
+        XCTAssertEqual(source(text, a.children[1].range), #"y="2""#)
+    }
+
+    func testAnXMLAttributeAndTextCarryTheirValues() throws {
+        let text = #"<shop note="😀 名" currency="MYR"><item>Pencil</item><!--n--></shop>"#
+        let root = try XCTUnwrap(try XMLTree.parse(text).roots.first)
+        XCTAssertEqual(root.children.map(\.key), ["@currency", "@note", "item", nil])
+        XCTAssertEqual(value(text, root.children[0]), #""MYR""#, "its quotes part of it")
+        XCTAssertEqual(source(text, root.children[0].range), #"currency="MYR""#)
+        XCTAssertEqual(value(text, root.children[1]), #""😀 名""#)
+        XCTAssertEqual(value(text, root.children[2].children[0]), "Pencil")
+        XCTAssertEqual(value(text, root.children[3]), "<!--n-->")
+        XCTAssertNil(root.children[2].valueRange,
+                     "an element is its tags and its body, with no value part to point at")
     }
 
     func testAnXMLFailureNamesItsLine() throws {
@@ -339,10 +459,10 @@ final class StructuredPreviewTests: XCTestCase {
                        "two levels: the shape, not the contents")
     }
 
-    /// A click walks the editor to the line, and leaves the keyboard where it
-    /// was — the tree is being walked with the arrows.
+    /// A click selects the member in the source, and leaves the keyboard where
+    /// it was — the tree is being walked with the arrows.
     @MainActor
-    func testAClickOnARowMovesTheEditorsCaretToItsLine() throws {
+    func testAClickOnARowSelectsTheNodeInTheEditor() throws {
         let controller = try makeController(showing: """
         {
           "a": 1,
@@ -359,9 +479,33 @@ final class StructuredPreviewTests: XCTestCase {
         XCTAssertEqual(pane.visibleRows[2].title, "b  2")
         click(row: 2, in: pane)
 
-        XCTAssertEqual(line(of: editor.selectedRange().location, in: editor.string), 3)
+        XCTAssertEqual(source(editor.string, editor.selectedRange()), "2",
+                       "a leaf gives its value and nothing else")
         XCTAssertTrue(window.firstResponder === pane.outline,
                       "the click reveals rather than jumps")
+    }
+
+    /// The whole reason a node carries a span: a compact file is one line, so
+    /// a click that only knew the line would select the file.
+    @MainActor
+    func testAClickOnACompactFilesRowSelectsThatMemberAlone() throws {
+        let controller = try makeController(
+            showing: #"{"a":1,"b":{"c":2}}"#, named: "Settings.json")
+        defer { controller.window?.orderOut(nil) }
+        let pane = controller.previewPanes.tree
+        let window = try XCTUnwrap(controller.window)
+        let editor = try XCTUnwrap(descendant(of: window.contentView!, ofType: NotaTextView.self))
+        window.makeFirstResponder(pane.outline)
+
+        XCTAssertEqual(pane.path(atRow: 3), path("b", "c"))
+        click(row: 3, in: pane)
+
+        XCTAssertEqual(source(editor.string, editor.selectedRange()), "2")
+        XCTAssertTrue(window.firstResponder === pane.outline)
+
+        // And a branch gives the whole of itself, key and body together.
+        click(row: 2, in: pane)
+        XCTAssertEqual(source(editor.string, editor.selectedRange()), #""b":{"c":2}"#)
     }
 
     @MainActor
@@ -389,14 +533,28 @@ final class StructuredPreviewTests: XCTestCase {
         XCTAssertNil(pane.selectedPath)
     }
 
-    /// A line that begins several nodes — every line of a compact file — is a
-    /// run of the document rather than one node's, so the outermost of them
-    /// is what the caret is in.
+    /// The caret at the front of a compact file is on the file's own opening
+    /// brace, which is the root and nothing deeper.
     @MainActor
     func testACompactFileLightsItsRootRatherThanItsLastLeaf() throws {
         let pane = try makePane(showing: #"{"a":{"b":{"c":1}}}"#)
         pane.highlightBlock(containingSource: 0)
         XCTAssertEqual(pane.selectedPath, "0", "the root, at the top, not the 1 inside it")
+    }
+
+    /// And moving on into it walks the tree down, which the line alone could
+    /// never do: every node of this file begins on line 1.
+    @MainActor
+    func testTheCaretWalksAOneLineFileDownToTheDeepestNodeItIsIn() throws {
+        let pane = try makePane(showing: #"{"a":{"b":{"c":1}}}"#)
+        pane.highlightBlock(containingSource: 2)
+        XCTAssertEqual(pane.selectedPath, path("a"), "inside the key `a`")
+
+        pane.highlightBlock(containingSource: 7)
+        XCTAssertEqual(pane.selectedPath, path("a", "b"))
+
+        pane.highlightBlock(containingSource: 15)
+        XCTAssertEqual(pane.selectedPath, path("a", "b", "c"), "on the 1 itself")
     }
 
     @MainActor
@@ -472,6 +630,18 @@ final class StructuredPreviewTests: XCTestCase {
 
     // MARK: - Helpers
 
+    /// The source a node's range points at — the one thing a range test has
+    /// to do, since a span is right when the text it cuts out is the node.
+    private func source(_ text: String, _ range: NSRange?) -> String? {
+        guard let range else { return nil }
+        return (text as NSString).substring(with: range)
+    }
+
+    /// The source a node's *value* points at — what a click on a leaf gives.
+    private func value(_ text: String, _ node: StructuredNode) -> String? {
+        source(text, node.valueRange)
+    }
+
     /// The path the tree spells a node with: the document's roots are
     /// numbered, and every step down adds its key or its own index.
     private func path(_ components: String...) -> String {
@@ -486,11 +656,6 @@ final class StructuredPreviewTests: XCTestCase {
             location = NSMaxRange(string.lineRange(for: NSRange(location: location, length: 0)))
         }
         return location
-    }
-
-    private func line(of location: Int, in text: String) -> Int {
-        let head = (text as NSString).substring(to: location)
-        return head.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
     }
 
     @MainActor

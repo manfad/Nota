@@ -261,7 +261,9 @@ final class SQLPreviewView: NSView, PreviewContent {
         grid.dataSource = self
         grid.delegate = self
         grid.copyText = { [weak self] selection in self?.text(of: selection) ?? "" }
-        grid.onCellClick = { [weak self] row, _ in self?.revealSource(ofRow: row) }
+        grid.onCellClick = { [weak self] row, column in
+            self?.revealSource(ofRow: row, column: column)
+        }
         grid.setAccessibilityIdentifier("sql-grid")
 
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -891,25 +893,44 @@ final class SQLPreviewView: NSView, PreviewContent {
 
     // MARK: - Where a row is written
 
-    /// A value clicked: the editor beside the grid goes to the `INSERT` that
-    /// wrote the row it is in, the way a click on a rendered Markdown block
-    /// goes to the paragraph behind it.
+    /// A value clicked: the editor beside the grid selects that value's own
+    /// text in the `INSERT` that wrote it, the way a click on a rendered
+    /// Markdown block goes to the paragraph behind it.
     ///
     /// The page carries a rowid per row and `SQLSourceMap` knows which
     /// statement made which rowid, so a row of a multi-row insert lands on its
-    /// own tuple rather than on the statement's head. The page also says which
-    /// table those rowids are of — the picked one when a table is being read,
-    /// and the one table the query read when it is a query — so a query's rows
-    /// point at the file too. Everything that has no rowid to be looked up
-    /// by — a query of any other shape, a `WITHOUT ROWID` table, a row whose
-    /// insert is not in this file — does nothing at all, which is better than
-    /// landing somewhere arbitrary. Nothing here takes the keyboard: the grid
-    /// keeps it, so the arrows go on walking the cells.
-    private func revealSource(ofRow row: Int) {
+    /// own tuple rather than on the statement's head — and inside that tuple,
+    /// on the one value the clicked column stands for, its quotes part of it.
+    /// The column is placed by *name*: the list an
+    /// `INSERT INTO t (b, a) VALUES (…)` gave when it gave one, and the
+    /// table's own columns when it did not, since a query is free to ask for
+    /// them in any order and to ask for things that are not columns at all. A
+    /// cell that cannot be placed — a computed column, a name in neither list
+    /// — falls back to the whole tuple and never to nothing.
+    ///
+    /// The page also says which table those rowids are of — the picked one
+    /// when a table is being read, and the one table the query read when it is
+    /// a query — so a query's rows point at the file too. Everything that has
+    /// no rowid to be looked up by — a query of any other shape, a
+    /// `WITHOUT ROWID` table, a row whose insert is not in this file — does
+    /// nothing at all, which is better than landing somewhere arbitrary.
+    /// Nothing here takes the keyboard: the grid keeps it, so the arrows go on
+    /// walking the cells.
+    private func revealSource(ofRow row: Int, column: Int) {
         guard sendsBlockClicks, let onSourceReveal, let dump, let page,
               let rowids = page.rowids, let table = page.rowidTable,
-              row >= 0, row < rowids.count,
-              let range = dump.sourceMap.range(ofRowid: rowids[row], inTable: table)
+              row >= 0, row < rowids.count
+        else { return }
+        let rowid = rowids[row]
+        // A column of the grid is one past its column of the page: the `#`
+        // gutter is the first of them.
+        let index = column - 1
+        let name = index >= 0 && index < page.columns.count ? page.columns[index].name : nil
+        let value = name.flatMap {
+            dump.sourceMap.range(ofRowid: rowid, inTable: table, column: $0,
+                                 tableColumns: dump.declaredTypes(ofTable: table).map(\.name))
+        }
+        guard let range = value ?? dump.sourceMap.range(ofRowid: rowid, inTable: table)
         else { return }
         onSourceReveal(range)
     }

@@ -29,7 +29,7 @@ enum JSONTree {
     static let depthLimit = 256
 
     static func parse(_ text: String) throws -> StructuredDocument {
-        var walker = Walker(bytes: Array(text.utf8))
+        var walker = Walker(bytes: Array(text.utf8), offsets: .utf8(of: text))
         let root = try walker.parseDocument()
         return StructuredDocument(roots: [root])
     }
@@ -45,6 +45,10 @@ enum JSONTree {
     /// tokens. A file that breaks that rule is refused at the same byte.
     private struct Walker {
         let bytes: [UInt8]
+        /// The same source, measured the way the editor measures it: a node's
+        /// range is a pair of byte offsets here and an `NSRange` by the time
+        /// it reaches the tree.
+        let offsets: SourceOffsets
         var index = 0
         var line = 1
 
@@ -83,31 +87,47 @@ enum JSONTree {
             guard depth < JSONTree.depthLimit else { throw error("Nested too deeply") }
             guard !isAtEnd else { throw error("Unexpected end of file") }
             let start = line
+            // The value's own span: from the byte it opens on to the one past
+            // the byte it closes on, which for a branch is its bracket.
+            let from = index
             switch bytes[index] {
             case 0x7B:  // {
-                return StructuredNode(
-                    key: key, value: .object,
-                    children: try parseObject(depth: depth), line: start
-                )
+                let children = try parseObject(depth: depth)
+                return node(key: key, .object, children, line: start, from: from)
             case 0x5B:  // [
-                return StructuredNode(
-                    key: key, value: .array,
-                    children: try parseArray(depth: depth), line: start
-                )
+                let children = try parseArray(depth: depth)
+                return node(key: key, .array, children, line: start, from: from)
             case 0x22:  // "
-                return StructuredNode(key: key, value: .string(try parseString()), line: start)
+                let string = try parseString()
+                return node(key: key, .string(string), [], line: start, from: from)
             case 0x74:  // t
                 try expect("true")
-                return StructuredNode(key: key, value: .bool(true), line: start)
+                return node(key: key, .bool(true), [], line: start, from: from)
             case 0x66:  // f
                 try expect("false")
-                return StructuredNode(key: key, value: .bool(false), line: start)
+                return node(key: key, .bool(false), [], line: start, from: from)
             case 0x6E:  // n
                 try expect("null")
-                return StructuredNode(key: key, value: .null, line: start)
+                return node(key: key, .null, [], line: start, from: from)
             default:
-                return StructuredNode(key: key, value: .number(try parseNumber()), line: start)
+                let number = try parseNumber()
+                return node(key: key, .number(number), [], line: start, from: from)
             }
+        }
+
+        /// A node, with the span from `from` to wherever the walk has reached.
+        /// That span is the value as written — the token, or the brackets and
+        /// everything in them — and it stays on the node as its `valueRange`
+        /// even after a member widens the range to take its key in.
+        func node(
+            key: String?, _ value: StructuredNode.Value, _ children: [StructuredNode] = [],
+            line: Int, from: Int
+        ) -> StructuredNode {
+            let span = offsets.range(from: from, to: index)
+            return StructuredNode(
+                key: key, value: value, children: children, line: line,
+                range: span, valueRange: span
+            )
         }
 
         mutating func parseObject(depth: Int) throws -> [StructuredNode] {
@@ -121,8 +141,10 @@ enum JSONTree {
             while true {
                 skipWhitespace()
                 // The member is written down at its *key*: that is where the
-                // reader's eye is, and where a click on the row goes.
+                // reader's eye is, where a click on the row goes, and where
+                // the member's own span begins — through the end of its value.
                 let start = line
+                let from = index
                 guard !isAtEnd, bytes[index] == 0x22 else { throw error("Expected a key") }
                 let key = try parseString()
                 skipWhitespace()
@@ -131,6 +153,7 @@ enum JSONTree {
                 skipWhitespace()
                 var member = try parseValue(key: key, depth: depth + 1)
                 member.line = start
+                member.range = offsets.range(from: from, to: index)
                 members.append(member)
                 skipWhitespace()
                 guard !isAtEnd else { throw error("Unexpected end of file") }

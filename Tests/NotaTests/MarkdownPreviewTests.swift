@@ -1801,7 +1801,7 @@ final class MarkdownPreviewTests: XCTestCase {
     // MARK: - Block sync
 
     @MainActor
-    func testClickingABlockPutsTheCaretOnItsSourceInTheEditor() throws {
+    func testClickingABlockSelectsItsSourceInTheEditor() throws {
         _ = NSApplication.shared
         let controller = try makeControllerShowingPreview()
         let editor = try editorTextView(of: controller)
@@ -1816,12 +1816,13 @@ final class MarkdownPreviewTests: XCTestCase {
         )
 
         try clickPreview(of: controller, on: "Second paragraph.")
-        // "Second paragraph." starts at 27 in the source.
-        XCTAssertEqual(editor.selectedRange(), NSRange(location: 27, length: 0))
+        // "Second paragraph." starts at 27 in the source and is 17 long.
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 27, length: 17))
 
         try clickPreview(of: controller, on: "Title")
-        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 0),
-                       "the caret lands on the block's first character")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 7),
+                       "the whole block, `# Title` and its hash: typing replaces what "
+                           + "was clicked, and ⌘Z puts it back")
     }
 
     @MainActor
@@ -2737,9 +2738,9 @@ final class MarkdownPreviewTests: XCTestCase {
     }
 
     /// In split the same click is a jump: the render is a map into the text
-    /// beside it, and clicking a block puts the caret on that block.
+    /// beside it, and clicking a block selects that block in it.
     @MainActor
-    func testClickingABlockInSplitPutsTheCaretOnIt() throws {
+    func testClickingABlockInSplitSelectsIt() throws {
         _ = NSApplication.shared
         let controller = try makeControllerShowingPreview()
         let editor = try editorTextView(of: controller)
@@ -2752,7 +2753,7 @@ final class MarkdownPreviewTests: XCTestCase {
         try clickPreview(of: controller, on: "Second paragraph.")
 
         XCTAssertEqual(controller.previewMode, .split)
-        XCTAssertEqual(editor.selectedRange(), NSRange(location: 27, length: 0))
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 27, length: 17))
     }
 
     /// Split still gives up nothing to the click: the render itself is never

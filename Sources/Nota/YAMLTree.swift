@@ -44,20 +44,63 @@ enum YAMLTree {
     static func parse(_ text: String) throws -> StructuredDocument {
         var lines: [Line] = []
         var number = 1
+        var start = 0
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
             var characters = Array(raw)
             if characters.last == "\r" { characters.removeLast() }
-            lines.append(Line(number: number, text: characters))
+            lines.append(Line(number: number, text: characters, start: start))
+            start += raw.utf16.count + 1  // the break the split ate
             number += 1
         }
         var parser = Parser(lines: lines)
         return StructuredDocument(roots: try parser.parseStream())
     }
 
-    /// One physical line of the source, with the number the editor shows.
+    /// One physical line of the source, with the number the editor shows and
+    /// where it begins in the editor's own counting.
+    ///
+    /// The parser walks `[Character]` and a node's range is UTF-16, and the
+    /// two part company on any line holding an emoji or a flag. So each line
+    /// works out once, at the point it is cut, where each of its columns
+    /// lands — and only where it has to: a line whose characters are one unit
+    /// each, which is nearly every line of nearly every file, keeps no table
+    /// at all and answers by adding.
     private struct Line {
         let number: Int
         let text: [Character]
+        /// The UTF-16 offset the line begins at.
+        let start: Int
+        /// The UTF-16 offset of each column, and of the end past the last —
+        /// `nil` when column and offset agree.
+        private let columns: [Int]?
+
+        init(number: Int, text: [Character], start: Int) {
+            self.number = number
+            self.text = text
+            self.start = start
+            var offsets: [Int] = []
+            offsets.reserveCapacity(text.count + 1)
+            var offset = start
+            var uneven = false
+            for character in text {
+                offsets.append(offset)
+                let width = character.utf16.count
+                if width != 1 { uneven = true }
+                offset += width
+            }
+            offsets.append(offset)
+            self.columns = uneven ? offsets : nil
+        }
+
+        /// Where a column of this line is, as the editor counts.
+        func offset(column: Int) -> Int {
+            let clamped = min(max(column, 0), text.count)
+            guard let columns else { return start + clamped }
+            return columns[clamped]
+        }
+
+        /// Where the line's content ends.
+        var end: Int { offset(column: text.count) }
     }
 
     /// A member of a mapping, or the `<<` that pulls another mapping's members
@@ -78,10 +121,31 @@ enum YAMLTree {
         /// node's indentation, which is the only thing block YAML asks about.
         var col = 0
         var anchors: [String: StructuredNode] = [:]
+        /// One past the last character of *content* the walk has taken in, as
+        /// the editor counts. A node ends where its last piece of content
+        /// ends, and that is never simply where the cursor stands: by the
+        /// time a value is finished the parser has already stepped over the
+        /// comment, the blank lines and the indentation after it.
+        var mark = 0
 
         var atEnd: Bool { i >= lines.count }
         var text: [Character] { lines[i].text }
         var lineNumber: Int { i < lines.count ? lines[i].number : (lines.last?.number ?? 1) }
+
+        /// Where the cursor stands, as the editor counts.
+        var here: Int {
+            guard i < lines.count else { return lines.last?.end ?? 0 }
+            return lines[i].offset(column: col)
+        }
+
+        mutating func markHere() { mark = here }
+
+        /// A node's span: from where it began to the last content taken in.
+        /// `nil` when nothing was — an empty value has no text to select.
+        func span(from start: Int) -> NSRange? {
+            guard mark > start else { return nil }
+            return NSRange(location: start, length: mark - start)
+        }
 
         func error(_ message: String, line: Int? = nil) -> StructuredParseError {
             StructuredParseError(line: line ?? lineNumber, message: message)
@@ -159,6 +223,9 @@ enum YAMLTree {
         /// comment, and nothing else.
         mutating func finishLine() throws {
             if i < lines.count {
+                // The value ends here — before the spaces, the comment and
+                // the blank lines this is about to step over.
+                markHere()
                 skipSpacesOnLine()
                 if !atLineEnd { throw error("Unexpected text after a value") }
                 i += 1
@@ -245,6 +312,7 @@ enum YAMLTree {
 
         mutating func parseMapping(indent: Int) throws -> StructuredNode {
             let startLine = lineNumber
+            let from = here
             var items: [MappingItem] = []
             while true {
                 if atEnd || atDocumentBoundary { break }
@@ -255,7 +323,12 @@ enum YAMLTree {
                     throw error("Expected a mapping key")
                 }
                 let keyLine = lineNumber
+                // An entry runs from its key through the end of its value, and
+                // a value written beneath brings its whole block with it. One
+                // with no value at all is still the key and the colon.
+                let entryFrom = here
                 col = colonAt + 1
+                mark = max(mark, here)
                 skipSpacesOnLine()
                 var value: StructuredNode
                 if atLineEnd {
@@ -270,10 +343,12 @@ enum YAMLTree {
                 } else {
                     value.key = key
                     value.line = keyLine
+                    value.range = span(from: entryFrom)
                     items.append(.entry(value))
                 }
             }
-            return StructuredNode(value: .object, children: resolve(items), line: startLine)
+            return StructuredNode(
+                value: .object, children: resolve(items), line: startLine, range: span(from: from))
         }
 
         /// A merged key loses to one the mapping writes out, and the first
@@ -319,6 +394,7 @@ enum YAMLTree {
 
         mutating func parseSequence(indent: Int) throws -> StructuredNode {
             let startLine = lineNumber
+            let from = here
             var items: [StructuredNode] = []
             while true {
                 if atEnd || atDocumentBoundary { break }
@@ -326,8 +402,12 @@ enum YAMLTree {
                 if col > indent { throw error("Bad indentation") }
                 guard isSequenceEntryHere() else { throw error("Expected a sequence item") }
                 let itemLine = lineNumber
+                let dash = here
                 col += 1
                 skipSpacesOnLine()
+                // The item is the value after the `- `; one written beneath
+                // the dash keeps the span of the block it is.
+                let itemFrom = atLineEnd ? nil : here
                 var item: StructuredNode
                 if atLineEnd {
                     item = try parseBlockBeneath(
@@ -338,9 +418,12 @@ enum YAMLTree {
                 }
                 item.key = nil
                 item.line = itemLine
+                item.range = itemFrom.flatMap(span(from:)) ?? item.range
+                    ?? NSRange(location: dash, length: 1)
                 items.append(item)
             }
-            return StructuredNode(value: .array, children: items, line: startLine)
+            return StructuredNode(
+                value: .array, children: items, line: startLine, range: span(from: from))
         }
 
         // MARK: Keys
@@ -405,6 +488,7 @@ enum YAMLTree {
         mutating func parseInline(
             ownerIndent: Int, entryLine: Int, seqAtOwnerIndent: Bool
         ) throws -> StructuredNode {
+            let from = here
             var anchor: String?
             var tag: String?
             while !atLineEnd, text[col] == "&" || text[col] == "!" {
@@ -430,6 +514,7 @@ enum YAMLTree {
                     seqAtOwnerIndent: seqAtOwnerIndent)
             } else if text[col] == "*" {
                 let aliasLine = lineNumber
+                let aliasFrom = here
                 col += 1
                 let t = text
                 let start = col
@@ -440,6 +525,8 @@ enum YAMLTree {
                 target.line = aliasLine
                 node = target
                 try finishLine()
+                // The alias is written here, whatever its anchor is written as.
+                node.valueRange = span(from: aliasFrom)
             } else if text[col] == "{" || text[col] == "[" {
                 node = try parseFlowValue(openLine: lineNumber, depth: 0)
                 try finishLine()
@@ -447,6 +534,7 @@ enum YAMLTree {
                 node = try parseBlockScalar(ownerIndent: ownerIndent)
             } else {
                 let line = lineNumber
+                let scalarFrom = here
                 var quoted = true
                 let raw: String
                 if text[col] == "\"" {
@@ -459,8 +547,11 @@ enum YAMLTree {
                     quoted = false
                     raw = try readPlain(ownerIndent: ownerIndent)
                 }
-                node = StructuredNode(value: scalarValue(raw, quoted: quoted, tag: tag), line: line)
+                node = StructuredNode(
+                    value: scalarValue(raw, quoted: quoted, tag: tag), line: line,
+                    valueRange: span(from: scalarFrom))
             }
+            node.range = span(from: from) ?? node.range
             if let anchor { anchors[anchor] = node }
             return node
         }
@@ -469,7 +560,9 @@ enum YAMLTree {
         /// entry that owns it and starting no entry of their own, are the same
         /// scalar and join with a space.
         mutating func readPlain(ownerIndent: Int) throws -> String {
-            var out = plainRun()
+            var run = plainRun()
+            var out = run.text
+            mark = lines[i].offset(column: run.end)
             i += 1
             while i < lines.count {
                 guard let next = try indent(of: i) else { break }
@@ -477,8 +570,11 @@ enum YAMLTree {
                 col = next
                 if atDocumentBoundary || isSequenceEntryHere() { break }
                 if try findKey(from: col) != nil { break }
-                let piece = plainRun()
-                if !piece.isEmpty { out += " " + piece }
+                run = plainRun()
+                if !run.text.isEmpty {
+                    out += " " + run.text
+                    mark = lines[i].offset(column: run.end)
+                }
                 i += 1
             }
             try seekContent()
@@ -486,8 +582,10 @@ enum YAMLTree {
         }
 
         /// The plain text on this line from `col`: everything up to a ` #`
-        /// comment, with trailing spaces dropped.
-        func plainRun() -> String {
+        /// comment, with trailing spaces dropped — and the column it stopped
+        /// at, which is where the scalar ends rather than where the cursor
+        /// will be left.
+        func plainRun() -> (text: String, end: Int) {
             let t = text
             var c = col
             var end = col
@@ -496,7 +594,7 @@ enum YAMLTree {
                 c += 1
                 if t[c - 1] != " ", t[c - 1] != "\t" { end = c }
             }
-            return String(t[col..<end])
+            return (String(t[col..<end]), end)
         }
 
         mutating func readSingleQuoted() throws -> String {
@@ -603,6 +701,7 @@ enum YAMLTree {
 
         mutating func parseBlockScalar(ownerIndent: Int) throws -> StructuredNode {
             let line = lineNumber
+            let from = here
             let folded = text[col] == ">"
             col += 1
             var chomp: Character = "c"
@@ -623,6 +722,7 @@ enum YAMLTree {
             }
             skipSpacesOnLine()
             guard atLineEnd else { throw error("Unexpected text after a block scalar header") }
+            markHere()
             i += 1
 
             // Without an explicit digit the width is the first non-empty
@@ -655,6 +755,9 @@ enum YAMLTree {
                 }
                 if c < width { break }
                 body.append(String(t[width..<t.count]))
+                // The scalar is its content: the last line with something on
+                // it is where it ends, whatever blank lines follow.
+                mark = lines[i].end
                 i += 1
             }
 
@@ -671,7 +774,9 @@ enum YAMLTree {
             default: if !out.isEmpty { out += "\n" }
             }
             try seekContent()
-            return StructuredNode(value: .string(out), line: line)
+            // The `|` or `>` header and everything indented under it: that is
+            // the scalar, and the header says how to read it.
+            return StructuredNode(value: .string(out), line: line, valueRange: span(from: from))
         }
 
         /// `>` folding: a single break between two ordinary lines becomes a
@@ -738,6 +843,7 @@ enum YAMLTree {
                 try flowSkip(openLine: openLine)
             }
             let line = lines[i].number
+            let from = lines[i].offset(column: col)
             var node: StructuredNode
             switch lines[i].text[col] {
             case "{":
@@ -755,17 +861,23 @@ enum YAMLTree {
                 }
                 target.key = nil
                 target.line = line
+                markHere()
                 node = target
             case "\"":
-                node = StructuredNode(
-                    value: scalarValue(try readDoubleQuoted(), quoted: true, tag: tag), line: line)
+                let raw = try readDoubleQuoted()
+                markHere()
+                node = StructuredNode(value: scalarValue(raw, quoted: true, tag: tag), line: line)
             case "'":
-                node = StructuredNode(
-                    value: scalarValue(try readSingleQuoted(), quoted: true, tag: tag), line: line)
+                let raw = try readSingleQuoted()
+                markHere()
+                node = StructuredNode(value: scalarValue(raw, quoted: true, tag: tag), line: line)
             default:
                 node = StructuredNode(
                     value: scalarValue(readFlowPlain(), quoted: false, tag: tag), line: line)
             }
+            // An alias is written where it stands, not where its anchor is.
+            node.range = span(from: from) ?? node.range
+            node.valueRange = node.range
             if let anchor { anchors[anchor] = node }
             return node
         }
@@ -784,6 +896,7 @@ enum YAMLTree {
                 if t[c - 1] != " ", t[c - 1] != "\t" { end = c }
             }
             let out = String(t[col..<end])
+            mark = lines[i].offset(column: end)
             col = c
             return out
         }
@@ -794,11 +907,13 @@ enum YAMLTree {
             try flowSkip(openLine: openLine)
             if lines[i].text[col] == "}" {
                 col += 1
+                markHere()
                 return StructuredNode(value: .object, children: [], line: openLine)
             }
             while true {
                 try flowSkip(openLine: openLine)
                 let keyLine = lines[i].number
+                let entryFrom = lines[i].offset(column: col)
                 let key: String
                 switch lines[i].text[col] {
                 case "\"": key = try readDoubleQuoted()
@@ -819,6 +934,7 @@ enum YAMLTree {
                 } else {
                     value.key = key
                     value.line = keyLine
+                    value.range = span(from: entryFrom)
                     items.append(.entry(value))
                 }
                 try flowSkip(openLine: openLine)
@@ -828,11 +944,13 @@ enum YAMLTree {
                     try flowSkip(openLine: openLine)
                     if lines[i].text[col] == "}" {
                         col += 1
+                        markHere()
                         return StructuredNode(
                             value: .object, children: resolve(items), line: openLine)
                     }
                 case "}":
                     col += 1
+                    markHere()
                     return StructuredNode(value: .object, children: resolve(items), line: openLine)
                 default:
                     throw error("Expected `,` or `}` in a flow mapping")
@@ -846,6 +964,7 @@ enum YAMLTree {
             try flowSkip(openLine: openLine)
             if lines[i].text[col] == "]" {
                 col += 1
+                markHere()
                 return StructuredNode(value: .array, children: [], line: openLine)
             }
             while true {
@@ -859,10 +978,12 @@ enum YAMLTree {
                     try flowSkip(openLine: openLine)
                     if lines[i].text[col] == "]" {
                         col += 1
+                        markHere()
                         return StructuredNode(value: .array, children: items, line: openLine)
                     }
                 case "]":
                     col += 1
+                    markHere()
                     return StructuredNode(value: .array, children: items, line: openLine)
                 default:
                     throw error("Expected `,` or `]` in a flow sequence")

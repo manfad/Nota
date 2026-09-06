@@ -24,15 +24,15 @@ enum SidebarCard {
 }
 
 /// The title over a sidebar list, in the shape Finder gives its own sidebar
-/// sections: 11pt semibold, secondary, at the list's leading margin, with air
+/// sections: 11pt semibold, secondary, centred across the column, with air
 /// above and below.
 ///
 /// One word each — Images, Contents, Pages — and it stands at the top of the
 /// column, outside the scroll view, so the column always says what it is
 /// listing however far down the list has been scrolled.
 final class SidebarSectionHeader: NSView {
-    /// Where the title starts, measured from the column's own edge, so every
-    /// column's title lines up with every other's.
+    /// How far the title's box is inset from the column's own edges, on
+    /// both sides — the label centres itself within that box.
     static let leadingInset: CGFloat = 10
     /// How much room the title takes at the top of a column, so the list
     /// below can start under it.
@@ -58,6 +58,7 @@ final class SidebarSectionHeader: NSView {
         label.stringValue = title
         label.font = .systemFont(ofSize: 11, weight: .semibold)
         label.textColor = .secondaryLabelColor
+        label.alignment = .center
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
         addSubview(label)
@@ -65,7 +66,7 @@ final class SidebarSectionHeader: NSView {
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: Self.barHeight + topPadding),
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leadingInset),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -6),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -leadingInset),
             label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.bottomGap),
         ])
     }

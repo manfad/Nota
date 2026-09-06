@@ -8,7 +8,7 @@ import AppKit
 /// are carrying. What stands in the corner is the tab's own business, and
 /// there are three answers (`Content`): a tab with a render gets the Editor ·
 /// Split · Reading control; a `.json` or `.html` tab gets that same control
-/// with a fourth segment on the end, the Beautify / Compact action its format
+/// with a fourth segment out front, the Beautify / Compact action its format
 /// has; and everything else gets nothing at all — the whole overlay goes away
 /// and the band takes no clicks.
 ///
@@ -78,8 +78,8 @@ final class ModeControlOverlay: NSView {
         case none
         /// Editor · Split · Reading, for a tab with a render beside it.
         case modeControl
-        /// The same three, plus the action the file's own format has on the
-        /// end of them.
+        /// The action the file's own format has, standing ahead of the same
+        /// three.
         case modeControlWithFormat(FormatKind)
 
         /// Whether the modes are in this slot at all — the question the
@@ -152,8 +152,29 @@ final class ModeControlOverlay: NSView {
 
     let modeControl = NSSegmentedControl()
 
-    /// Where the action sits: after the three modes, and always last.
-    static let formatSegment = PreviewMode.allCases.count
+    /// Where the action sits when it is showing: first, ahead of the modes —
+    /// the file's own layout choice standing before the way it is read.
+    static let formatSegmentIndex = 0
+
+    /// How far a mode's own place in `PreviewMode.allCases` is shifted to
+    /// land on the segment it actually lives in — one, while the action
+    /// stands ahead of the modes; none otherwise. The one number every
+    /// mapping between a segment and a mode goes through, so nothing else
+    /// here hard-codes an index.
+    private var modeOffset: Int { content.format == nil ? 0 : 1 }
+
+    /// The segment a mode lives in, whichever shape the capsule is in.
+    func segmentIndex(of mode: PreviewMode) -> Int {
+        modeOffset + (PreviewMode.allCases.firstIndex(of: mode) ?? 0)
+    }
+
+    /// The mode a segment stands for — nil for the action's own segment, or
+    /// one out of range.
+    func mode(ofSegment segment: Int) -> PreviewMode? {
+        let index = segment - modeOffset
+        guard PreviewMode.allCases.indices.contains(index) else { return nil }
+        return PreviewMode.allCases[index]
+    }
 
     /// Which of them is up. `.modeControl` to begin with, which is the state
     /// every overlay was in before the slot had more than one thing to hold.
@@ -380,20 +401,30 @@ final class ModeControlOverlay: NSView {
         setContent(available ? .modeControl : .none)
     }
 
-    /// Three segments, or four for a file with a format of its own.
+    /// Three segments, or four for a file with a format of its own — the
+    /// action standing ahead of them when it is there.
     private func applySegmentCount() {
         let count = PreviewMode.allCases.count + (content.format == nil ? 0 : 1)
         guard modeControl.segmentCount != count else { return }
-        let selected = modeControl.selectedSegment
+        // The mode selected before the rebuild, read back through the shape
+        // the control was in a moment ago — so growing or shrinking by the
+        // action segment ahead of the modes never lands the selection on
+        // the wrong one of them.
+        let previousOffset = modeControl.segmentCount > PreviewMode.allCases.count ? 1 : 0
+        let previousIndex = modeControl.selectedSegment - previousOffset
+        let selectedMode = PreviewMode.allCases.indices.contains(previousIndex)
+            ? PreviewMode.allCases[previousIndex] : nil
+
         modeControl.segmentCount = count
-        for (index, mode) in PreviewMode.allCases.enumerated() {
+        for mode in PreviewMode.allCases {
+            let index = segmentIndex(of: mode)
             modeControl.setToolTip(mode.controlToolTip, forSegment: index)
             modeControl.setWidth(Self.segmentWidth, forSegment: index)
         }
-        if count > Self.formatSegment {
-            modeControl.setWidth(Self.segmentWidth, forSegment: Self.formatSegment)
+        if content.format != nil {
+            modeControl.setWidth(Self.segmentWidth, forSegment: Self.formatSegmentIndex)
         }
-        modeControl.selectedSegment = min(max(selected, 0), PreviewMode.allCases.count - 1)
+        modeControl.selectedSegment = segmentIndex(of: selectedMode ?? PreviewMode.allCases[0])
     }
 
     // MARK: - The action on the end
@@ -410,14 +441,14 @@ final class ModeControlOverlay: NSView {
 
     private func applyFormatState() {
         guard let kind = content.format,
-              modeControl.segmentCount > Self.formatSegment else { return }
+              modeControl.segmentCount > PreviewMode.allCases.count else { return }
         switch formatState {
         case .action(let action):
-            modeControl.setEnabled(true, forSegment: Self.formatSegment)
-            modeControl.setToolTip(kind.toolTip(action), forSegment: Self.formatSegment)
+            modeControl.setEnabled(true, forSegment: Self.formatSegmentIndex)
+            modeControl.setToolTip(kind.toolTip(action), forSegment: Self.formatSegmentIndex)
         case .invalid(let line):
-            modeControl.setEnabled(false, forSegment: Self.formatSegment)
-            modeControl.setToolTip(kind.invalidToolTip(line: line), forSegment: Self.formatSegment)
+            modeControl.setEnabled(false, forSegment: Self.formatSegmentIndex)
+            modeControl.setToolTip(kind.invalidToolTip(line: line), forSegment: Self.formatSegmentIndex)
         }
         applyFormatTint()
     }
@@ -427,8 +458,9 @@ final class ModeControlOverlay: NSView {
     /// is baked into the image rather than left to AppKit, which is what keeps
     /// the action and the modes beside it reading as one family.
     private func applyFormatTint() {
-        guard content.format != nil, modeControl.segmentCount > Self.formatSegment else { return }
-        let enabled = modeControl.isEnabled(forSegment: Self.formatSegment)
+        guard content.format != nil, modeControl.segmentCount > PreviewMode.allCases.count
+        else { return }
+        let enabled = modeControl.isEnabled(forSegment: Self.formatSegmentIndex)
         let action: FormatAction = {
             if case .action(let action) = formatState { return action }
             // A file that will not parse still shows the beautify symbol: it
@@ -439,13 +471,13 @@ final class ModeControlOverlay: NSView {
             let colour: NSColor = enabled ? .secondaryLabelColor : .tertiaryLabelColor
             let image = NSImage(
                 systemSymbolName: action.symbolName,
-                accessibilityDescription: modeControl.toolTip(forSegment: Self.formatSegment)
+                accessibilityDescription: modeControl.toolTip(forSegment: Self.formatSegmentIndex)
             )?.withSymbolConfiguration(
                 NSImage.SymbolConfiguration(paletteColors: [colour])
             )
             // Already coloured: template would have AppKit tint it again.
             image?.isTemplate = false
-            modeControl.setImage(image, forSegment: Self.formatSegment)
+            modeControl.setImage(image, forSegment: Self.formatSegmentIndex)
         }
     }
 
@@ -458,10 +490,10 @@ final class ModeControlOverlay: NSView {
     /// treat every other segment as the mode it is.
     @discardableResult
     func handleFormatSegmentClick(restoringMode mode: PreviewMode) -> Bool {
-        guard modeControl.selectedSegment == Self.formatSegment,
+        guard modeControl.selectedSegment == Self.formatSegmentIndex,
               let kind = content.format
         else { return false }
-        modeControl.selectedSegment = PreviewMode.allCases.firstIndex(of: mode) ?? 0
+        modeControl.selectedSegment = segmentIndex(of: mode)
         guard case .action(let action) = formatState else { return true }
         onFormat?(kind, action)
         return true
@@ -472,25 +504,26 @@ final class ModeControlOverlay: NSView {
     /// standard filled look, which tints a template image for itself.
     func applySegmentTints() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            for (index, mode) in PreviewMode.allCases.enumerated()
-            where index < modeControl.segmentCount {
+            for mode in PreviewMode.allCases {
+                let segment = segmentIndex(of: mode)
+                guard segment < modeControl.segmentCount else { continue }
                 let image = NSImage(
                     systemSymbolName: mode.symbolName, accessibilityDescription: mode.controlTitle
                 )
-                if index == modeControl.selectedSegment {
+                if segment == modeControl.selectedSegment {
                     image?.isTemplate = true
-                    modeControl.setImage(image, forSegment: index)
+                    modeControl.setImage(image, forSegment: segment)
                 } else {
                     let quiet = image?.withSymbolConfiguration(
                         NSImage.SymbolConfiguration(paletteColors: [.secondaryLabelColor])
                     )
                     // Already coloured: template would have AppKit tint it again.
                     quiet?.isTemplate = false
-                    modeControl.setImage(quiet, forSegment: index)
+                    modeControl.setImage(quiet, forSegment: segment)
                 }
             }
         }
-        // The action on the end is never the selected one, so it is quiet
+        // The action out front is never the selected one, so it is quiet
         // whatever the mode is.
         applyFormatTint()
     }

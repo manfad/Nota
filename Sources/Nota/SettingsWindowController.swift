@@ -43,6 +43,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let paddingPopUp = NSPopUpButton()
     private let languagePopUp = NSPopUpButton()
     private let themePopUp = NSPopUpButton()
+    private let sidebarSidePopUp = NSPopUpButton()
     private let wordWrapSwitch = NSSwitch()
     private let lineNumbersSwitch = NSSwitch()
     private let gutterSeparatorSwitch = NSSwitch()
@@ -369,7 +370,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         saveButton.bezelStyle = .rounded
         saveButton.keyEquivalent = "\r"
 
-        for popUp in [fontPopUp, spacingPopUp, paddingPopUp, languagePopUp, themePopUp] {
+        for popUp in [fontPopUp, spacingPopUp, paddingPopUp, languagePopUp, themePopUp,
+                      sidebarSidePopUp] {
             popUp.widthAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
         }
         sizeField.widthAnchor.constraint(equalToConstant: 52).isActive = true
@@ -404,6 +406,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             row("Size", control: sizeField, trailing: sizeStack),
             row("Line spacing", control: spacingPopUp),
             row("Padding", control: paddingPopUp),
+            row("Sidebar side", control: sidebarSidePopUp),
         ]
         return page("Appearance", blocks: [groupBox(text)], rows: text)
     }
@@ -658,6 +661,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
              action: #selector(languageChanged))
         fill(themePopUp, with: AppTheme.allCases.map { ($0.title, $0.rawValue) },
              action: #selector(themeChanged))
+        fill(sidebarSidePopUp, with: SidebarSide.allCases.map { ($0.title, $0.rawValue) },
+             action: #selector(sidebarSideChanged))
 
         rebuildFontMenu()
 
@@ -669,6 +674,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         select(paddingPopUp, raw: preferences.padding.rawValue)
         select(languagePopUp, raw: preferences.language.rawValue)
         select(themePopUp, raw: preferences.theme.rawValue)
+        select(sidebarSidePopUp, raw: preferences.sidebarSide.rawValue)
         wordWrapSwitch.state = preferences.wrapsLines ? .on : .off
         lineNumbersSwitch.state = preferences.showsLineNumbers ? .on : .off
         gutterSeparatorSwitch.state = preferences.showsGutterSeparator ? .on : .off
@@ -773,6 +779,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     @objc private func paddingChanged(_ sender: NSPopUpButton) { markDirty() }
     @objc private func languageChanged(_ sender: NSPopUpButton) { markDirty() }
     @objc private func themeChanged(_ sender: NSPopUpButton) { markDirty() }
+    @objc private func sidebarSideChanged(_ sender: NSPopUpButton) { markDirty() }
     @objc private func draftChanged(_ sender: Any?) { markDirty() }
 
     @objc private func clearHotKey() {
@@ -878,7 +885,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         guard let spacing = rawValue(of: spacingPopUp, as: LineSpacingOption.self),
               let padding = rawValue(of: paddingPopUp, as: EditorPaddingOption.self),
               let language = rawValue(of: languagePopUp, as: AppLanguage.self),
-              let theme = rawValue(of: themePopUp, as: AppTheme.self)
+              let theme = rawValue(of: themePopUp, as: AppTheme.self),
+              let sidebarSide = rawValue(of: sidebarSidePopUp, as: SidebarSide.self)
         else { return }
 
         let fontFamily = pendingFontFamily
@@ -918,6 +926,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         preferences.shortcuts = pendingShortcuts
         preferences.language = language
         preferences.theme = theme
+        preferences.sidebarSide = sidebarSide
         isApplying = false
         isDirty = false
         refresh()

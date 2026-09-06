@@ -805,19 +805,20 @@ final class MainWindowController: NSWindowController {
     }
 
     /// A segment clicked in either column's control — one of the three modes,
-    /// or the format action standing on the end of them.
+    /// or the format action standing ahead of them.
     @objc private func previewModeControlChanged(_ sender: NSSegmentedControl) {
-        let modes = PreviewMode.allCases
         let clicked = [editorModeOverlay, previewModeOverlay]
             .first { $0.modeControl === sender }
         // The action is a button living in a `.selectOne` control: it fires,
         // and the selection goes straight back to the mode the tab is in.
-        if sender.selectedSegment == ModeControlOverlay.formatSegment,
-           let clicked, clicked.handleFormatSegmentClick(restoringMode: previewMode) {
+        // `handleFormatSegmentClick` already knows which segment is its own
+        // and whether this tab even has one, so there is nothing left here
+        // to ask about the click before handing it over.
+        if let clicked, clicked.handleFormatSegmentClick(restoringMode: previewMode) {
             return
         }
-        guard modes.indices.contains(sender.selectedSegment) else { return }
-        setPreviewMode(modes[sender.selectedSegment])
+        guard let mode = clicked?.mode(ofSegment: sender.selectedSegment) else { return }
+        setPreviewMode(mode)
         // The pointer is still on the control that was just clicked. If that
         // column survived the mode change it stays up without waiting to be
         // entered again; if it did not, the one that took its place does, so
@@ -4205,12 +4206,15 @@ extension MainWindowController {
     /// block click, a keystroke in reading mode, a restored session. The tints
     /// go with the selection: the idle segments are the quiet ones.
     private func updatePreviewModeControl() {
-        let index = PreviewMode.allCases.firstIndex(of: previewMode) ?? 0
-        // The tints are six symbol images built from scratch, so they are
-        // laid on only when the selection has actually moved — a control
-        // already showing this mode is left alone.
-        for overlay in [editorModeOverlay, previewModeOverlay]
-        where overlay.modeControl.selectedSegment != index {
+        // Asked of each overlay rather than shared: which segment a mode
+        // lands on depends on whether that overlay's own tab has a format
+        // action standing ahead of the modes.
+        for overlay in [editorModeOverlay, previewModeOverlay] {
+            let index = overlay.segmentIndex(of: previewMode)
+            // The tints are six symbol images built from scratch, so they are
+            // laid on only when the selection has actually moved — a control
+            // already showing this mode is left alone.
+            guard overlay.modeControl.selectedSegment != index else { continue }
             overlay.modeControl.selectedSegment = index
             overlay.applySegmentTints()
         }
@@ -4458,8 +4462,6 @@ extension MainWindowController {
         previewColumn.current.highlightBlock(containingSource: textView.selectedRange().location)
     }
 
-    /// A block was clicked in the pane: put the caret on the first character
-    /// of the source it came from and show it.
     /// Ticking a checkbox in the render. One character of the note is
     /// rewritten — the space or the `x` between the item's brackets — through
     /// the editor's own undoable path, so ⌘Z puts it back the way it puts any
@@ -4483,30 +4485,59 @@ extension MainWindowController {
         textView.didChangeText()
     }
 
+    /// A block was clicked in the pane: the block's own source is selected in
+    /// the editor, which then takes the keyboard.
+    ///
+    /// A jump selects what it jumped to. The reader pointed at a paragraph
+    /// and asked to be put in it, and the whole of it selected is the useful
+    /// place to arrive: typing replaces the block, ⌘Z puts it back, and an
+    /// arrow key collapses the selection to one end of it the way any
+    /// selection collapses. A caret at the block's head would be the same
+    /// gesture saying less.
+    ///
+    /// The other half of the map, `revealSource`, selects without taking the
+    /// keyboard: that one is something to look at, this one is somewhere to
+    /// type.
     private func goToSource(_ source: NSRange) {
         guard let note = currentNote else { return }
-        let location = max(0, min(source.location, note.storage.length))
+        let length = note.storage.length
+        let location = max(0, min(source.location, length))
+        let end = max(location, min(NSMaxRange(source), length))
         // A jump is a move, not a typing session: vim comes back to normal
         // mode for it, the way `gg` or a mark would leave you.
         if preferences.vimMode, vimEngine.mode != .normal { vimEngine.enterNormalMode() }
-        textView.setSelectedRange(NSRange(location: location, length: 0))
-        if preferences.vimMode { vimEngine.clampCaret() }
+        textView.setSelectedRange(NSRange(location: location, length: end - location))
+        // Vim's rule that the caret may not sit past the last character is
+        // about a caret; a selection it would quietly throw away.
+        if preferences.vimMode, end == location { vimEngine.clampCaret() }
         revealInEditor(textView.selectedRange())
         // The pane is read, not typed in.
         focusEditor()
     }
 
-    /// The content pointed at a place in the source without asking for the
+    /// The content pointed at a piece of the source without asking for the
     /// keyboard — a row of a dump clicked, which stands over the `INSERT`
-    /// that wrote it. The caret goes there and the line is brought into view,
-    /// and that is all: the grid keeps the focus, so the arrows go on walking
-    /// its cells. Split only, since the editor is only on screen there.
+    /// that wrote it; a row of a tree, which stands over its member. The
+    /// source is *selected* and brought into view, and that is all: the pane
+    /// keeps the focus, so the arrows go on walking it.
+    ///
+    /// A reveal is something to look at; a jump — `goToSource`, the render's
+    /// own click — is somewhere to type. That is the whole difference between
+    /// them, and it is why this one selects and that one does not: a
+    /// selection handed to the keyboard would be replaced by the next
+    /// keystroke.
+    ///
+    /// Split only, since the editor is only on screen there.
     private func revealSource(_ source: NSRange) {
         guard let note = currentNote, installedPreviewMode == .split else { return }
-        let location = max(0, min(source.location, note.storage.length))
+        let length = note.storage.length
+        let location = max(0, min(source.location, length))
+        let end = max(location, min(NSMaxRange(source), length))
         if preferences.vimMode, vimEngine.mode != .normal { vimEngine.enterNormalMode() }
-        textView.setSelectedRange(NSRange(location: location, length: 0))
-        if preferences.vimMode { vimEngine.clampCaret() }
+        textView.setSelectedRange(NSRange(location: location, length: end - location))
+        // Vim's rule that the caret may not sit past the last character is
+        // about a caret; a selection it would quietly throw away.
+        if preferences.vimMode, end == location { vimEngine.clampCaret() }
         revealInEditor(textView.selectedRange())
     }
 

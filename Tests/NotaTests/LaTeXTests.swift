@@ -636,7 +636,7 @@ final class LaTeXTests: XCTestCase {
     }
 
     @MainActor
-    func testTheCaretLightsTheBlockItIsInAndAClickSendsTheCaretBack() throws {
+    func testTheCaretLightsTheBlockItIsInAndAClickSelectsItBack() throws {
         _ = NSApplication.shared
         let controller = try makeLaTeXController()
         controller.setPreviewMode(.split)
@@ -657,10 +657,10 @@ final class LaTeXTests: XCTestCase {
                                         length: 0))
         XCTAssertEqual(preview.highlightedSourceRange, text.range(of: "A paragraph."))
 
-        // And the other way: a click on a block puts the caret on its source.
+        // And the other way: a click on a block selects its source.
         try clickPreview(of: controller, on: "1 Alpha")
-        XCTAssertEqual(editor.selectedRange().location,
-                       text.range(of: "\\section{Alpha}").location)
+        XCTAssertEqual(editor.selectedRange(), text.range(of: "\\section{Alpha}"),
+                       "the whole heading, its `\\section{…}` part of it")
     }
 
     @MainActor

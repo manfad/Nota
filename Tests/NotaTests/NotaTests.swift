@@ -189,7 +189,7 @@ final class NotaTests: XCTestCase {
             controller.rows(on: page).map(\.title)
         }
         XCTAssertEqual(titles(on: 0), ["Language", "Theme"])
-        XCTAssertEqual(titles(on: 1), ["Font", "Size", "Line spacing", "Padding"])
+        XCTAssertEqual(titles(on: 1), ["Font", "Size", "Line spacing", "Padding", "Sidebar side"])
         XCTAssertEqual(titles(on: 2), ["Word wrap", "Line numbers", "Gutter separator", "Vim mode"])
         XCTAssertEqual(titles(on: 3), ["Start supported files in preview mode"])
         XCTAssertEqual(titles(on: 4), ["Show tab bar", "Auto-hide tab bar", "Traffic lights",
@@ -440,6 +440,49 @@ final class NotaTests: XCTestCase {
         let translated = allViews(in: root).compactMap { ($0 as? NSTextField)?.stringValue }
         XCTAssertTrue(translated.contains("“跟随系统”由 Mac 决定。"),
                       "the Theme footnote is still English: \(translated)")
+    }
+
+    /// Sidebar side is Appearance's last row: the popup shows the side that
+    /// is live, and Save moves the column at once — a fresh window's split
+    /// item comes up on the side just picked.
+    @MainActor
+    func testSavingASidebarSideDraftMovesTheColumnAtOnce() throws {
+        _ = NSApplication.shared
+        let original = Preferences.shared.sidebarSide
+        defer { Preferences.shared.sidebarSide = original }
+        Preferences.shared.sidebarSide = .right
+
+        let controller = SettingsWindowController.shared
+        let root = try XCTUnwrap(controller.window?.contentView)
+        controller.selectPage(at: 1)
+        func allViews(in view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(allViews)
+        }
+        let views = allViews(in: root)
+        let sidebarSide = try XCTUnwrap(views.compactMap { $0 as? NSPopUpButton }.first {
+            $0.itemTitles == ["Left", "Right"]
+        })
+        let save = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Save" })
+        XCTAssertEqual(sidebarSide.selectedItem?.representedObject as? String, "right",
+                       "the popup shows the side that is live")
+
+        sidebarSide.selectItem(at: 0)
+        _ = NSApp.sendAction(
+            try XCTUnwrap(sidebarSide.action), to: sidebarSide.target, from: sidebarSide
+        )
+        XCTAssertTrue(save.isEnabled)
+        save.performClick(nil)
+        XCTAssertEqual(Preferences.shared.sidebarSide, .left)
+
+        let mainController = MainWindowController(
+            store: SessionStore(directory: try makeTemporaryDirectory())
+        )
+        let split = try XCTUnwrap(mainController.window?.contentViewController as? NSSplitViewController)
+        let roles = split.splitViewItems.map { item in
+            descendant(of: item.viewController.view, ofType: ImageSidebarView.self) != nil
+                ? "sidebar" : "workspace"
+        }
+        XCTAssertEqual(roles, ["sidebar", "workspace"], "the sidebar is now first, on the left")
     }
 
     @MainActor

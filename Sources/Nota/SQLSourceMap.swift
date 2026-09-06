@@ -69,26 +69,90 @@ struct SQLSourceMap {
     /// back further down the file points at the insert that is actually
     /// standing.
     func range(ofRowid rowid: Int64, inTable table: String) -> NSRange? {
-        let key = table.lowercased()
-        guard let statement = statements.last(where: {
-            $0.table == key && ($0.rowids?.contains(rowid) ?? false)
-        }), let rowids = statement.rowids else { return nil }
-        let count = rowids.count
-        guard count > 1 else { return statement.range }
-        guard statement.range.location >= 0,
-              statement.range.upperBound <= source.length else { return statement.range }
-        let text = source.substring(with: statement.range)
-        let tuples = SQLSourceMap.valueTuples(in: text)
+        guard let found = statement(claiming: rowid, inTable: table) else { return nil }
+        guard found.rowids.count > 1 else { return found.statement.range }
         // Only when the writing and the count agree. A statement whose tuples
         // cannot be counted — `INSERT … SELECT`, or an insert that named its
         // own ids out of order — is pointed at whole rather than pointed at
         // wrongly.
-        let index = Int(rowid - rowids.lowerBound)
-        guard tuples.count == count, index >= 0, index < tuples.count else {
-            return statement.range
+        return tuple(of: rowid, in: found) ?? found.statement.range
+    }
+
+    /// Where *one value* of that row is written: the cell's own text inside
+    /// the tuple, its quotes part of it, the comma and the blanks around it
+    /// not. That is what a click on a cell selects.
+    ///
+    /// Which value it is comes from the column's name rather than from the
+    /// grid's own order, because the two need not agree: an
+    /// `INSERT INTO t (b, a) VALUES (…)` writes the columns in its own order,
+    /// and a query names whichever of them it asked for. So the column list
+    /// the insert gave decides when there is one, and the table's own columns
+    /// decide when there is not.
+    ///
+    /// Everything that cannot be placed falls back to the row's own range and
+    /// never to nothing: a name in neither list, a tuple that will not read, a
+    /// value position past the end of it. A reader who clicked a cell is
+    /// asking where the row is, and the tuple is always at least that.
+    func range(
+        ofRowid rowid: Int64, inTable table: String,
+        column name: String, tableColumns: [String]
+    ) -> NSRange? {
+        guard let found = statement(claiming: rowid, inTable: table) else { return nil }
+        let row = found.rowids.count > 1
+            ? (tuple(of: rowid, in: found) ?? found.statement.range)
+            : found.statement.range
+        guard let tupleRange = tuple(of: rowid, in: found),
+              let position = position(
+                  of: name, in: found.statement.range, tableColumns: tableColumns
+              ),
+              let value = SQLSourceMap.valueRange(
+                  at: position, inTuple: source.substring(with: tupleRange)
+              )
+        else { return row }
+        return NSRange(location: tupleRange.location + value.location, length: value.length)
+    }
+
+    /// The statement that wrote this row, and the run of rowids it made. The
+    /// last one that claims the rowid wins, so a row deleted and put back
+    /// further down the file points at the insert that is actually standing.
+    private func statement(
+        claiming rowid: Int64, inTable table: String
+    ) -> (statement: Statement, rowids: ClosedRange<Int64>)? {
+        let key = table.lowercased()
+        guard let statement = statements.last(where: {
+            $0.table == key && ($0.rowids?.contains(rowid) ?? false)
+        }), let rowids = statement.rowids else { return nil }
+        return (statement, rowids)
+    }
+
+    /// The row's own `(…)` inside the statement, in the file's coordinates.
+    /// `nil` when the statement's tuples do not add up to the rows it claims.
+    private func tuple(
+        of rowid: Int64, in found: (statement: Statement, rowids: ClosedRange<Int64>)
+    ) -> NSRange? {
+        let range = found.statement.range
+        guard range.location >= 0, range.upperBound <= source.length else { return nil }
+        let tuples = SQLSourceMap.valueTuples(in: source.substring(with: range))
+        let index = Int(rowid - found.rowids.lowerBound)
+        guard tuples.count == found.rowids.count, index >= 0, index < tuples.count else {
+            return nil
         }
-        return NSRange(location: statement.range.location + tuples[index].location,
+        return NSRange(location: range.location + tuples[index].location,
                        length: tuples[index].length)
+    }
+
+    /// Which value of the tuple a column's name stands for: its place in the
+    /// list the insert named, and its place in the table otherwise. `nil` for
+    /// a name in neither, which is a cell that cannot be placed.
+    private func position(
+        of name: String, in statement: NSRange, tableColumns: [String]
+    ) -> Int? {
+        let wanted = name.lowercased()
+        if statement.location >= 0, statement.upperBound <= source.length,
+           let named = SQLSourceMap.insertColumns(in: source.substring(with: statement)) {
+            return named.firstIndex(of: wanted)
+        }
+        return tableColumns.firstIndex { $0.lowercased() == wanted }
     }
 
     // MARK: - Reading the statement's own text
@@ -130,6 +194,113 @@ struct SQLSourceMap {
             index += 1
         }
         return tuples
+    }
+
+    /// The nth value inside one tuple's text, in the tuple's own coordinates
+    /// — `(1, 'it''s, really', NULL)` asked for its second value is the
+    /// eleven characters of `'it''s, really'`, quotes included.
+    ///
+    /// One walk over the tuple. A string literal, a quoted name and a comment
+    /// are stepped over whole, so a comma inside `'…'` is a comma of the text
+    /// and not a boundary; a `(` opens a depth, so an expression written as a
+    /// value (`(1 + 2)`) is one value and its own comma is not counted. The
+    /// blanks around a value are none of it and neither are the commas; its
+    /// quotes are.
+    ///
+    /// `nil` for a tuple that never closes, and for a position past the end
+    /// of one — a caller with nothing to point at is told so rather than
+    /// handed the wrong value.
+    static func valueRange(at position: Int, inTuple tuple: String) -> NSRange? {
+        let units = Array(tuple.utf16)
+        guard let open = units.firstIndex(of: Ascii.openParen) else { return nil }
+        var index = open + 1
+        var start = index
+        var depth = 0
+        var values: [NSRange] = []
+        var closed = false
+        while index < units.count {
+            if let skipped = skipping(units, from: index), skipped > index {
+                index = skipped
+                continue
+            }
+            let unit = units[index]
+            if unit == Ascii.openParen {
+                depth += 1
+            } else if unit == Ascii.closeParen {
+                guard depth > 0 else {
+                    values.append(NSRange(location: start, length: index - start))
+                    closed = true
+                    break
+                }
+                depth -= 1
+            } else if unit == Ascii.comma, depth == 0 {
+                values.append(NSRange(location: start, length: index - start))
+                start = index + 1
+            }
+            index += 1
+        }
+        guard closed, position >= 0, position < values.count else { return nil }
+        return trimming(values[position], in: units)
+    }
+
+    /// A value with the blanks and the comments around it taken off. Never a
+    /// quote: `'a'` is three characters of value and not one.
+    private static func trimming(_ range: NSRange, in units: [UInt16]) -> NSRange {
+        var start = range.location
+        let limit = range.upperBound
+        while start < limit {
+            let unit = units[start]
+            if isBlank(unit) {
+                start += 1
+                continue
+            }
+            let comment = (unit == Ascii.dash && start + 1 < limit && units[start + 1] == Ascii.dash)
+                || (unit == Ascii.slash && start + 1 < limit && units[start + 1] == Ascii.star)
+            guard comment, let end = skipping(units, from: start), end > start else { break }
+            start = min(end, limit)
+        }
+        var end = limit
+        while end > start, isBlank(units[end - 1]) { end -= 1 }
+        return NSRange(location: start, length: end - start)
+    }
+
+    /// The columns an `INSERT INTO t (a, b) VALUES …` names, unquoted and
+    /// folded to lower case, or `nil` for an insert that named none — which
+    /// is the one that writes the table's own columns in the table's own
+    /// order.
+    static func insertColumns(in statement: String) -> [String]? {
+        let units = Array(statement.utf16)
+        var index = 0
+        guard let verb = nextToken(units, &index), verb.kind == .word,
+              verb.text.lowercased() == "insert" || verb.text.lowercased() == "replace"
+        else { return nil }
+        var token = nextToken(units, &index)
+        if let word = token, word.kind == .word, word.text.lowercased() == "or" {
+            _ = nextToken(units, &index)  // ABORT · FAIL · IGNORE · REPLACE · ROLLBACK
+            token = nextToken(units, &index)
+        }
+        guard let into = token, into.kind == .word, into.text.lowercased() == "into"
+        else { return nil }
+        guard let name = nextToken(units, &index), name.kind != .punctuation else { return nil }
+        var next = nextToken(units, &index)
+        // `schema.table`: the list, if there is one, is after the second half.
+        if let dot = next, dot.kind == .punctuation, dot.text == "." {
+            guard let second = nextToken(units, &index), second.kind != .punctuation else {
+                return nil
+            }
+            next = nextToken(units, &index)
+        }
+        guard let open = next, open.kind == .punctuation, open.text == "(" else { return nil }
+        var names: [String] = []
+        while let token = nextToken(units, &index) {
+            if token.kind == .punctuation {
+                if token.text == ")" { return names }
+                if token.text == "," { continue }
+                return nil
+            }
+            names.append(token.text.lowercased())
+        }
+        return nil
     }
 
     /// The table an `INSERT … INTO` names, unquoted and folded to lower case,
@@ -181,6 +352,7 @@ struct SQLSourceMap {
         static let closeBracket: UInt16 = 93
         static let openParen: UInt16 = 40
         static let closeParen: UInt16 = 41
+        static let comma: UInt16 = 44
         static let dash: UInt16 = 45
         static let slash: UInt16 = 47
         static let star: UInt16 = 42

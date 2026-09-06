@@ -365,7 +365,7 @@ final class MarkdownMathTests: XCTestCase {
     }
 
     @MainActor
-    func testClickingADisplayBlockPutsTheCaretOnItsDollars() throws {
+    func testClickingADisplayBlockSelectsItsDollars() throws {
         _ = NSApplication.shared
         let controller = try makeControllerShowingPreview()
         let editor = try editorTextView(of: controller)
@@ -376,8 +376,8 @@ final class MarkdownMathTests: XCTestCase {
 
         try clickPreview(of: controller, on: "\u{FFFC}")
         XCTAssertEqual(
-            editor.selectedRange(), NSRange(location: 9, length: 0),
-            "the caret lands on the block's opening `$$`"
+            editor.selectedRange(), NSRange(location: 9, length: 9),
+            "the whole formula, its `$$` fences part of it"
         )
     }
 

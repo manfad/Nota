@@ -128,7 +128,7 @@
   itself in its own script: System Default, English, 简体中文, 繁體中文, Bahasa Melayu. System Default reads
   the Mac's own preferred language — `zh-Hant` / `zh-TW` / `zh-HK` → 繁體中文, `zh-Hans` / `zh-CN` / bare
   `zh` → 简体中文, `ms` → Bahasa Melayu, anything else English. **Appearance** — font family, size, line
-  spacing, editor padding. **Tab bar** — a first group of "Show tab bar" and "Auto-hide tab bar", then a
+  spacing, editor padding, sidebar side (Left / Right, default Right). **Tab bar** — a first group of "Show tab bar" and "Auto-hide tab bar", then a
   second group for what the strip shows: Traffic lights, Bookmark button, Settings button; no footnote —
   the keys (⌘T, ⌘P, ⇧⌘D, ⌘, and ⌘W) all keep working with the strip and its buttons hidden, but the page
   does not say so. "Auto-hide tab bar" and "Traffic lights" are both greyed while
@@ -271,8 +271,11 @@
 - Live: re-rendered ~150 ms after typing stops; the pane keeps its relative scroll position.
 - Block sync (both ways). Every rendered block (heading, paragraph, list item, quote, code block, table, rule, image)
   knows its source range. Clicking a block selects it — a quiet band, labelColor @ 6%, full pane width — scrolls the
-  editor so that source is visible and puts the caret at the block's first character (vim: normal mode, block caret on
-  it) — in split only; reading takes no block clicks at all. Moving the caret in the editor lights the block it is in and scrolls the preview to keep it visible. One block
+  editor so that source is visible and **selects the whole block's source** there (decided 2026-09-06; vim comes back
+  to normal mode for it) — in split only; reading takes no block clicks at all. A jump selects what it jumped to: the
+  reader pointed at a paragraph and asked to be put in it, so typing replaces the block, ⌘Z puts it back, and an arrow
+  key collapses the selection to one end the way any selection collapses. The same is true of a `.tex` tab's blocks
+  and of a display formula, whose `$$` fences are part of what is selected. Moving the caret in the editor lights the block it is in and scrolls the preview to keep it visible. One block
   lit at a time; the band clears when the text changes under it. No proportional scroll following any more.
 - **Task lists (done 2026-09-04).** `- [ ]` / `- [x]` (`[X]` too, and in an ordered list) draw as real checkboxes —
   an SF Symbol `square` / `checkmark.square.fill` at the block's own font size, standing in the slot the bullet would
@@ -316,13 +319,14 @@
 - One band per column, and the front tab says what stands in it. The band, the hover, the fade, the hit testing and
   the drop out of ⌘F's way are exactly as the mode control's above; only the thing in the corner changes.
 - A tab whose note `supportsRenderedPreview` gets the mode control. A `.json` or `.html` tab gets that same control
-  with a **fourth segment** on the end of it — its format's own Beautify / Compact action. Every other tab — a
-  `.txt`, an untitled note, a PDF, a picture, a book — gets nothing: the overlay goes away whole, so the band takes
-  no clicks and the text under it stays as reachable as any other. Zen empties every slot.
+  with a **fourth segment** out front of it — its format's own Beautify / Compact action, ahead of the three modes.
+  Every other tab — a `.txt`, an untitled note, a PDF, a picture, a book — gets nothing: the overlay goes away
+  whole, so the band takes no clicks and the text under it stays as reachable as any other. Zen empties every slot.
 - One capsule, never two pieces of chrome. Both files that carry an action have a render behind them now, so the
   action never stands on its own: it is one more segment of the same `NSSegmentedControl`, the same 28pt width and
-  the same bezel. The control stays `.selectOne` — a click that lands on the action fires the reformat and the
-  selection goes straight back to the mode segment it was on, since nothing about a file's layout is a mode.
+  the same bezel, always the first segment when it is there — the modes shift one along to make room for it. The
+  control stays `.selectOne` — a click that lands on the action fires the reformat and the selection goes straight
+  back to the mode segment it was on, since nothing about a file's layout is a mode.
 - Keyed on the note, never on a list of extensions kept in the overlay, so a new kind of render is offered the mode
   control the moment `RenderedPreviewKind` learns to spell it.
 - The slot is per column: the editor's in editor and split, the preview's in split and reading. Both carry the
@@ -366,7 +370,9 @@
   named parts; a JSON array, a YAML sequence and a TOML array are all a thing with numbered parts; the leaves are
   strings, numbers, booleans, nulls, dates and — for XML — runs of text and comments. `StructuredDocument` is that
   shape, a parser's whole job is to turn its own grammar into it, and the view has never heard of JSON. Every node
-  carries the 1-based line it starts on, which is what a click on a row goes to.
+  carries the 1-based line it starts on **and the whole span of source it was made from** — an `NSRange` in the
+  UTF-16 units the editor counts in — plus a `valueRange`, the value alone without the key that names it. The first
+  is what the caret is matched against; between them they are what a click on a row selects.
 - `JSONTree` is Nota's own recursive descent over the UTF-8 bytes, RFC 8259 and nothing beside it. It is a *second*
   walker over the same grammar `JSONFormat` walks, deliberately: `JSONFormat` never looks inside a token, which is
   what makes beautify and compact lossless, while a tree is read — strings and keys come out unescaped for display,
@@ -423,13 +429,45 @@
   showing everything, a big export opens showing its shape. It is re-parsed on the render's own key and debounce, so
   it follows the file as it is typed, and what was open is remembered **by node path** — a path that no longer
   exists is simply gone, a branch that has just been typed into being arrives closed — as is the scroll position.
-- Both halves of the block sync a render has. Clicking a row walks the editor to the line the node is written on,
-  in split only and *without* taking the keyboard — the `onSourceReveal` a dump's cell click uses, so the arrows go
-  on walking the tree; a click on a disclosure triangle opens a branch and goes nowhere. And the caret's own line
-  lights the outermost node that line begins, with a quiet selection wash, scrolled into view; a row inside a closed
-  branch is not on screen to light, so the deepest ancestor that *is* stands in for it. Outermost rather than
-  innermost because a line usually begins exactly one node and the two are then the same thing, while a compact
-  file, whose every node begins on line 1, would otherwise open scrolled to its last leaf.
+- Where each node is written, per format (decided 2026-09-06). JSON: a member from its key's opening quote through
+  the end of its value, an array item the value alone, a branch through its closing bracket, the root its own
+  brackets. YAML: a mapping entry from its key through the end of its value, bringing the whole block written
+  beneath it along; a sequence item is the value after its `- `, and a nested mapping item covers its whole block; a
+  block scalar is its header and its content; an alias is the `*name` where it stands, though the members it pulled
+  in still point at the anchor, which is where they are written. TOML: a pair from its key — the whole dotted key —
+  through the end of its value; a `[table]` or `[[table]]` from the header's `[` through the last pair written under
+  it; an object a dotted key conjured from the key that first mentioned it through the last pair inside it; an
+  inline table and an array their own brackets; the root the whole file. XML: an element from its `<` through the
+  end of its `</name>` or `/>`, an attribute the `name="value"` read back out of the start tag, a run of text its
+  trimmed extent, and a CDATA block the whole `<![CDATA[…]]>`.
+- Getting those out of `XMLParser` is the one place the reader had to be measured rather than believed. It says
+  *where* an event happened and never how wide it was: `columnNumber` is 1-based, counted in **Unicode scalars** (an
+  emoji is one column, a combining accent one of two — neither UTF-8 bytes nor UTF-16 units), and stands one past
+  the thing just read for an end tag, a run of text and a comment. A start tag reports the `>` it ends on (the `/`
+  for an empty element), and its `<` is found by looking back for the nearest one, which is exact because XML
+  forbids a `<` inside a tag, attribute values included. A CDATA block is reported at the start of its *content*, so
+  the block is nine scalars back and runs to its `]]>`. Every parser counts in its own units — bytes for JSON,
+  Characters for YAML and TOML, scalars for XML — and `SourceOffsets` converts each to UTF-16 in one pass over the
+  text, remembering only where the two rulers part company, which for an ASCII file is nowhere.
+- A click on a **leaf** row selects the value and nothing else, quotes and all, the way a dump's cell click gives
+  the one value it stands over: the row says `name  "Nota"`, and `"Nota"` is what the reader pointed at (decided
+  2026-09-06). A click on a **branch** selects the whole of it, key and body together — a branch's value part is
+  only its brackets where the grammar has any, and nobody clicking `owner` means the punctuation around it. So
+  `valueRange` is the value as written for every leaf: JSON's token, YAML's scalar (a block scalar its `|` or `>`
+  header and its content, an alias the `*name` where it stands), TOML's value, an XML attribute's quoted value and a
+  run of text or a whole `<![CDATA[…]]>`. For a branch it is the bracketed form where there is one — a JSON object,
+  a TOML inline table or array, a YAML flow collection — and nothing where there is not: a YAML block mapping, a
+  TOML `[table]` and an XML element are their key and their body with nothing around them.
+- Both halves of the block sync a render has. Clicking a row **selects that node's source** in the editor, in split
+  only and *without* taking the keyboard — the `onSourceReveal` a dump's cell click uses, so the arrows go on
+  walking the tree; a click on a disclosure triangle opens a branch and goes nowhere. And the caret lights the
+  **deepest** node whose span it is standing in, with a quiet selection wash, scrolled into view; a row inside a
+  closed branch is not on screen to light, so the deepest ancestor that *is* stands in for it. Two edges, both of
+  them where a caret actually sits: one exactly at the end of a node is still in it, unless the node beside it
+  begins there; and one in the indentation before the first node of a line is in that node. This is what a compact
+  file needs — every node of a one-line export begins on line 1, so the line alone says nothing, and the caret walks
+  the tree down as it moves along the line. A node whose parser could not say how wide it is falls back to the line,
+  and then the *outermost* node beginning that line is lit.
 - A file that will not parse shows one centred line in the editor's font in place of the tree —
   "Not valid JSON: line 3 — Expected `:`", the format named by how the file is spelled, localised — and the last
   good tree is *not* kept: a tree that no longer matched the text beside it would be a map of somewhere else.
@@ -788,8 +826,17 @@
   written. Anything with no rowid to be looked up by does nothing at all rather than landing somewhere arbitrary — a
   `WITHOUT ROWID` table, a query of a shape no rowid fits, a row whose insert is not in this file — and so does a
   statement whose tuples do not add up to the rows it claims, which is pointed at whole instead. `PreviewContent`
-  grew one callback for it, `onSourceReveal`: a block click is a jump and takes the caret with it, this is a look
-  and does not.
+  grew one callback for it, `onSourceReveal`: both halves select the source they point at, and the difference is the
+  keyboard — a block click is a jump and takes it, this is a look and leaves it where it was.
+- And inside that tuple, the clicked cell's own value (decided 2026-09-06). What the editor shows is not a caret at
+  the row's head but a *selection* of that one value's text as written — its quotes part of it, the comma and the
+  blanks around it not. `SQLSourceMap` walks the tuple once for it, honouring `'…'` with its `''` escapes, `X'…'`
+  blobs, `NULL`, a negative number and a parenthesised expression written as a value, and counting only the commas
+  at depth zero. Which value a column stands for is asked by *name* rather than by the grid's order, since the two
+  need not agree: the list an `INSERT INTO t (b, a) VALUES (…)` gave when it gave one, and the table's own columns
+  when it did not, so a query that asked for its columns in any order still lands on the right one. A cell that
+  cannot be placed — a computed column of a query, a name in neither list, a tuple that will not read — is the whole
+  tuple instead, and never nothing.
 - A query's rows jump too, when they are one table's rows (decided 2026-09-05, Todo 6-C). The last statement of the
   box is read once by `SQLQueryRewrite` — loosely, since SQLite has already said the text is good — and if it is
   plainly `SELECT <list> FROM <one table> [WHERE / ORDER BY / LIMIT …]` the page is asked of that query with the
@@ -888,10 +935,14 @@
   column text, ordered by the reader's own language with case ignored. An empty cell is nothing, and nothing sorts
   before everything. Ties keep the file's own order. A blank column is not sortable, and neither is the `#` gutter.
   A column is identified by its position *and* its name, since a CSV is free to have two columns called `id`.
-- A cell clicked walks the editor to the line the row is written on, in split only and without taking the keyboard —
-  the same `onSourceReveal` a dump's cell click uses, so the grid keeps the focus and the arrows go on walking the
-  cells. `CSVTable` takes the ranges down as it reads: a record whose quoted field runs over three lines has all
-  three, and the range begins where the record begins.
+- A cell clicked selects that cell's own text in the editor, in split only and without taking the keyboard — the
+  same `onSourceReveal` a dump's cell click uses, so the grid keeps the focus and the arrows go on walking the
+  cells. The field *as written*, its quotes part of it, because they are the field's characters in the file
+  (decided 2026-09-06). `CSVTable` takes both sets of ranges down as it reads — `sources` for the record and
+  `fieldSources` for every field of it — so a record whose quoted field runs over three lines has all three and the
+  record's range begins where the record begins. A cell that cannot be placed falls back to the whole record and
+  never to nothing: a ragged row that never wrote the field the column stands for, and a click with no column under
+  it. The header row is unchanged: a click there sorts.
 - Off the main thread, always: the read is asked on a serial queue and answered back on the main one carrying a
   token, so an answer about the file two keystrokes ago is dropped rather than drawn. An ordinary file is read again
   ~150 ms after typing stops, on the same debounce the Markdown render uses. A file past the `BigFile` threshold is
@@ -958,7 +1009,7 @@
   caption, and the one in front wears the gallery's accent wash. A picture tab has nothing to list and keeps the
   column away, and every editable tab — `.md`, `.tex`, `.html`, `.svg`, a plain note — is the gallery as before.
 - Each list stands under one word saying what it is, in the shape of Finder's own sidebar sections: 11pt semibold,
-  secondary, at the list's leading margin, with air above and below. `Images` over a note's pictures, `Contents`
+  secondary, centred across the column, with air above and below. `Images` over a note's pictures, `Contents`
   over a book's chapters, `Pages` over a document's pages. It sits at the top of the column, outside the scroll
   view, so it is still there when the list has been scrolled and still there when there is no list — an empty
   gallery says `Images` over its `No images`. The View menu keeps the longer names, which a menu has room for:
@@ -1113,8 +1164,8 @@
     triangles, ⌥-click and the arrow keys all come with it. It opens whole below 400 nodes and two levels deep
     above that, re-parses on the render's own debounce keeping what was open by node path and where the reader had
     scrolled to, colours values by type in system colours that read in both appearances, and carries both halves of
-    the block sync — a click reveals the node's line without taking the keyboard, and the caret's line lights the
-    node that line begins.
+    the block sync — a click selects the value of a leaf and the whole of a branch without taking the keyboard, and the caret lights the
+    deepest node whose span it is standing in, so a one-line export is walked the same way a pretty-printed one is.
     Because a `.json` now has a render, the corner could no longer offer it a lone button beside a mode control it
     had just earned. So the slot holds one capsule with a fourth segment on the end: the three modes, then the
     file's own Beautify / Compact, `.selectOne` still, the click firing the action and the selection going straight
@@ -1161,6 +1212,9 @@
     (numeric where the column is all numbers, the reader's own collation where it is not), the source map (a click
     on a cell walks the editor to the record's first line, quoted fields spanning lines and all), and the footer's
     `2,345 rows · 6 columns`. Nothing was changed about the SQL pane; nothing new rides in the session.
+    Sharpened to the cell (2026-09-06): the scanner also writes down where every *field* is written, quotes
+    included, so a click selects that field's own text in the editor rather than the record it is in, with the whole
+    record kept as the fallback for a ragged row that never wrote the field or a click with no column under it.
 
 26. **RTF opens as a viewer tab (done 2026-09-05).** An `.rtf` or an `.rtfd` used to be imported — its plain text
    poured into a new untitled tab, the formatting and the pictures thrown away (Done 17, now superseded). That was
@@ -1228,6 +1282,10 @@
    for it, the half of a block click that moves the caret without asking for the keyboard. The empty grid was
    checked over as well and needed nothing: with no rows the table still fills the room under its header and AppKit
    draws the alternating stripes across it, which is what "the same table with nothing in it" should look like.
+   Sharpened to the cell (2026-09-06): `SQLSourceMap` also locates the nth value inside a tuple — one walk honouring
+   strings with their `''` escapes, blobs, `NULL`, negative numbers, a parenthesised expression and the commas at
+   depth zero — and the column is placed by name, through the list an insert named or the table's own columns, so a
+   click selects that value's own text (quotes included) and only an unplaceable cell falls back to the tuple.
 6-C. **The jump works for a query (done 2026-09-05).** A cell clicked in split walks the editor to the `INSERT`
    that wrote the row, but only ever for a table's page: a query's result carried no rowid, so after a run the grid
    was a sheet of values with nothing behind them. It carries one now for the query that is plainly one table's
