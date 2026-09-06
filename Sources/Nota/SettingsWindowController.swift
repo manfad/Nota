@@ -71,6 +71,19 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let resetShortcutsButton = NSButton()
     private let shortcutWarning = WrappingLabel(text: "")
     private let versionLabel = WrappingLabel(text: "")
+    private let checkUpdatesButton = NSButton()
+    private let updateStatusLabel = WrappingLabel(text: "")
+    private let downloadUpdateButton = NSButton()
+    private let brewCommandField = NSTextField(labelWithString: UpdateCheck.homebrewUpgradeCommand)
+    /// Where the About page's update check has got to. Manual, and forgotten
+    /// the moment the window is rebuilt: nothing about it is stored.
+    private enum UpdateState {
+        case idle
+        case checking
+        case done(UpdateCheck.Result)
+    }
+    private var updateState: UpdateState = .idle
+    private var updateURL: String?
 
     private let pageTitleLabel = NSTextField(labelWithString: "")
     private let pageHost = FlippedView()
@@ -159,6 +172,29 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     /// The page titles, in the order the sidebar lists them.
     var pageTitles: [String] { pages.map { L10n.text($0.key) } }
+
+    /// Stands in for the network on the About page: given the closure the
+    /// real check would call, answer it. Set, no request is ever made.
+    var updateCheckForTesting: (((@escaping (UpdateCheck.Result) -> Void)) -> Void)?
+
+    /// Answers "did this copy come from Homebrew?" without a disk to look at.
+    var homebrewOverrideForTesting: Bool?
+
+    /// What the About page's update block is showing.
+    var updateControlsForTesting:
+        (check: NSButton, status: NSTextField, download: NSButton, brewCommand: NSTextField)
+    {
+        (checkUpdatesButton, updateStatusLabel, downloadUpdateButton, brewCommandField)
+    }
+
+    /// Puts the About page back the way it opens, so one test's answer is
+    /// not still on screen for the next.
+    func resetUpdateStateForTesting() {
+        updateCheckForTesting = nil
+        homebrewOverrideForTesting = nil
+        updateState = .idle
+        applyUpdateState()
+    }
 
     /// Only the selected page's controls are in the view hierarchy, the way
     /// System Settings works, so a test looking for a row has to bring that
@@ -360,6 +396,24 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         shortcutWarning.isHidden = true
         shortcutWarning.setAccessibilityIdentifier("shortcut-conflict")
 
+        checkUpdatesButton.target = self
+        checkUpdatesButton.action = #selector(checkForUpdates)
+        checkUpdatesButton.bezelStyle = .rounded
+        checkUpdatesButton.controlSize = .regular
+        checkUpdatesButton.setAccessibilityIdentifier("check-for-updates")
+
+        downloadUpdateButton.target = self
+        downloadUpdateButton.action = #selector(openDownloadPage)
+        downloadUpdateButton.bezelStyle = .rounded
+        downloadUpdateButton.controlSize = .regular
+        downloadUpdateButton.setAccessibilityIdentifier("download-update")
+
+        // The Homebrew command is read and copied by hand — selectable text,
+        // in the font a terminal would print it in. Nota touches no clipboard.
+        brewCommandField.isSelectable = true
+        brewCommandField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        brewCommandField.setAccessibilityIdentifier("brew-upgrade-command")
+
         resetShortcutsButton.target = self
         resetShortcutsButton.action = #selector(resetShortcuts)
         resetShortcutsButton.bezelStyle = .rounded
@@ -534,9 +588,21 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         let tagline = footnote("A plain-text notebook.")
         tagline.alignment = .center
 
-        return page(
-            "About", blocks: [icon, name, versionLabel, tagline], rows: [], centered: true
+        updateStatusLabel.alignment = .center
+        updateStatusLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 360).isActive = true
+        brewCommandField.alignment = .center
+
+        let about = page(
+            "About",
+            blocks: [icon, name, versionLabel, tagline,
+                     checkUpdatesButton, updateStatusLabel, brewCommandField,
+                     downloadUpdateButton],
+            rows: [], centered: true
         )
+        // The button starts a block of its own under the line about Nota.
+        (about.content as? NSStackView)?.setCustomSpacing(20, after: tagline)
+        applyUpdateState()
+        return about
     }
 
     // MARK: - Building blocks
@@ -642,6 +708,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         versionLabel.stringValue = String(
             format: L10n.text("Version %@"), AppVersion.current
         )
+        applyUpdateState()
 
         clearHotKeyButton.title = L10n.text("Clear")
         resetShortcutsButton.title = L10n.text("Reset to Defaults")
@@ -799,6 +866,79 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         pendingShortcuts = [:]
         refreshShortcutFields()
         markDirty()
+    }
+
+    // MARK: - Check for Updates
+
+    /// The About page's one button. Nothing here is a draft — the check is
+    /// not a setting, so it neither dirties the window nor waits for Save.
+    @objc func checkForUpdates() {
+        if case .checking = updateState { return }
+        updateState = .checking
+        applyUpdateState()
+        let finish: (UpdateCheck.Result) -> Void = { [weak self] result in
+            guard let self else { return }
+            self.updateState = .done(result)
+            self.applyUpdateState()
+        }
+        if let stub = updateCheckForTesting {
+            stub(finish)
+        } else {
+            UpdateCheck.check(completion: finish)
+        }
+    }
+
+    @objc private func openDownloadPage() {
+        guard let updateURL, let url = URL(string: updateURL) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Draws whichever of the four states the check is in. Called again on
+    /// every refresh so a language change re-words what is on screen.
+    private func applyUpdateState() {
+        checkUpdatesButton.title = L10n.text("Check for Updates")
+        downloadUpdateButton.title = L10n.text("Download")
+        brewCommandField.stringValue = UpdateCheck.homebrewUpgradeCommand
+        checkUpdatesButton.isEnabled = true
+        updateStatusLabel.isHidden = false
+        downloadUpdateButton.isHidden = true
+        brewCommandField.isHidden = true
+        updateURL = nil
+
+        switch updateState {
+        case .idle:
+            updateStatusLabel.stringValue = ""
+            updateStatusLabel.isHidden = true
+        case .checking:
+            checkUpdatesButton.isEnabled = false
+            updateStatusLabel.stringValue = L10n.text("Checking…")
+        case let .done(result):
+            switch result {
+            case .upToDate:
+                updateStatusLabel.stringValue = L10n.text("Nota is up to date.")
+            case let .available(version, url):
+                updateURL = url
+                if isHomebrewCopy {
+                    updateStatusLabel.stringValue = String(
+                        format: L10n.text("Nota %@ is available. Update with:"), version
+                    )
+                    brewCommandField.isHidden = false
+                } else {
+                    updateStatusLabel.stringValue = String(
+                        format: L10n.text("Nota %@ is available."), version
+                    )
+                    downloadUpdateButton.isHidden = url.isEmpty
+                }
+            case let .failed(reason):
+                updateStatusLabel.stringValue = String(
+                    format: L10n.text("Couldn't check for updates: %@"), reason.message
+                )
+            }
+        }
+    }
+
+    private var isHomebrewCopy: Bool {
+        homebrewOverrideForTesting ?? UpdateCheck.installedWithHomebrew
     }
 
     private func draftCombo(for action: ShortcutAction) -> KeyCombo {

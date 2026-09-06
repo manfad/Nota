@@ -3882,6 +3882,77 @@ final class NotaTests: XCTestCase {
         picker.show(titles: titles, selectedIndex: selectedIndex, loadHeadings: { _ in }, over: window)
         return (picker, window, delegate)
     }
+
+    // MARK: - Check for Updates (About page)
+
+    /// The About page carries the button, and pressing it with a stubbed
+    /// check draws each answer. Nothing here reaches the network.
+    @MainActor
+    func testAboutPageChecksForUpdates() throws {
+        _ = NSApplication.shared
+        let controller = SettingsWindowController.shared
+        defer {
+            controller.resetUpdateStateForTesting()
+            controller.selectPage(at: 0)
+        }
+        XCTAssertTrue(controller.selectPage(titled: "About"))
+        let controls = controller.updateControlsForTesting
+        XCTAssertEqual(controls.check.title, "Check for Updates")
+        XCTAssertTrue(controls.status.isHidden, "nothing is said before the button is pressed")
+        XCTAssertTrue(controls.download.isHidden)
+        XCTAssertTrue(controls.brewCommand.isHidden)
+
+        // A newer release on a copy that did not come from Homebrew: the
+        // version, and a Download button for the release page.
+        controller.homebrewOverrideForTesting = false
+        controller.updateCheckForTesting = { answer in
+            answer(.available(version: "1.1.0",
+                              url: "https://github.com/manfad/Nota/releases/tag/v1.1.0"))
+        }
+        controls.check.performClick(nil)
+        XCTAssertEqual(controls.status.stringValue, "Nota 1.1.0 is available.")
+        XCTAssertFalse(controls.download.isHidden)
+        XCTAssertEqual(controls.download.title, "Download")
+        XCTAssertTrue(controls.brewCommand.isHidden, "a downloaded copy is not told to brew")
+
+        // The same answer on a Homebrew copy: the command instead, as
+        // selectable monospaced text rather than a button.
+        controller.homebrewOverrideForTesting = true
+        controls.check.performClick(nil)
+        XCTAssertEqual(controls.status.stringValue, "Nota 1.1.0 is available. Update with:")
+        XCTAssertFalse(controls.brewCommand.isHidden)
+        XCTAssertEqual(controls.brewCommand.stringValue, "brew upgrade --cask nota")
+        XCTAssertTrue(controls.brewCommand.isSelectable)
+        XCTAssertTrue(controls.download.isHidden)
+
+        // Nothing newer.
+        controller.updateCheckForTesting = { answer in answer(.upToDate(AppVersion.current)) }
+        controls.check.performClick(nil)
+        XCTAssertEqual(controls.status.stringValue, "Nota is up to date.")
+        XCTAssertTrue(controls.download.isHidden)
+        XCTAssertTrue(controls.brewCommand.isHidden)
+
+        // A failure names its reason after the same opening.
+        controller.updateCheckForTesting = { answer in answer(.failed(.offline)) }
+        controls.check.performClick(nil)
+        XCTAssertEqual(
+            controls.status.stringValue,
+            "Couldn't check for updates: " + UpdateCheck.Reason.offline.message
+        )
+        XCTAssertTrue(controls.download.isHidden)
+
+        // The button is disabled while the answer is still out, and comes
+        // back with it.
+        var pending: ((UpdateCheck.Result) -> Void)?
+        controller.updateCheckForTesting = { answer in pending = answer }
+        controls.check.performClick(nil)
+        XCTAssertFalse(controls.check.isEnabled, "the button is dead while checking")
+        XCTAssertEqual(controls.status.stringValue, "Checking\u{2026}")
+        try XCTUnwrap(pending)(.upToDate(AppVersion.current))
+        XCTAssertTrue(controls.check.isEnabled)
+        XCTAssertEqual(controls.status.stringValue, "Nota is up to date.")
+    }
+
 }
 
 /// Records what the picker was told to do, for the hover tests.

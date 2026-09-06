@@ -138,7 +138,23 @@
   is placed under the pointer by the strip's current inset, not always the lights' 82pt.
   **Editor** — word wrap, line numbers, gutter separator, vim mode. **Preview** — start supported files
   in preview mode. **Status bar** — show status bar, then which regions it shows. **About** — the app
-  icon at 96pt, "Nota", `Version N.N.N` and one line saying what Nota is. The window is 760×520,
+  icon at 96pt, "Nota", `Version N.N.N`, one line saying what Nota is, and a **Check for Updates**
+  button under it. The check is manual and remembered nowhere: pressing the button greys it and says
+  "Checking…", then one line replaces that. "Nota is up to date." when nothing newer is published (a
+  version *ahead* of the newest release counts as up to date, so a development build is never offered a
+  downgrade). "Nota 1.1.0 is available." with a **Download** button that opens the release page in the
+  browser. On a copy installed with Homebrew the same answer reads "Nota 1.1.0 is available. Update
+  with:" over `brew upgrade --cask nota` as selectable monospaced text and no Download button — Nota
+  never touches the clipboard for it. A check that fails says "Couldn't check for updates: " and the
+  reason: unreachable, rate-limited (GitHub's anonymous allowance, worded as its own case), another
+  status by number, an unreadable answer, or a release GitHub tagged with something that is not a
+  version. The check is one anonymous `GET` of
+  `https://api.github.com/repos/manfad/Nota/releases/latest` with a 10s timeout, comparing `tag_name`
+  (a leading `v` dropped) with `AppVersion.current` as dotted integers — a missing or non-numeric part
+  reads as 0, so `1.0.18` < `1.0.19` < `1.1.0` < `2.0.0` and `1.0` is `1.0.0`. A copy counts as
+  Homebrew's when its bundle path is under a `/Caskroom/` or a `Caskroom/nota` directory exists under
+  a Homebrew prefix: a cask *moves* `Nota.app` into `/Applications`, so the bundle path alone is
+  indistinguishable from a hand-copied one. The window is 760×520,
   resizable down to a floor; a page taller than the pane scrolls inside it, and the page you left it on
   is the page it opens on next time, for the life of the window.
 - **Auto-hide tab bar** (Settings › Tab bar, default off): the strip and the traffic lights
@@ -1144,6 +1160,22 @@
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+32. **"Check for Updates" on the About page (done 2026-09-06).** Nota ships as a GitHub Release and a Homebrew
+    cask, and a reader who installed it once had no way to learn a newer one existed short of visiting the repo.
+    The About page asks now: one button, one anonymous request to the releases API, one line of answer, and
+    nothing kept between launches. `UpdateCheck.swift` is the whole of it — the request, the parse of `tag_name` /
+    `html_url` / `name` / `published_at`, the dotted-integer comparison that puts `1.0.18` below `1.0.19` below
+    `1.1.0`, and a `Reason` per failure so the page can word a rate limit differently from a 500. The transport is
+    a closure defaulting to `URLSession.shared`, so every test answers it in-process and the suite never reaches
+    the network.
+    Stage one only: it checks and points, it does not install. A self-updater was rejected because Nota is
+    ad-hoc signed — a copy that replaced itself would hand the reader a bundle macOS distrusts, and the honest
+    fix is signing, not a downloader. Sparkle was rejected because the project carries no packages at all and one
+    update button is not the thing to break that for. What the button offers therefore depends on where the copy
+    came from: a Download button to the release page, or, for a cask, `brew upgrade --cask nota` as selectable
+    text — because a cask install updated by hand would leave Homebrew's metadata behind and stale. Homebrew is
+    detected by the Caskroom *directory*, not the bundle path: a cask moves `Nota.app` into `/Applications` and
+    leaves only a symlink behind, so the app itself looks hand-copied.
 31. **The zoom pill (done 2026-09-06).** ⌘+ / ⌘- / ⌘0 zoom a document or a picture, but the keys had no visible
     counterpart, so a reader who did not know them had no way to find the feature at all. `ZoomPillOverlay` puts a
     small pill — `−  100%  +` — in the bottom-leading corner of the column, the mode control's own bezel at the

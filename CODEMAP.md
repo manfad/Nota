@@ -20,6 +20,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | The tab strip (drawing, drag, close, +, tear-off) | `TabBarView.swift`, geometry in `TabStripLayout.swift` |
 | ⌘P switcher, `@` headings (text notes only), bookmarks dialog, ⇧⌘F search dialog, hover/arrow selection | `TabPickerPanel.swift`, ranking in `FuzzyMatch.swift` |
 | Settings window (draft + Save, sidebar pages) | `SettingsWindowController.swift`, values in `Preferences.swift` |
+| "Check for Updates" on the About page | `UpdateCheck.swift` (the request, the comparison, Homebrew detection), the button and its line in `SettingsWindowController.aboutPage` |
 | A new preference | `Preferences.swift` (key + property + `announce()`), then Settings UI |
 | A user-visible string or its translation | `Localization.swift` (`L10n.text`), the languages themselves in `Preferences.swift` (`AppLanguage`) |
 | Editor typing, paste, drop, images in the text | `NotaTextView.swift`, tokens ↔ chips in `NoteText.swift` |
@@ -66,6 +67,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `Preferences.swift` (~570) — every setting (`UserDefaults` + `Preferences.didChange`), enums `EditorFontFamily`, `LineSpacingOption`, `SidebarSide`, `PlainTextImageStyle`, `EditorPaddingOption`, `AppLanguage`, `AppTheme`; `shortcuts` table, `hotKey`; window chrome (`hidesTabBar`, `autoHidesTabBar`, `hidesTrafficLights`, `hidesBookmarkButton`, `hidesSettingsButton`).
 - `Shortcuts.swift` (~200) — `KeyCombo`, `ShortcutAction` (every adjustable menu key, defaults, groups, reserved combos), `NSMenuItem.applyShortcut`. ⌘D bookmarks the tab, ⇧⌘D shows the bookmarks; duplicating a line is ⇧⌥↓ only.
 - `Version.swift` — `AppVersion.current`; bumped with `Info.plist` by `.githooks/pre-commit` on every commit (`git config core.hooksPath .githooks`).
+- `UpdateCheck.swift` (~190) — the About page's "Check for Updates": one anonymous request to GitHub's `releases/latest`, `Release` (tag without its `v`, page URL, name, date), `compare` over dotted integers, `Result` / `Reason` (offline, rate-limited, another status, unreadable, a tag that is not a version), and `installedWithHomebrew` — a `/Caskroom/` in the bundle path, or a `Caskroom/nota` under a Homebrew prefix. The transport is a closure, so no test reaches the network.
 - `Localization.swift` (~500) — `L10n.text` and one table per language, all keyed by the English string: 简体中文, 繁體中文, Bahasa Melayu. `AppLanguage.resolved` (in `Preferences.swift`) says which one, resolving `.system` against the Mac's preferred language.
 - `SettingsWindowController.swift` (~900) — Settings: a sidebar source list over eight pages (General, Appearance, Editor, Preview, Tab bar, Status bar, Shortcuts, About), each page's controls in inset rounded groups of 44pt rows; draft-and-Save. Version shown on About comes from `Version.swift`.
 - `ShortcutRecorderField.swift` (~150) — press-a-key field; records a global hotkey (key code) or an app `KeyCombo` (character).
@@ -267,6 +269,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `LaTeXTests.swift`, `MathTests.swift`, `MarkdownMathTests.swift`, `MarkdownHeadingsTests.swift`, `TaskListTests.swift` — renderers.
 - `TextFileTests.swift`, `FileSniffTests.swift`, `FileKindIconTests.swift`, `LineIndexTests.swift`, `LineOperationsTests.swift`, `ListContinuationTests.swift` — files and editor logic.
 - `LocalizationTests.swift` (~170) — the tables against each other, `.system` resolution, the Settings language popup.
+- `UpdateCheckTests.swift` (18) — the update check with a stub transport: a newer release, the same version, a version ahead of the server, a tag without its `v`, malformed JSON, 403/429, another status, a transport error, a tag that is not a version, the comparison table, and the Homebrew rule. The button itself is in `NotaTests.testAboutPageChecksForUpdates`.
 - `ZoomPillTests.swift` (12) — the pill: which tabs carry it, the percentage it reads, showing on a zoom and on
   hover, the hold and its restart, pressing it as the keys, and taking itself away at once for a tab with no zoom.
 - `BookmarksTests.swift` (also the ⌘P picker tests), `OpenRecentTests.swift`, `ShortcutsTests.swift`, `MultiWindowTests.swift`, `ExternalChangeTests.swift`, `ZoomTests.swift`, `TabStripLayoutTests.swift`, `DropOnStripTests.swift`, `SidecarTests.swift`, `BigFileTests.swift`, `NoteBigFileTests.swift`, `SpellCheckPolicyTests.swift`.
