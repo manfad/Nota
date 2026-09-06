@@ -58,7 +58,7 @@ final class SidebarSectionHeader: NSView {
         label.stringValue = title
         label.font = .systemFont(ofSize: 11, weight: .semibold)
         label.textColor = .secondaryLabelColor
-        label.alignment = .center
+        label.alignment = .left
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
         addSubview(label)

@@ -334,8 +334,10 @@
   in one column and "Compact" in the other would be a bug you could see.
 
 ## Beautify / Compact — JSON and HTML (done 2026-09-05, Todo 5; HTML and the fourth segment 2026-09-06, Todo 30)
-- The action segment shows `text.alignleft` "Beautify JSON" / "Beautify HTML" when the file is pulled together, and
-  `arrow.down.right.and.arrow.up.left` "Compact JSON" / "Minify HTML" when it is already laid out. One direction,
+- The action segment shows `arrow.up.left.and.arrow.down.right` "Beautify JSON" / "Beautify HTML" when the file is pulled
+  together, and `arrow.down.right.and.arrow.up.left` "Compact JSON" / "Minify HTML" when it is already laid out — one
+  pair of arrows pointing out and pointing in, so either says what the other would do (the Beautify side was
+  `text.alignleft` until 2026-09-06 evening). One direction,
   because the file is in one of the two shapes already and the only thing worth offering is the other one. A page is
   *minified*, which is the word its own tools use; a document is *compacted*. All four tool tips are localised.
   The symbol is drawn in `secondaryLabelColor`, `tertiaryLabelColor` while disabled, and re-resolved when the Mac
@@ -449,11 +451,11 @@
   the block is nine scalars back and runs to its `]]>`. Every parser counts in its own units — bytes for JSON,
   Characters for YAML and TOML, scalars for XML — and `SourceOffsets` converts each to UTF-16 in one pass over the
   text, remembering only where the two rulers part company, which for an ASCII file is nowhere.
-- A click on a **leaf** row selects the value and nothing else, quotes and all, the way a dump's cell click gives
-  the one value it stands over: the row says `name  "Nota"`, and `"Nota"` is what the reader pointed at (decided
-  2026-09-06). A click on a **branch** selects the whole of it, key and body together — a branch's value part is
-  only its brackets where the grammar has any, and nobody clicking `owner` means the punctuation around it. So
-  `valueRange` is the value as written for every leaf: JSON's token, YAML's scalar (a block scalar its `|` or `>`
+- A click on a row selects the whole node, key and value together: the row says `name  "Nota"`, and
+  `"name": "Nota"` is what the reader pointed at (decided 2026-09-06 evening, after an afternoon of the value alone —
+  the member is the thing the row names, and the key is how it is found again in the source). A click on a
+  **branch** likewise selects the whole of it, key and body together. `valueRange` is still recorded, the value
+  as written for every leaf, for whatever wants the value alone: JSON's token, YAML's scalar (a block scalar its `|` or `>`
   header and its content, an alias the `*name` where it stands), TOML's value, an XML attribute's quoted value and a
   run of text or a whole `<![CDATA[…]]>`. For a branch it is the bracketed form where there is one — a JSON object,
   a TOML inline table or array, a YAML flow collection — and nothing where there is not: a YAML block mapping, a
@@ -1009,7 +1011,7 @@
   caption, and the one in front wears the gallery's accent wash. A picture tab has nothing to list and keeps the
   column away, and every editable tab — `.md`, `.tex`, `.html`, `.svg`, a plain note — is the gallery as before.
 - Each list stands under one word saying what it is, in the shape of Finder's own sidebar sections: 11pt semibold,
-  secondary, centred across the column, with air above and below. `Images` over a note's pictures, `Contents`
+  secondary, at the list's leading margin (centred for an hour on 2026-09-06, then put back), with air above and below. `Images` over a note's pictures, `Contents`
   over a book's chapters, `Pages` over a document's pages. It sits at the top of the column, outside the scroll
   view, so it is still there when the list has been scrolled and still there when there is no list — an empty
   gallery says `Images` over its `No images`. The View menu keeps the longer names, which a menu has room for:
@@ -1164,7 +1166,7 @@
     triangles, ⌥-click and the arrow keys all come with it. It opens whole below 400 nodes and two levels deep
     above that, re-parses on the render's own debounce keeping what was open by node path and where the reader had
     scrolled to, colours values by type in system colours that read in both appearances, and carries both halves of
-    the block sync — a click selects the value of a leaf and the whole of a branch without taking the keyboard, and the caret lights the
+    the block sync — a click selects the whole node, key and value, without taking the keyboard, and the caret lights the
     deepest node whose span it is standing in, so a one-line export is walked the same way a pretty-printed one is.
     Because a `.json` now has a render, the corner could no longer offer it a lone button beside a mode control it
     had just earned. So the slot holds one capsule with a fourth segment on the end: the three modes, then the

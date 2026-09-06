@@ -479,8 +479,8 @@ final class StructuredPreviewTests: XCTestCase {
         XCTAssertEqual(pane.visibleRows[2].title, "b  2")
         click(row: 2, in: pane)
 
-        XCTAssertEqual(source(editor.string, editor.selectedRange()), "2",
-                       "a leaf gives its value and nothing else")
+        XCTAssertEqual(source(editor.string, editor.selectedRange()), #""b": 2"#,
+                       "a leaf gives the whole member, key and value")
         XCTAssertTrue(window.firstResponder === pane.outline,
                       "the click reveals rather than jumps")
     }
@@ -500,7 +500,7 @@ final class StructuredPreviewTests: XCTestCase {
         XCTAssertEqual(pane.path(atRow: 3), path("b", "c"))
         click(row: 3, in: pane)
 
-        XCTAssertEqual(source(editor.string, editor.selectedRange()), "2")
+        XCTAssertEqual(source(editor.string, editor.selectedRange()), #""c":2"#)
         XCTAssertTrue(window.firstResponder === pane.outline)
 
         // And a branch gives the whole of itself, key and body together.

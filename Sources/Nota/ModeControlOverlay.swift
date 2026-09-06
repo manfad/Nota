@@ -132,11 +132,12 @@ final class ModeControlOverlay: NSView {
     enum FormatAction: Equatable {
         case beautify, compact
 
-        /// Outline symbols, the pair the Mac itself uses for text laid out in
-        /// lines and for something pulled back into its corner.
+        /// One pair of arrows, pointing out and pointing in: the file spread
+        /// into lines, and the file pulled back into its corner. Opposites, so
+        /// either one says what the other would do.
         var symbolName: String {
             switch self {
-            case .beautify: "text.alignleft"
+            case .beautify: "arrow.up.left.and.arrow.down.right"
             case .compact: "arrow.down.right.and.arrow.up.left"
             }
         }

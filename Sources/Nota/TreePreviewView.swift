@@ -497,8 +497,9 @@ final class TreePreviewView: NSView, PreviewContent {
               let row = outlineView.item(atRow: index) as? Row
         else { return }
         let node = row.node
-        let source = (node.isBranch ? node.range : node.valueRange ?? node.range)
-            ?? note.lineIndex.range(ofLine: node.line)
+        // The whole member, key and value (decided 2026-09-06, after a day of
+        // the value alone): what the row names is what the click selects.
+        let source = node.range ?? note.lineIndex.range(ofLine: node.line)
         onSourceReveal(source)
     }
 
