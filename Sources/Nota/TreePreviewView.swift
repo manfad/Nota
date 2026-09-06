@@ -168,6 +168,9 @@ final class TreePreviewView: NSView, PreviewContent {
         scrollView.drawsBackground = true
         scrollView.backgroundColor = .textBackgroundColor
         scrollView.borderType = .noBorder
+        // The clip has to be ours before the document goes in it, or AppKit
+        // makes a plain one and swaps this in over the top of it.
+        scrollView.contentView = TreeClipView()
         scrollView.documentView = outlineView
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(
@@ -740,6 +743,31 @@ extension TreePreviewView: NSOutlineViewDelegate {
     }
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool { true }
+}
+
+// MARK: - The clip
+
+/// `NSClipView` that answers for the whole of itself, inset and all.
+///
+/// The tree is held off the top of the column by the scroll view's own
+/// `contentInsets` rather than by a constraint, so that a row scrolled up
+/// there still shows — the band is a hover, not a lid, and the document
+/// runs under it the way it runs under the ⌘F pill. AppKit's own clip view
+/// does not agree: its `hitTest` stops at the inset, on the reasoning that
+/// what scrolls under a translucent title bar is not there to be clicked.
+/// Here it is: the rows in the top band are drawn, and the top 44pt of the
+/// tree took no clicks at all — the root of a scrolled file and the row
+/// under it were dead.
+///
+/// So the inset is given back. `super` still answers for everything it
+/// would have, and only where it gives up does the document view get asked
+/// itself — which is the same question, one view further in.
+private final class TreeClipView: NSClipView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if let hit = super.hitTest(point) { return hit }
+        guard !isHidden, frame.contains(point) else { return nil }
+        return documentView?.hitTest(convert(point, from: superview))
+    }
 }
 
 // MARK: - The outline

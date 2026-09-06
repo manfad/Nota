@@ -486,6 +486,65 @@ final class StructuredPreviewTests: XCTestCase {
                       "the click reveals rather than jumps")
     }
 
+    /// The band across the top of the column is a hover, not a lid. A row
+    /// scrolled up under it is drawn there, and clicking it must land on the
+    /// tree — for a while it landed on the scroll view's own background
+    /// instead, and the top two rows of a scrolled file took no clicks at all.
+    ///
+    /// Asked through `hitTest`, which is where it went wrong: the other click
+    /// tests here call the outline's `mouseDown` straight, so none of them
+    /// could see it.
+    @MainActor
+    func testARowScrolledUnderTheBandStillTakesItsClick() throws {
+        let members = (1...60).map { "  \"k\($0)\": \($0)" }.joined(separator: ",\n")
+        let controller = try makeController(
+            showing: "{\n\(members)\n}", named: "Settings.json")
+        defer { controller.window?.orderOut(nil) }
+        let pane = controller.previewPanes.tree
+        let window = try XCTUnwrap(controller.window)
+        let content = try XCTUnwrap(window.contentView)
+        let editor = try XCTUnwrap(descendant(of: content, ofType: NotaTextView.self))
+        let overlay = controller.modeControlOverlays.preview
+        let outline = pane.outline
+        let clip = try XCTUnwrap(outline.enclosingScrollView?.contentView)
+        window.makeFirstResponder(outline)
+
+        // Scrolled far enough that the first rows are up in the band, and the
+        // control in it on screen — the state the reader is in when they go
+        // to click the root of a file they have scrolled.
+        clip.scroll(to: NSPoint(x: 0, y: 100))
+        outline.enclosingScrollView?.reflectScrolledClipView(clip)
+        window.layoutIfNeeded()
+        overlay.setRevealed(true, animated: false)
+
+        let band = overlay.convert(overlay.bounds, to: nil)
+        let row = try XCTUnwrap((0..<outline.numberOfRows).first {
+            let rect = outline.convert(outline.rect(ofRow: $0), to: nil)
+            return rect.midY > band.minY && rect.midY < band.maxY
+        }, "the scroll should have put a row under the band")
+
+        let rect = outline.convert(outline.rect(ofRow: row), to: nil)
+        let point = NSPoint(x: rect.minX + 60, y: rect.midY)
+        let hit = try XCTUnwrap(content.hitTest(content.convert(point, from: nil)),
+                                "nothing at all answers for the row")
+        XCTAssertTrue(hit.isDescendant(of: outline) || hit === outline,
+                      "the band hands the click to the tree, not to the chrome")
+
+        // Where the window would send it: to the view the hit test found,
+        // whose responder chain runs up into the outline.
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        let before = editor.selectedRange()
+        hit.mouseDown(with: event)
+
+        XCTAssertEqual(outline.selectedRow, row, "the row under the band selects")
+        XCTAssertNotEqual(editor.selectedRange(), before,
+                          "and its source is revealed beside it")
+    }
+
     /// The whole reason a node carries a span: a compact file is one line, so
     /// a click that only knew the line would select the file.
     @MainActor
