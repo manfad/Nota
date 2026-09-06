@@ -384,8 +384,9 @@
 - `XMLTree` is Foundation's `XMLParser` (SAX), because it already answers the one question a tree needs and a
   hand-written scanner would have to earn: which line every event happened on. An element is an object keyed by its
   **qualified** name — `svg:rect` stays `svg:rect`, and namespace processing is off, so `xmlns:svg` stays the
-  attribute it is written as. Its attributes come first among its children, keyed `@name` with string values, sorted
-  by name since `XMLParser` hands them over as a dictionary. A run of text and a `<![CDATA[…]]>` block are `.text`
+  attribute it is written as. Its attributes come first among its children, keyed `@name` with string values, in the
+  order they are written — `XMLParser` hands them over as a dictionary, but their places in the start tag are read
+  back out of the text for their spans, and that order is the file's (sorted by name until 2026-09-06 evening). A run of text and a `<![CDATA[…]]>` block are `.text`
   children, whitespace-only runs dropped (a pretty-printed file's indentation is layout, not content) and the rest
   trimmed; a comment is a `.comment`; a processing instruction and the doctype are skipped. The roots are the root
   element and any comment written beside it.

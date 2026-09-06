@@ -327,10 +327,11 @@ final class StructuredPreviewTests: XCTestCase {
     func testAnXMLAttributeAndTextCarryTheirValues() throws {
         let text = #"<shop note="😀 名" currency="MYR"><item>Pencil</item><!--n--></shop>"#
         let root = try XCTUnwrap(try XMLTree.parse(text).roots.first)
-        XCTAssertEqual(root.children.map(\.key), ["@currency", "@note", "item", nil])
-        XCTAssertEqual(value(text, root.children[0]), #""MYR""#, "its quotes part of it")
-        XCTAssertEqual(source(text, root.children[0].range), #"currency="MYR""#)
-        XCTAssertEqual(value(text, root.children[1]), #""😀 名""#)
+        // In the order the tag wrote them, `note` before `currency`, not by name.
+        XCTAssertEqual(root.children.map(\.key), ["@note", "@currency", "item", nil])
+        XCTAssertEqual(value(text, root.children[1]), #""MYR""#, "its quotes part of it")
+        XCTAssertEqual(source(text, root.children[1].range), #"currency="MYR""#)
+        XCTAssertEqual(value(text, root.children[0]), #""😀 名""#)
         XCTAssertEqual(value(text, root.children[2].children[0]), "Pencil")
         XCTAssertEqual(value(text, root.children[3]), "<!--n-->")
         XCTAssertNil(root.children[2].valueRange,

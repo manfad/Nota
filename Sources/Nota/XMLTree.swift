@@ -266,12 +266,21 @@ enum XMLTree {
             )
             let spans: [String: (whole: NSRange, value: NSRange)] = attributes.isEmpty
                 ? [:] : source.attributeSpans(tagStart: start, tagEnd: tagEnd)
-            // In the order the author wrote them: `attributes` is a
-            // dictionary, so the order is whatever hashing felt like, and a
-            // tree that reshuffled `x` and `y` between two reads of the same
-            // file would be unreadable. Sorted by name is arbitrary but it is
-            // at least the same every time.
-            for name in attributes.keys.sorted() {
+            // In the order the author wrote them. `attributes` is a
+            // dictionary, so its order is whatever hashing felt like — but
+            // every attribute's place in the start tag has just been read
+            // back out of the text, and that is the order the file has. A
+            // name the tag text could not place (it cannot happen for a
+            // well-formed tag) goes last, by name.
+            let ordered = attributes.keys.sorted { a, b in
+                switch (spans[a]?.whole.location, spans[b]?.whole.location) {
+                case let (x?, y?): x < y
+                case (.some, nil): true
+                case (nil, .some): false
+                case (nil, nil): a < b
+                }
+            }
+            for name in ordered {
                 element.children.append(StructuredNode(
                     key: "@" + name, value: .string(attributes[name] ?? ""),
                     line: element.line, range: spans[name]?.whole,

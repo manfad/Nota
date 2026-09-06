@@ -345,6 +345,12 @@ final class MultiWindowTests: XCTestCase {
     /// there the window follows the pointer one to one.
     @MainActor
     func testATornOffTabGetsAWindowUnderThePointer() throws {
+        // The strip's inset depends on which side the sidebar lives on, and
+        // so does where a torn-off tab lands; pin the side rather than read
+        // whatever this Mac's preference happens to be.
+        let originalSide = Preferences.shared.sidebarSide
+        Preferences.shared.sidebarSide = .right
+        defer { Preferences.shared.sidebarSide = originalSide }
         let bench = try makeBench()
         bench.source.window?.makeKeyAndOrderFrontOffscreen()
         type("alpha", into: bench.source)
