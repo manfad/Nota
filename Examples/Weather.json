@@ -1,0 +1,66 @@
+{
+  "station": {
+    "id": "NOTA-01",
+    "name": "Nota ⚡ Rooftop Sensor",
+    "location": {
+      "city": "台北市",
+      "country": "TW",
+      "lat": 25.0330,
+      "lon": 121.5654
+    },
+    "active": true,
+    "decommissioned": null
+  },
+  "generatedAt": "2026-09-06T09:00:00+08:00",
+  "summary": "Clear skies, light wind. \"Good day for a walk,\" the app said.",
+  "note": "line\nbreak in the raw string, kept as-is",
+  "hourly": [
+    {
+      "hour": 6,
+      "tempC": 21.50,
+      "humidity": 88,
+      "windKph": 4.2,
+      "precipMm": 0,
+      "condition": "clear",
+      "isDaylight": true
+    },
+    {
+      "hour": 9,
+      "tempC": 24.00,
+      "humidity": 74,
+      "windKph": 6.8,
+      "precipMm": 0,
+      "condition": "partly-cloudy",
+      "isDaylight": true
+    },
+    {
+      "hour": 12,
+      "tempC": 29.30,
+      "humidity": 60,
+      "windKph": 9.1,
+      "precipMm": 0,
+      "condition": "sunny ☀️",
+      "isDaylight": true
+    },
+    {
+      "hour": 15,
+      "tempC": 27.80,
+      "humidity": 65,
+      "windKph": 1.0e3,
+      "precipMm": 2.4,
+      "condition": "gusty",
+      "isDaylight": true
+    },
+    {
+      "hour": 21,
+      "tempC": -3,
+      "humidity": 92,
+      "windKph": 1.5,
+      "precipMm": 0,
+      "condition": "clear",
+      "isDaylight": false
+    }
+  ],
+  "alerts": [],
+  "extra": {}
+}

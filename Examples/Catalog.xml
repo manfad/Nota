@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Catalog.xml — a small product catalogue for Nota's ⚡ XML tree preview -->
+<catalog store="Nota Shop" currency="USD" xmlns:n="https://nota.app/ns/notes">
+  <item sku="NB-001" featured="true">
+    <name>Lightning Notebook</name>
+    <price>12.99</price>
+    <stock/>
+    <tags>
+      <tag>stationery</tag>
+      <tag>bestseller</tag>
+    </tags>
+    <n:note lang="en">Restock arrives every Thursday.</n:note>
+  </item>
+  <item sku="PN-014" featured="false">
+    <name>Fine-Tip Pen ⚡</name>
+    <price>4.50</price>
+    <stock count="230"/>
+    <tags>
+      <tag>stationery</tag>
+      <tag>ink</tag>
+    </tags>
+    <description><![CDATA[Smooth 0.4mm tip. Works well with <em>any</em> paper & most notebooks.]]></description>
+  </item>
+  <item sku="MG-002" featured="true">
+    <name>Desk Magnifier</name>
+    <price>18.00</price>
+    <stock count="12"/>
+    <tags>
+      <tag>desk</tag>
+    </tags>
+  </item>
+  <item sku="ST-099" featured="false">
+    <name>Sticker Sheet</name>
+    <price>2.25</price>
+    <stock count="500"/>
+    <tags>
+      <tag>fun</tag>
+      <tag>bestseller</tag>
+    </tags>
+    <n:note lang="en">Limited run, no reorders planned.</n:note>
+  </item>
+  <item sku="CL-007" featured="false">
+    <name>Binder Clips (12-pack)</name>
+    <price>3.10</price>
+    <stock count="1024"/>
+    <tags>
+      <tag>desk</tag>
+      <tag>stationery</tag>
+    </tags>
+  </item>
+</catalog>

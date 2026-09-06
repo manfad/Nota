@@ -3,3 +3,17 @@ README with no extension
 This file has no extension at all. Nota does not care: the bytes decode as
 UTF-8, so it opens as an ordinary text tab. Try dragging it onto the window
 too — the drop filter uses the same rule.
+
+Compose.yaml — anchors, a merge key, block and folded scalars, a flow
+sequence, and a null, for the YAML tree preview.
+
+Project.toml — dotted keys, an inline table, array-of-tables, dates, hex,
+inf, and a literal string, for the TOML tree preview.
+
+Catalog.xml — a well-formed catalogue with a namespaced element, CDATA, an
+empty element, and nested children, for the XML tree preview.
+
+Minified.html — a whole page on one line, for Beautify to reflow.
+
+Weather.json — a pretty-printed document with nested objects, an array,
+unicode, and escapes, for Compact and the JSON tree.
