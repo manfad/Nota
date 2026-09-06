@@ -54,6 +54,11 @@ final class ModeControlOverlay: NSView {
     /// The control's inset from the trailing edge, matching the ⇧⌘F field's in
     /// the strip above, and its drop below the strip's hairline.
     static let controlInset: CGFloat = 12
+    /// How much of a column's top-trailing corner the control can take when
+    /// it is revealed — its inset and its widest self (four segments) with
+    /// a little air — so a bar sharing the band with it can keep its own
+    /// controls clear of it.
+    static let cornerClearance: CGFloat = controlInset + segmentWidth * 4 + 16
     static let controlTopInset: CGFloat = 8
     /// The gap between the pill's bottom edge and the control under it.
     static let findBarGap: CGFloat = 6

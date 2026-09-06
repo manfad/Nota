@@ -53,8 +53,10 @@ final class CSVPreviewView: NSView, PreviewContent {
         static let minimumColumnWidth: CGFloat = 56
         static let maximumColumnWidth: CGFloat = 420
         static let cellPadding: CGFloat = 10
-        /// The band the corner slot floats its control in. The pane begins
-        /// under it so nothing of the pane is ever behind the control.
+        /// The band the corner slot floats its control in. The bar begins
+        /// under it, full width, so the pager at its trailing end is never
+        /// behind the control (tried inside the band for an hour on
+        /// 2026-09-07, with the pager pulled in; under it reads better).
         static let topClearance = ModeControlOverlay.hoverBandHeight
     }
 
@@ -128,6 +130,10 @@ final class CSVPreviewView: NSView, PreviewContent {
                                       accessibilityDescription: nil)
         refreshButton.image?.isTemplate = true
         refreshButton.title = "Refresh"
+        // One line, whatever the width: squeezed, the word truncates rather
+        // than folding into "Refr / esh".
+        refreshButton.cell?.wraps = false
+        refreshButton.cell?.lineBreakMode = .byTruncatingTail
         refreshButton.font = .systemFont(ofSize: 11)
         refreshButton.imagePosition = .imageLeading
         refreshButton.imageHugsTitle = true
@@ -217,7 +223,8 @@ final class CSVPreviewView: NSView, PreviewContent {
         // can best be spared, and the range label truncates.
         let giveWay: [(NSView, NSLayoutConstraint.Priority)] = [
             (rangeLabel, .init(rawValue: 140)),
-            (refreshButton, .init(rawValue: 160)),
+            // Refresh keeps its word: the last thing on the bar to give way.
+            (refreshButton, .init(rawValue: 190)),
             (previousButton, .init(rawValue: 170)),
             (nextButton, .init(rawValue: 170)),
         ]
@@ -695,6 +702,8 @@ final class CSVPreviewView: NSView, PreviewContent {
     var refreshButtonTip: String? { refreshButton.toolTip }
     var refreshButtonTitle: String { refreshButton.title }
     var gridForTesting: SQLGridView { grid }
+    static var barTopInsetForTesting: CGFloat { Layout.topClearance }
+    var refreshButtonWrapsForTesting: Bool { refreshButton.cell?.wraps ?? true }
     var barFrameForTesting: NSRect { bar.frame }
 
     func pressNextForTesting() { showNextPage(nil) }

@@ -44,7 +44,11 @@ final class TreePreviewView: NSView, PreviewContent {
         /// in, the way the dump's and the table's bars do: a row is a full
         /// width of wash, and one running under the control would read as a
         /// row half hidden rather than as text under a hover.
-        static let topInset = ModeControlOverlay.hoverBandHeight
+        /// The editor's own vertical padding, not the corner band's height:
+        /// the tree starts where the source does, and the capsule floats over
+        /// the first rows on hover the way it floats over the first lines.
+        /// Rows under it still take their click (`TreeClipView`).
+        static let topInset: CGFloat = 14 // MainWindowController.Layout.textPaddingVertical
         static let rowHeight: CGFloat = 20
         static let indentation: CGFloat = 14
         /// The gap between a row's key and the value after it.
@@ -145,7 +149,10 @@ final class TreePreviewView: NSView, PreviewContent {
         // own background, not a sidebar of places to go.
         outlineView.selectionHighlightStyle = .regular
         outlineView.style = .plain
-        outlineView.backgroundColor = .textBackgroundColor
+        // The outline paints nothing of its own: an NSOutlineView given the
+        // document colour still came out a shade off it in the dark (27 to
+        // the editor's 30). The pane's layer is the one background here.
+        outlineView.backgroundColor = .clear
         outlineView.rowSizeStyle = .custom
         outlineView.rowHeight = Layout.rowHeight
         outlineView.indentationPerLevel = Layout.indentation
@@ -165,13 +172,16 @@ final class TreePreviewView: NSView, PreviewContent {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
-        scrollView.drawsBackground = true
-        scrollView.backgroundColor = .textBackgroundColor
         scrollView.borderType = .noBorder
         // The clip has to be ours before the document goes in it, or AppKit
-        // makes a plain one and swaps this in over the top of it.
+        // makes a plain one and swaps this in over the top of it — and the
+        // background has to be set after the clip is ours, since the scroll
+        // view hands its colour to whichever clip view it has at the time;
+        // set before, the new clip kept AppKit's default and the column read
+        // a shade lighter than the editor in the dark.
         scrollView.contentView = TreeClipView()
         scrollView.documentView = outlineView
+        scrollView.drawsBackground = false
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(
             top: Layout.topInset, left: 0, bottom: 0, right: 0
@@ -627,8 +637,6 @@ final class TreePreviewView: NSView, PreviewContent {
     override func updateLayer() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-            outlineView.backgroundColor = .textBackgroundColor
-            scrollView.backgroundColor = .textBackgroundColor
         }
     }
 

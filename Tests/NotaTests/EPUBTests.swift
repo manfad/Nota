@@ -363,8 +363,8 @@ final class EPUBTests: XCTestCase {
                        "the chapter on screen is the line that is rung")
         XCTAssertEqual(controller.contentsSidebarView.headerTitle, "Contents",
                        "the one word saying what the column is listing")
-        XCTAssertEqual(controller.contentsSidebarView.headerCount, 3,
-                       "the badge after the title counts the chapters, not the sections under them")
+        XCTAssertEqual(controller.contentsSidebarView.headerCount, 7,
+                       "the badge after the title counts every line of the contents, sections included")
         XCTAssertTrue(controller.pageListSidebarView.isHidden,
                       "a book is read by its chapters; it has no pages to lay out")
         XCTAssertEqual(controller.sidebarListTitle, "Table of Contents",

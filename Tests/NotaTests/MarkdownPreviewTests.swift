@@ -3513,6 +3513,40 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(relaunched.previewMode, .off, "closed is how it was left")
     }
 
+    // MARK: - The contents column's hover
+
+    /// A row used to track the pointer itself, and kept its wash after the
+    /// list scrolled under a still pointer: every row that passed under it
+    /// was "entered" and none was ever "exited". The column owns the pointer
+    /// now, so after a scroll exactly the row under it is washed, and none
+    /// once the pointer leaves.
+    @MainActor
+    func testScrollingUnderAStillPointerWashesOnlyTheRowUnderIt() throws {
+        _ = NSApplication.shared
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        defer { window.orderOut(nil) }
+        let sidebar = ContentsSidebarView(topInset: 8)
+        sidebar.frame = NSRect(x: 0, y: 0, width: 220, height: 120)
+        window.contentView?.addSubview(sidebar)
+        sidebar.setEntries((1 ... 12).map { ContentsEntry(level: 1, title: "Row \($0)", line: $0) })
+        window.makeKeyAndOrderFrontOffscreen()
+        sidebar.layoutSubtreeIfNeeded()
+
+        let pointer = sidebar.rowCentreInWindowForTesting(1)
+        sidebar.hoverForTesting(at: pointer)
+        XCTAssertEqual(sidebar.hoveredRowTitles, ["Row 2"])
+
+        // Three rows scroll by under the pointer, which does not move.
+        sidebar.scrollForTesting(toTop: ContentsSidebarView.rowHeight * 3)
+        XCTAssertEqual(sidebar.hoveredRowTitles, ["Row 5"], "the row under the pointer now, and only it")
+
+        sidebar.hoverForTesting(at: nil)
+        XCTAssertEqual(sidebar.hoveredRowTitles, [])
+    }
+
     // MARK: - The gallery's own title
 
     /// Every list in the sidebar column stands under one word saying what it

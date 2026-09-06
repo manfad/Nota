@@ -93,7 +93,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   that outlives it, and the three commands it hands the window. Knows nothing of what is being zoomed — the column
   asks the content in front for `zoomPercent` and a `nil` takes the pill away.
 - `ImageSidebarView.swift` (~210) — thumbnail column, under its own `Images` title; the cards are the shared ones, and what it adds is the asset store, the context menu and the double click that opens the file.
-- `ContentsSidebarView.swift` (~275) — the same column for a book: its table of contents, indented by nesting, the line naming what is on screen rung, under `Contents`. Knows nothing of the kind — it lists `ContentsEntry` values and hands a chosen line back.
+- `ContentsSidebarView.swift` (~330; the column owns the hover — one tracking area, the row under the pointer recomputed on scroll) — the same column for a book: its table of contents, indented by nesting, the line naming what is on screen rung, under `Contents`. Knows nothing of the kind — it lists `ContentsEntry` values and hands a chosen line back.
 - `PageListSidebarView.swift` (~225) — and the same column for a document: its pages under `Pages`, one shared card each, the page in front washed and followed, thumbnails asked of a `PageListSource` only as the cards come into view.
 - `SidebarCards.swift` (~245) — what the three columns are made of: `SidebarCard` (the metrics), `SidebarSectionHeader` (the Finder-shaped title at the top of a column, with a `SidebarCountBadge` after it — a capsule wearing how many the list holds, `0` included, hidden only when never set) and `SidebarCardItemView` (the white card, its shadow, its selection wash and its caption).
 - `ChipHighlight.swift` (~50) — which thumbnails match the caret/selection.
@@ -220,7 +220,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   line counter, building a reference-typed intermediate tree so a `[a.b.c]` header can reach back into a table
   three levels up; converted to `StructuredNode`s at the end. Numbers and dates are kept as spelled.
 - `TreePreviewView.swift` (~830) — the pane that draws whatever any of the four hands back: an `NSOutlineView`
-  (one column, no header, the document's background, the editor's margin, starting below the corner slot's band),
+  (one column, no header, painting no background of its own — the pane's layer is the document colour, since an outline given it came out a shade off in the dark — the editor's margin, starting 14pt down like the source),
   a row's key then its value coloured by type, `{3}` / `[12]` after a closed branch, expansion seeded by the
   document's size and then remembered by node path across re-renders, the scroll kept, a click selecting the
   node's source (a leaf its value, a branch its whole span, key and value) without taking the keyboard, the

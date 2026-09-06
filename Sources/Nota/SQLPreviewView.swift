@@ -179,6 +179,10 @@ final class SQLPreviewView: NSView, PreviewContent {
                                       accessibilityDescription: nil)
         refreshButton.image?.isTemplate = true
         refreshButton.title = "Refresh"
+        // One line, whatever the width: squeezed, the word truncates rather
+        // than folding or vanishing behind its icon.
+        refreshButton.cell?.wraps = false
+        refreshButton.cell?.lineBreakMode = .byTruncatingTail
         refreshButton.font = .systemFont(ofSize: 11)
         refreshButton.imagePosition = .imageLeading
         refreshButton.imageHugsTitle = true
@@ -285,7 +289,8 @@ final class SQLPreviewView: NSView, PreviewContent {
         let giveWay: [(NSView, NSLayoutConstraint.Priority)] = [
             (tablePicker, .init(rawValue: 150)),
             (rangeLabel, .init(rawValue: 140)),
-            (refreshButton, .init(rawValue: 160)),
+            // Refresh keeps its word: the last thing on the bar to give way.
+            (refreshButton, .init(rawValue: 190)),
             (runQueryButton, .init(rawValue: 160)),
             (queryBox, .init(rawValue: 150)),
             (previousButton, .init(rawValue: 170)),

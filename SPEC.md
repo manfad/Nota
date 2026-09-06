@@ -450,7 +450,9 @@
 - The view is an `NSOutlineView` and not a render, because a tree is a thing you open and close rather than read top
   to bottom: the disclosure triangles, ⌥-click to open a whole subtree and the arrow keys are all AppKit's own. One
   column, no header, not a source list, the document's own `textBackgroundColor` and the editor's margin, starting
-  below the corner slot's hover band the way the dump's and the table's bars do.
+  14pt down from the top — the editor's own padding, not the corner slot's whole band, since 2026-09-07 — with the
+  capsule floating over the first rows on hover the way it floats over the first lines of the source; rows under it
+  still take their click.
 - A row is the key in the system font in `labelColor` — an array item shows its own index in `secondaryLabelColor`
   instead, since that is the tree counting rather than the file saying something — then the value in the editor's
   monospaced face, coloured by what it is: `systemRed` for a string (in its quotes, so an empty one is still
@@ -951,7 +953,9 @@
   and `1–100 of 2,345` between ‹ › ("Previous page", "Next page") at the trailing one — the dump's bar with the
   table picker, the query box and the Run button taken out of it, since a table has nothing to pick between and
   nothing to be asked. The bar starts a `ModeControlOverlay.hoverBandHeight` band below the top of the column, left
-  clear for the floating Editor · Split · Reading control, so the header row is never behind it.
+  clear for the floating Editor · Split · Reading control, so the pager at its trailing end is never behind it
+  (an hour inside the band on 2026-09-07, with the pager pulled in, read worse). Refresh is one word on one line
+  however narrow the column: the cell does not wrap, it truncates, and it is the last control on the bar to give way.
 - The grid is the dump's own, `SQLGridView` unchanged: the spreadsheet cell cursor, the rectangle a drag picks out,
   the `#` gutter numbering rows from the top of the table, ⇧ and Space, the flat header with its accent chevron, the
   last column taking up the slack, and ⌘C copying what is drawn, tab separated. Cells are monospaced at the editor's
@@ -1047,8 +1051,8 @@
   view, so it is still there when the list has been scrolled and still there when there is no list — an empty
   gallery says `Images` over its `No images`. After the word sits a count in a small capsule, 10pt semibold
   monospaced digits in the title's grey on a wash of it: how many pictures, how many pages, and over a book how
-  many chapters — the outermost level of the contents, not every section under them. `0` is worn like any other
-  number; the capsule is gone only while a column has not been told. The View menu keeps the longer names, which a menu has room for:
+  many lines the contents have, sections included (chapters only for an hour on 2026-09-07, then the whole list).
+  `0` is worn like any other number; the capsule is gone only while a column has not been told. The View menu keeps the longer names, which a menu has room for:
   "Image Gallery" over a note, "Table of Contents" over a book, "Page List" over a PDF, ⌘B and its tick unchanged in
   all three.
 - ⌘A ⌘C carries images (RTFD) to other apps, and when the selection holds exactly one image the picture also goes
@@ -1186,6 +1190,20 @@
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+40. **Less air at the top of the tree (done 2026-09-07).** The tree pane started a whole corner-slot band (44pt)
+    down; it starts at the editor's padding (14pt) now. The CSV bar was moved up the same way with its pager pulled
+    in clear of the capsule, and put back under the band the same evening — the pager belongs at the edge. Refresh
+    on the CSV and SQL bars no longer folds into two lines or shrinks to its icon: it is the last control to give way. The tree's list also read a shade off the editor in the dark (27 to the editor's 30, measured off a
+    screenshot) though every part of it was given `textBackgroundColor`: an `NSOutlineView` paints that colour its
+    own way. So nothing in the scroll view paints a background any more — the outline is `.clear`, the scroll view
+    does not draw — and the pane's own layer, which already matched the editor, is the one background. Pinned in
+    `CSVPreviewTests` and `StructuredPreviewTests`.
+39. **The contents column owns the hover (done 2026-09-07).** A contents row tracked the pointer itself and kept its
+    wash after the list scrolled under a still pointer — every row that passed under it was entered and none
+    exited, so a whole column read as hovered. `ContentsSidebarView` has the one tracking area now, works out the
+    row under the pointer from its position, and works it out again on every scroll of its clip view; the page
+    cards and gallery cards never had a hover wash. Pinned by
+    `MarkdownPreviewTests.testScrollingUnderAStillPointerWashesOnlyTheRowUnderIt`.
 38. **The picker keeps the keyboard (done 2026-09-07).** The ⇧⌘J / ⇧⌘D / ⇧⌘F panel is a non-activating
     floating panel that hides with Nota and comes back with it; on the way back key went to the main window,
     so the field had no caret and Esc closed nothing until the field was clicked. `TabPickerPanel` now
@@ -1232,7 +1250,7 @@
     `helpButton`, and `showHelp` opens one transient `NSPopover` with the sentence. Pinned in `ShortcutsTests`.
 33. **A count beside every sidebar title (done 2026-09-07).** `SidebarCountBadge` in `SidebarCards.swift`, worn by
     `SidebarSectionHeader` after its word: the gallery sets it to its pictures, the page list to its pages, the
-    contents to its top-level titles (`ContentsEntry.level`'s minimum). Zero shows as `0`; only a header never
+    contents to every line it lists. Zero shows as `0`; only a header never
     given a count goes without one. Pinned in `PDFTests`, `EPUBTests` and the gallery's own title test.
 32. **"Check for Updates" on the About page (done 2026-09-06).** Nota ships as a GitHub Release and a Homebrew
     cask, and a reader who installed it once had no way to learn a newer one existed short of visiting the repo.

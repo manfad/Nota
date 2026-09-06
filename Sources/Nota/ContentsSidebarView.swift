@@ -47,6 +47,16 @@ final class ContentsSidebarView: NSView {
     /// nothing about it.
     private(set) var selectedLine: Int?
 
+    /// The column tracks the pointer, not the rows: one tracking area, the
+    /// row under the pointer worked out from where it is, and worked out
+    /// again whenever the list scrolls — so a row that slides away from a
+    /// still pointer gives its wash up, which its own tracking area never
+    /// told it to do.
+    private var trackingArea: NSTrackingArea?
+    /// Where the pointer is, in window coordinates, for the tests — which
+    /// have no pointer to move.
+    var pointerLocationForTesting: NSPoint?
+
     init(topInset: CGFloat) {
         super.init(frame: .zero)
 
@@ -58,6 +68,11 @@ final class ContentsSidebarView: NSView {
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(listScrolled),
+            name: NSView.boundsDidChangeNotification, object: scrollView.contentView
+        )
         scrollView.borderType = .noBorder
         scrollView.documentView = container
         addSubview(scrollView)
@@ -110,11 +125,10 @@ final class ContentsSidebarView: NSView {
     /// does not throw the list away and lay it out again.
     func setEntries(_ newEntries: [ContentsEntry], force: Bool = false) {
         header.title = L10n.text("Contents")
-        // The badge counts the chapters, not every line under them: the
-        // outermost level present, so a book whose contents start one
-        // step in is still counted by its titles.
-        let outermost = newEntries.map(\.level).min()
-        header.count = newEntries.filter { $0.level == outermost }.count
+        // The badge counts every line of the contents, sections included —
+        // it is the length of the list under it, which is what a count over
+        // a list reads as.
+        header.count = newEntries.count
         guard force || newEntries != entries else { return }
         entries = newEntries
 
@@ -159,6 +173,49 @@ final class ContentsSidebarView: NSView {
         entries.firstIndex { $0.line == line }
     }
 
+    // MARK: - Hover
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self, userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { updateHover(at: event.locationInWindow) }
+    override func mouseMoved(with event: NSEvent) { updateHover(at: event.locationInWindow) }
+    override func mouseExited(with event: NSEvent) { updateHover(at: nil) }
+
+    /// The list moved under the pointer: the row that is under it now is
+    /// not the row that was.
+    @objc private func listScrolled() {
+        let pointer = pointerLocationForTesting ?? window?.mouseLocationOutsideOfEventStream
+        updateHover(at: pointer)
+    }
+
+    /// `windowPoint` is where the pointer is, or nil for nowhere over the
+    /// column. Only a row that is on screen in the list can be hovered.
+    private func updateHover(at windowPoint: NSPoint?) {
+        var hovered: ContentsRowView?
+        if let windowPoint, !scrollView.isHidden {
+            let inList = scrollView.convert(windowPoint, from: nil)
+            if scrollView.bounds.contains(inList) {
+                // `visibleRect` is the clip view's window, not clipped to
+                // the row, so the row's own bounds have to be asked as well.
+                hovered = rowViews.first { row in
+                    let point = row.convert(windowPoint, from: nil)
+                    return row.bounds.contains(point) && row.visibleRect.contains(point)
+                }
+            }
+        }
+        for row in rowViews { row.isHovered = row === hovered }
+    }
+
     // MARK: - Tests
 
     /// What the column is listing, and how deep each line sits — the tests
@@ -176,6 +233,28 @@ final class ContentsSidebarView: NSView {
 
     var selectedRowTitle: String? {
         rowViews.first(where: \.isSelected)?.title
+    }
+
+    /// A row's centre in window coordinates, so a test can put the pointer on it.
+    func rowCentreInWindowForTesting(_ index: Int) -> NSPoint {
+        let row = rowViews[index]
+        return row.convert(NSPoint(x: row.bounds.midX, y: row.bounds.midY), to: nil)
+    }
+
+    /// Which rows wear the hover wash, by title — one at most.
+    var hoveredRowTitles: [String] { rowViews.filter(\.isHovered).map(\.title) }
+
+    /// As if the pointer had moved to `windowPoint`, or away (nil).
+    func hoverForTesting(at windowPoint: NSPoint?) {
+        pointerLocationForTesting = windowPoint
+        updateHover(at: windowPoint)
+    }
+
+    /// Scrolls the list so that `y` (in the list's own flipped coordinates)
+    /// is at the top, the way a wheel would — the pointer staying put.
+    func scrollForTesting(toTop y: CGFloat) {
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     /// As if a line had been clicked — the tests have no window server to
@@ -211,12 +290,14 @@ private final class ContentsRowView: NSView {
     var isSelected = false {
         didSet { if isSelected != oldValue { needsDisplay = true } }
     }
-    private var isHovered = false {
+    /// Set by the column, which owns the pointer: a row that tracked its own
+    /// enter and exit kept the wash after scrolling under a still pointer,
+    /// since the exit for a row that scrolls away is never sent.
+    var isHovered = false {
         didSet { if isHovered != oldValue { needsDisplay = true } }
     }
 
     private let label = NSTextField(labelWithString: "")
-    private var trackingArea: NSTrackingArea?
 
     init(title: String, level: Int) {
         self.title = title
@@ -247,21 +328,6 @@ private final class ContentsRowView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea { removeTrackingArea(trackingArea) }
-        let area = NSTrackingArea(
-            rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-            owner: self, userInfo: nil
-        )
-        addTrackingArea(area)
-        trackingArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) { isHovered = true }
-
-    override func mouseExited(with event: NSEvent) { isHovered = false }
 
     override func mouseDown(with event: NSEvent) { onActivate?() }
 

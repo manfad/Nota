@@ -367,14 +367,18 @@ final class CSVPreviewTests: XCTestCase {
         XCTAssertEqual(pane.refreshButtonTip, "Read again")
     }
 
+    /// The bar starts under the corner slot's band, full width, so the pager
+    /// at its trailing end is never behind the floating control. Squeezed,
+    /// Refresh stays one word on one line.
     @MainActor
     func testTheBarStartsBelowTheCornerSlotsBand() throws {
         let (pane, _) = try makePane()
         pane.layoutSubtreeIfNeeded()
         let bar = pane.barFrameForTesting
         XCTAssertEqual(pane.bounds.maxY - bar.maxY, ModeControlOverlay.hoverBandHeight,
-                       accuracy: 0.5,
-                       "the floating mode control never covers the header row")
+                       accuracy: 0.5, "the floating mode control never covers the bar")
+        XCTAssertEqual(CSVPreviewView.barTopInsetForTesting, ModeControlOverlay.hoverBandHeight)
+        XCTAssertFalse(pane.refreshButtonWrapsForTesting, "Refresh never folds into two lines")
     }
 
     // MARK: - The footer
