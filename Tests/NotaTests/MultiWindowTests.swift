@@ -9,8 +9,28 @@ import XCTest
 /// and has to be able to ask for the same moves outright.
 final class MultiWindowTests: XCTestCase {
     private var temporaryDirectories: [URL] = []
+    private var chrome: (tabBar: Bool, autoTabBar: Bool, lights: Bool)!
+
+    /// Where a torn-off window lands is measured against the strip's leading
+    /// inset, and the strip gives the traffic lights' slot back the moment
+    /// they are gone from the corner — hidden outright, taken away with the
+    /// whole strip, or merely idling off-screen under auto-hide. These tests
+    /// measure frames, so they pin the lights on rather than inherit
+    /// whatever the last run left in the defaults.
+    override func setUp() {
+        super.setUp()
+        let prefs = Preferences.shared
+        chrome = (prefs.hidesTabBar, prefs.autoHidesTabBar, prefs.hidesTrafficLights)
+        prefs.hidesTabBar = false
+        prefs.autoHidesTabBar = false
+        prefs.hidesTrafficLights = false
+    }
 
     override func tearDownWithError() throws {
+        let prefs = Preferences.shared
+        prefs.hidesTabBar = chrome.tabBar
+        prefs.autoHidesTabBar = chrome.autoTabBar
+        prefs.hidesTrafficLights = chrome.lights
         for directory in temporaryDirectories {
             try? FileManager.default.removeItem(at: directory)
         }
