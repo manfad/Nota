@@ -55,16 +55,18 @@ final class CornerSlotTests: XCTestCase {
     @MainActor
     func testAnHTMLTabGetsTheSameFourthSegmentWithItsOwnWords() throws {
         let controller = try makeController()
-        try open("page.html", holding: "<p>hi</p>", in: controller)
-        controller.formatSeamsForTesting[.html] = MainWindowController.FormatSeam(
-            state: { _ in .action(.compact) }, reformat: { _, _ in nil }
-        )
-        controller.refreshCornerSlot()
-
+        try open("page.html", holding: Self.minifiedPage, in: controller)
         XCTAssertEqual(controller.cornerSlotContents.editor, .modeControlWithFormat(.html))
-        let overlay = controller.modeControlOverlays.editor
+        var overlay = controller.modeControlOverlays.editor
         XCTAssertEqual(overlay.modeControl.segmentCount, 4)
-        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Minify HTML")
+        XCTAssertEqual(overlay.formatState, .action(.beautify))
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Beautify HTML")
+
+        try open("laid-out.html", holding: Self.prettyPage, in: controller)
+        overlay = controller.modeControlOverlays.editor
+        XCTAssertEqual(overlay.formatState, .action(.compact))
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Minify HTML",
+                       "a page is minified, not compacted")
     }
 
     /// A `.yaml` has a tree preview like the other three structured files, and
@@ -203,23 +205,59 @@ final class CornerSlotTests: XCTestCase {
 
     /// The click routes through one path for both formats: the segment hands
     /// its kind and its action to the window, and the window asks whichever
-    /// formatter that kind names.
+    /// formatter that kind names — `HTMLFormat` here, for real.
     @MainActor
-    func testTheSameSegmentDrivesTheHTMLFormatter() throws {
+    func testBeautifyingAPageLaysItOutAndMinifyingGivesItBackWordForWord() throws {
         let controller = try makeController()
-        let textView = try open("page.html", holding: "<p>hi</p>", in: controller)
-        controller.formatSeamsForTesting[.html] = MainWindowController.FormatSeam(
-            state: { _ in .action(.beautify) },
-            reformat: { _, action in action == .beautify ? "<p>\n  hi\n</p>" : nil }
-        )
-        controller.refreshCornerSlot()
+        let textView = try open("page.html", holding: Self.minifiedPage, in: controller)
+        XCTAssertFalse(controller.currentTabState.isDirty, "as it came off disk")
 
         let overlay = controller.modeControlOverlays.editor
-        XCTAssertEqual(overlay.formatState, .action(.beautify))
+        XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 3))
         clickFormatSegment(of: overlay)
-        XCTAssertEqual(textView.string, "<p>\n  hi\n</p>", "through the reformat path")
-        XCTAssertTrue(controller.currentTabState.isDirty)
-        XCTAssertEqual(overlay.modeControl.selectedSegment, 0)
+
+        XCTAssertEqual(textView.string, Self.prettyPage)
+        XCTAssertTrue(textView.string.contains("\n  <"), "one element to a line, indented")
+        XCTAssertTrue(controller.currentTabState.isDirty, "the file on disk is not this")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 0, length: 0),
+                       "every line moved, so the caret goes to the top")
+        XCTAssertEqual(overlay.formatState, .action(.compact), "and the segment flips")
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Minify HTML")
+        XCTAssertEqual(overlay.modeControl.selectedSegment, 0,
+                       "the selection goes back to the mode it was on")
+
+        clickFormatSegment(of: overlay)
+        XCTAssertEqual(textView.string, Self.minifiedPage,
+                       "the page comes back the bytes it was, its last newline included")
+        XCTAssertEqual(overlay.formatState, .action(.beautify))
+    }
+
+    @MainActor
+    func testUndoPutsAWholePageBackInOneStep() throws {
+        let controller = try makeController()
+        let textView = try open("page.html", holding: Self.minifiedPage, in: controller)
+        clickFormatSegment(of: controller.modeControlOverlays.editor)
+        XCTAssertNotEqual(textView.string, Self.minifiedPage)
+
+        textView.undoManager?.undo()
+        XCTAssertEqual(textView.string, Self.minifiedPage, "one edit, one undo")
+    }
+
+    /// An unterminated comment swallows the rest of the file, so the line the
+    /// reader has to look at is the one it opened on.
+    @MainActor
+    func testAnUnreadablePageDisablesTheSegmentAndNamesTheLine() throws {
+        let controller = try makeController()
+        try open("broken.html", holding: "<p>a</p>\n<!-- open\nstill open\n", in: controller)
+
+        let overlay = controller.modeControlOverlays.editor
+        XCTAssertEqual(controller.cornerSlotContents.editor, .modeControlWithFormat(.html),
+                       "the slot stays")
+        XCTAssertEqual(overlay.modeControl.segmentCount, 4)
+        XCTAssertFalse(overlay.modeControl.isEnabled(forSegment: 3))
+        XCTAssertEqual(overlay.modeControl.toolTip(forSegment: 3), "Not valid HTML: line 2")
+        XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 1),
+                      "and the modes beside it go on working")
     }
 
     /// A mode segment is still a mode: the fourth one has not made the other
@@ -254,6 +292,14 @@ final class CornerSlotTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    /// The same page in its two shapes. `HTMLFormat` maps each onto the other
+    /// exactly, trailing newline included, so a test can press the segment
+    /// twice and ask for the bytes it started with.
+    private static let minifiedPage =
+        "<div class=\"row\"><p>Hello</p><p>World</p></div>\n"
+    private static let prettyPage =
+        "<div class=\"row\">\n  <p>Hello</p>\n  <p>World</p>\n</div>\n"
 
     /// A click on the action segment: the selection lands on it, and the
     /// control's own action goes out, exactly as AppKit sends it.

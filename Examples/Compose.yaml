@@ -1,0 +1,61 @@
+# Compose.yaml — a small stack for Nota's ⚡ demo server
+# Shows anchors, merge keys, block/folded scalars, flow sequences, and nulls.
+
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    max-size: 10m
+
+services:
+  nota-web:
+    <<: *common
+    image: nota/web:1.4.0
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    environment:
+      APP_NAME: "Nota ⚡ Demo"
+      DEBUG: false
+      MAX_CONNECTIONS: 256
+      SESSION_SECRET: ~
+    command: |
+      echo "booting nota-web"
+      exec nota-server --config /etc/nota/config.yaml
+    depends_on: [nota-db, nota-cache]
+
+  nota-db:
+    <<: *common
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nota
+      POSTGRES_PASSWORD: "p@ss\tword"
+      POSTGRES_DB: nota_demo
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    description: >
+      Primary datastore for the demo stack. Holds documents, previews,
+      and the tiny bit of user preference state Nota keeps around
+      between launches.
+
+  nota-cache:
+    <<: *common
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    environment:
+      MAXMEMORY: 128mb
+      MAXMEMORY_POLICY: allkeys-lru
+    command: redis-server --appendonly yes
+
+volumes:
+  db-data:
+    driver: local
+  cache-data:
+    driver: local
+
+networks:
+  default:
+    name: nota-demo-net
+  edge:
+    external: true

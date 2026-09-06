@@ -174,14 +174,6 @@ final class MainWindowController: NSWindowController {
     /// The corner action's re-parse after an edit, while one is waiting.
     /// Same beat as the footer's counts.
     private var formatSlotWorkItem: DispatchWorkItem?
-    /// The two formatters the corner's action segment drives, behind one
-    /// seam. The real ones unless a test puts its own in — a test about the
-    /// *slot* must not wait on a formatter that is being written beside it.
-    struct FormatSeam {
-        var state: (String) -> ModeControlOverlay.FormatState
-        var reformat: (String, ModeControlOverlay.FormatAction) -> String?
-    }
-    var formatSeamsForTesting: [ModeControlOverlay.FormatKind: FormatSeam] = [:]
     /// The preview's share of the document split, as the divider was last
     /// left. Read on the way out of split and pinned back on the way in.
     private var splitPreviewFraction: CGFloat = 0.5
@@ -4313,7 +4305,6 @@ extension MainWindowController {
     private func formatState(
         of text: String, as kind: ModeControlOverlay.FormatKind
     ) -> ModeControlOverlay.FormatState {
-        if let seam = formatSeamsForTesting[kind] { return seam.state(text) }
         switch kind {
         case .json:
             if let line = JSONFormat.errorLine(in: text) { return .invalid(line: line) }
@@ -4330,7 +4321,6 @@ extension MainWindowController {
         _ text: String, as action: ModeControlOverlay.FormatAction,
         of kind: ModeControlOverlay.FormatKind
     ) -> String? {
-        if let seam = formatSeamsForTesting[kind] { return seam.reformat(text, action) }
         switch kind {
         case .json:
             return try? JSONFormat.reformat(text, as: action == .beautify ? .pretty : .compact)

@@ -37,6 +37,9 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | The corner slot (Editor · Split · Reading, plus a `.json`/`.html` tab's Beautify / Compact) | `ModeControlOverlay.swift` |
 | Laying a `.json` file out or pulling it together | `JSONFormat.swift`; a page, `HTMLFormat.swift` |
 | A `.json` / `.yaml` / `.toml` / `.xml` tab's tree beside its source | `TreePreviewView.swift` (the pane), the shape they all hand back `StructuredDocument.swift`, the parsers `JSONTree.swift` / `YAMLTree.swift` / `TOMLTree.swift` / `XMLTree.swift` |
+| Reading a `.yaml`/`.toml` into the tree | `YAMLTree.swift`, `TOMLTree.swift` |
+| Beautify / Minify a `.html` | `HTMLFormat.swift` |
+| The zoom pill (`−  100%  +`) in the preview column's bottom-left | `ZoomPillOverlay.swift`, the percentage per content in `PreviewContent.swift` |
 | Gutter / line numbers | `LineNumberRulerView.swift` |
 | The sidebar column: a note's thumbnails, a book's contents, a PDF's pages, the title over each | `ImageSidebarView.swift`, `ContentsSidebarView.swift`, `PageListSidebarView.swift`, the card and the title they share `SidebarCards.swift`, which chips light up `ChipHighlight.swift` |
 | Tab / picker / bookmark-menu icons | `FileKindIcon.swift`, art in `FileKindArt.swift` (generated) |
@@ -83,6 +86,10 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   their words; the action is a segment of the same `.selectOne` control, and a click on it fires the reformat and
   puts the selection back on the mode. The band, the fade, the hit testing and the drop under ⌘F know nothing of
   which.
+- `ZoomPillOverlay.swift` (~300) — the zoom pill in the preview column's bottom-leading corner: the hover band along
+  the bottom, the `−  100%  +` control in the corner slot's own bezel, the hold after the last zoom and the hover
+  that outlives it, and the three commands it hands the window. Knows nothing of what is being zoomed — the column
+  asks the content in front for `zoomPercent` and a `nil` takes the pill away.
 - `ImageSidebarView.swift` (~210) — thumbnail column, under its own `Images` title; the cards are the shared ones, and what it adds is the asset store, the context menu and the double click that opens the file.
 - `ContentsSidebarView.swift` (~275) — the same column for a book: its table of contents, indented by nesting, the line naming what is on screen rung, under `Contents`. Knows nothing of the kind — it lists `ContentsEntry` values and hands a chosen line back.
 - `PageListSidebarView.swift` (~225) — and the same column for a document: its pages under `Pages`, one shared card each, the page in front washed and followed, thumbnails asked of a `PageListSource` only as the cards come into view.
@@ -114,8 +121,10 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `JSONFormat.swift` (~330) — Nota's own JSON walker, for the `.json` tab's corner action: `reformat(_:as:)`
   (pretty / compact, every token re-emitted as it was written), `isPretty(_:)`, `errorLine(in:)`. Pure; no
   `JSONSerialization`, so key order, number spelling and escapes all survive.
-- `HTMLFormat.swift` — the same three questions asked of a page: `reformat(_:as: .pretty|.minified)`,
-  `isPretty(_:)`, `errorLine(in:)`, for the `.html` tab's corner action.
+- `HTMLFormat.swift` (~650) — Beautify and Minify for `.html`. Nota's own byte tokeniser over a page (doctype,
+  comments, start and end tags with every attribute form, void and self-closing tags, and the raw-text elements
+  `script`/`style`/`pre`/`textarea`/`title`), the tree it builds from it, and the two writers over that tree.
+  `JSONFormat`'s three questions — `reformat(_:as:)`, `isPretty(_:)`, `errorLine(in:)` — asked of a page.
 - `HTMLClipboard.swift` (~290) — reading `public.html` / web archives on paste.
 - `TaskList.swift` (~200) — `- [ ]` boxes in render and source.
 - `ListContinuation.swift` (~365) — what Return means on a list item, as pure functions: `ListMarker.parse(line:above:)`, `.next()`, `.prefix`, and `ListContinuation.edit(forReturnIn:at:)`. The header explains how a lone `i.` is read.
@@ -192,7 +201,12 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   already knows and a hand scanner would have to earn: the line every event happened on. Elements keyed by their
   qualified name, attributes first as `@name`, text runs and CDATA as `.text` (whitespace-only dropped), comments
   kept, PIs and the doctype skipped.
-- `YAMLTree.swift`, `TOMLTree.swift` — the other two grammars into the same shape, each with its own rules.
+- `YAMLTree.swift` (~950) — the `.yaml`/`.yml` parser: a `StructuredDocument` from a YAML 1.2 core-schema subset.
+  Walks `[Character]` lines with a line/column cursor, because YAML's punctuation is indentation and a column is a
+  character. Block and flow collections, five scalar styles, anchors, aliases and merge keys, `---` documents.
+- `TOMLTree.swift` (~710) — the `.toml` parser: a `StructuredDocument` from TOML 1.0. Walks `[Character]` with a
+  line counter, building a reference-typed intermediate tree so a `[a.b.c]` header can reach back into a table
+  three levels up; converted to `StructuredNode`s at the end. Numbers and dates are kept as spelled.
 - `TreePreviewView.swift` (~735) — the pane that draws whatever any of the four hands back: an `NSOutlineView`
   (one column, no header, the document's background, the editor's margin, starting below the corner slot's band),
   a row's key then its value coloured by type, `{3}` / `[12]` after a closed branch, expansion seeded by the
@@ -223,7 +237,14 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   pane itself — the rows and what they say, a closed branch's summary, default expansion by size, a click moving
   the caret without taking the keyboard, the caret lighting a row, a re-render keeping what was open, and the
   parse-error line.
+- `YAMLTreeTests.swift` (45) — block and flow mappings and sequences, the compact forms, all five scalar styles and
+  chomping, anchors/aliases/merge keys, `---` documents, the core-schema types, and every refusal with its line.
+- `TOMLTreeTests.swift` (30) — keys and dotted keys, table headers and implicit super-tables, arrays of tables,
+  inline tables, all four string forms, numbers and dates kept as spelled, and duplicate-key/table refusals.
 - `JSONFormatTests.swift` — the walker: order, escapes, empties, unicode, pretty detection, error line.
+- `HTMLFormatTests.swift` (56) — the tokeniser and both writers: every tag and attribute form kept byte for byte,
+  raw-text elements untouched, block/inline line-breaking, whitespace collapsing, stray and left-out end tags, and
+  the disabled cases (unterminated comment, unclosed tag or quote, unclosed raw element, nesting past 256).
 - `HTMLPreviewTests.swift`, `PDFTests.swift`, `ImageTests.swift`, `EPUBTests.swift`, `RTFTests.swift` — the viewer tabs, including the sidebar each of them fills (an RTF has none). `PDFTests` covers the page list: the title over it, the cards and their captions, a click going to a page, the ring following the pages, the thumbnails landing off a background queue, two documents of the same length not sharing a list, and a document with bookmarks listing pages just the same.
 - `CSVPreviewTests.swift` (~685) — the table: what counts as one, the scanner's every case (quotes, escapes, a
   record over two lines, CRLF, ragged rows, a blank header cell, header-only and empty files, a BOM, tabs), paging,
@@ -241,6 +262,8 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `LaTeXTests.swift`, `MathTests.swift`, `MarkdownMathTests.swift`, `MarkdownHeadingsTests.swift`, `TaskListTests.swift` — renderers.
 - `TextFileTests.swift`, `FileSniffTests.swift`, `FileKindIconTests.swift`, `LineIndexTests.swift`, `LineOperationsTests.swift`, `ListContinuationTests.swift` — files and editor logic.
 - `LocalizationTests.swift` (~170) — the tables against each other, `.system` resolution, the Settings language popup.
+- `ZoomPillTests.swift` (12) — the pill: which tabs carry it, the percentage it reads, showing on a zoom and on
+  hover, the hold and its restart, pressing it as the keys, and taking itself away at once for a tab with no zoom.
 - `BookmarksTests.swift` (also the ⌘P picker tests), `OpenRecentTests.swift`, `ShortcutsTests.swift`, `MultiWindowTests.swift`, `ExternalChangeTests.swift`, `ZoomTests.swift`, `TabStripLayoutTests.swift`, `DropOnStripTests.swift`, `SidecarTests.swift`, `BigFileTests.swift`, `NoteBigFileTests.swift`, `SpellCheckPolicyTests.swift`.
 - `VimTests.swift`, `VimStage2Tests.swift`, `VimStage3Tests.swift`.
 - Helpers: `OffscreenWindow.swift` (`makeKeyAndOrderFrontOffscreen()` — tests never launch the app), `DirtyProbe.swift`.

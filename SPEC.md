@@ -381,8 +381,33 @@
   children, whitespace-only runs dropped (a pretty-printed file's indentation is layout, not content) and the rest
   trimmed; a comment is a `.comment`; a processing instruction and the doctype are skipped. The roots are the root
   element and any comment written beside it.
-- YAML and TOML are parsers of their own, `YAMLTree` and `TOMLTree`, written alongside these and with their own
-  rules; everything above the parser is shared.
+- A `.yaml` or `.yml` file is read as a tree by `YAMLTree`, Nota's own parser: no library, and nothing built through
+  Foundation and read back, so a number keeps the spelling its author gave it and every row remembers the line it was
+  written on. The subset is the part configuration files use — block mappings and sequences (including the sequence
+  written at its key's own column, and the compact `- - a` and `- key: v`), flow collections across as many lines as
+  they like, all five scalar styles with `|` and `>` chomping and explicit indentation, `#` comments, `---` documents
+  each becoming a root, a leading `%YAML` directive, anchors and aliases, and `<<` merge keys, whose members fill in
+  where the `<<` was written and lose to any key the mapping spells out. Types follow the YAML 1.2 core schema:
+  `null`, `~` and an empty value are nothing; `true`/`True`/`TRUE` and their negatives are booleans; decimal, `0x` and
+  `0o` integers, floats with an exponent, `.inf`, `-.inf` and `.nan` are numbers, kept as written; everything else,
+  and anything quoted, is a string — so `yes` is a word and `1_000` is a name, the way 1.2 says and 1.1 did not. Tags
+  are stripped, except that `!!str`, `!!int`, `!!float`, `!!bool` and `!!null` overrule the schema. What is outside
+  the subset is an error naming its line rather than a tree that quietly disagrees with the file: a complex `? ` key,
+  a tab in indentation, a dedent that lands between two levels, a mapping key where a sequence item belongs and the
+  other way round, an alias with no anchor, a flow collection left open, a quote never closed.
+- A `.toml` file is read by `TOMLTree`, TOML 1.0 and the whole of what a manifest uses: bare, quoted and dotted keys,
+  `[table]` and `[a.b.c]`, `[[arrays of tables]]`, inline tables, and arrays spread over as many lines, trailing
+  commas and comments as they need. All four string forms are read, multi-line basic strings dropping the newline
+  after their opening delimiter and honouring a line-ending backslash. Numbers keep their spelling — `1_000` stays
+  `1_000`, `0xDEADBEEF` stays `0xDEADBEEF`, `3.0` never becomes `3` — and so do dates and times, all four shapes,
+  because `1979-05-27T07:32:00Z` and `1979-05-27 07:32:00Z` are one instant and two different lines of a file. A
+  `[a.b.c]` header makes three nodes rather than one: the two above `c` are objects nobody wrote, conjured at the
+  line that first mentioned them, so the tree reads down the way the file reads down whatever order the headers
+  arrived in. An array of tables takes the first header's line, and each of its items its own. Refusals name their
+  line: a key written twice, a table opened twice, a header that would tunnel through a value, a dotted key reaching
+  into an inline table (closed the moment its `}` is typed), a bad escape, a string left open, a missing `=`, a
+  number or date that is neither, and anything at all after a value on its line. (Two deliberate leniencies: inline
+  tables may span lines, and leading zeros in integers are accepted.)
 - The view is an `NSOutlineView` and not a render, because a tree is a thing you open and close rather than read top
   to bottom: the disclosure triangles, ⌥-click to open a whole subtree and the arrow keys are all AppKit's own. One
   column, no header, not a source list, the document's own `textBackgroundColor` and the editor's margin, starting
@@ -469,6 +494,17 @@
   / "Zoom Out" against "Increase Font Size" / "Decrease Font Size" — and "Actual Size" is the name of both. The zoom
   is the tab's for as long as the tab is open and is not in `session.json`: how close you were reading is not where
   you were reading. A pinch on a document is the same number, read back off the scale PDFKit lands on.
+- The zoom pill (done 2026-09-06). Where the keys zoom the content there is a pill in the bottom-left of the column
+  — `−  100%  +`, the corner slot's twin at the other end of the diagonal and in the same small bezel. The number
+  is a percentage of that content's own actual size, so a page or a picture fitted to the column reads 100% whatever
+  scale that actually is, and a page at 100% reads 100%. `−` and `+` are ⌘- and ⌘+, and the percentage is Actual
+  Size: the same three keys, pressed with the mouse. It is only there when it is wanted — it fades in on a zoom,
+  shows the new number, and takes itself away a second and a half after the last one, and it is up for as long as
+  the pointer is in the band across the bottom of the column, which is how a reader who wants the buttons rather
+  than the keys finds them. Either reason is enough on its own. A tab with nothing to zoom — a render, a dump, a
+  table, a note beside an editor — has no pill at all, and one arriving in front of a document takes the last one's
+  number away on the spot rather than fading it out. Zen keeps it: a thing that is only there while it is being used
+  has nothing to hide from a reader.
 - Footer: the middle counts pages (`12 pages`, `1 page`), the right says which one (`Page 3 of 12`), and it is empty
   when there is no document to be in. Everything else in the chrome — the strip, the vim badge, zen — is unchanged.
 
@@ -663,6 +699,24 @@
   same three modes, and the View item is the same "Mode Toggle". It is handed to WebKit as `image/svg+xml`, so the root
   `<svg>` is the document rather than a tag inside a page the file never had. It is never one of the picture tabs
   below — its bytes are text, and the system filing it under images does not make it one.
+- Beautify / Minify a `.html` file. The corner slot on an HTML tab offers the same two shapes the `.json` tab
+  offers, over Nota's own walker (`HTMLFormat`) rather than any HTML parser. Beautify indents by nesting, two spaces
+  a level: each block-level element starts a line of its own, inline elements stay in the line with their text, and
+  a block whose content is nothing but text and inline markup — `<li><a href="/">Home</a></li>`, `<td>1</td>`, an
+  empty `<div></div>` — is that one line. Minify puts the page on one line with no whitespace between the tags.
+  Both change the whitespace between and around tags and nothing else: tag names, attribute names, attribute order,
+  attribute quoting, entity spelling and the words of the page all go back down as the exact bytes they were, and
+  Beautify followed by Minify gives what Minify alone gives. Text is re-flowed only as far as collapsing runs of
+  whitespace to one space and trimming a run where it meets a block tag; whitespace inside an inline element stays,
+  since `<span>a </span><span>b</span>` renders a space and `<span>a</span><span>b</span>` does not. `script`,
+  `style`, `pre`, `textarea` and `title` keep their content byte for byte, `</div>` inside a script included, and are
+  never re-indented. HTML is forgiving and so is the walker: a stray end tag is emitted where it stands, an element
+  whose end tag the author left out is written back without one, and nothing is ever added — no optional end tags
+  are inferred, so `<ul><li>a<li>b</ul>` nests. The file's trailing newline is kept. The button points the other way
+  — Minify — when the page has a newline anywhere outside a tag, a comment and a raw-text element, the file's own
+  trailing newline not counted. The button is disabled, with the line in its tool tip, for what the walker cannot
+  read at all: an unterminated comment, a tag or a quoted attribute value that runs off the end of the file, a
+  raw-text element that never closes, or nesting past 256.
 - Shipped: `HTMLPreviewView` is the column's third content view. The editor's text is loaded under `nota-file://`, whose
   path is the file's own, and `PageFiles` hands WebKit the bytes for everything the page draws. A `file://` base URL does
   not work: WebKit's page process is given permission to read a folder only by `loadFileURL`, so text loaded against a
@@ -1036,6 +1090,13 @@
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+31. **The zoom pill (done 2026-09-06).** ⌘+ / ⌘- / ⌘0 zoom a document or a picture, but the keys had no visible
+    counterpart, so a reader who did not know them had no way to find the feature at all. `ZoomPillOverlay` puts a
+    small pill — `−  100%  +` — in the bottom-leading corner of the column, the mode control's own bezel at the
+    other end of the diagonal, fading in on a zoom and holding a second and a half or for as long as the pointer is
+    in the band along the bottom, whichever is longer. It asks the content in front for `zoomPercent`
+    (`PreviewContent.swift`) rather than knowing what is being zoomed, so a render, a dump and a table simply have
+    no pill, and a document arriving in front of another takes the old number away at once instead of fading it out.
 30. **A `.json`, `.yaml`, `.toml` or `.xml` is read as the tree it is, and the corner slot grew a fourth option
     (done 2026-09-06).** Four of the commonest files a developer opens were bare text notes: a compact
     `Settings.json` was one 900-character line, and the only thing Nota offered it was a lone Beautify button in
@@ -1046,7 +1107,8 @@
     walker beside `JSONFormat` on purpose — that one keeps tokens verbatim so beautify and compact are lossless,
     this one unescapes them so a row can be read — and `XMLTree` is Foundation's `XMLParser`, taken for the one
     thing it already knows and a scanner would have to earn: the line every event happened on. `YAMLTree` and
-    `TOMLTree` are their own files with their own rules, written alongside.
+    `TOMLTree` are their own files with their own rules, written alongside — each in its own parallel worktree,
+    merged the same day.
     The view is an `NSOutlineView` rather than a render, because a tree is opened and closed rather than read: the
     triangles, ⌥-click and the arrow keys all come with it. It opens whole below 400 nodes and two levels deep
     above that, re-parses on the render's own debounce keeping what was open by node path and where the reader had
@@ -1059,7 +1121,8 @@
     back to the mode it was on. `.html` joins it with Beautify / Minify through `HTMLFormat`, so `ModeControlOverlay`
     lost `.jsonFormat` and its button and gained `.modeControlWithFormat(FormatKind)`, and the window's
     `refreshJSONSlotState` / `applyJSONFormat` became `refreshFormatSlotState` / `applyFormat` over a format kind —
-    one path, two formatters, both columns kept in step.
+    one path, two formatters, both columns kept in step. `HTMLFormat` was written in a parallel worktree and merged
+    the same day.
 29. **A PDF's sidebar lists its pages, and the outline it listed before is dropped (done 2026-09-06).** Done 22, a
     day earlier, gave the column a PDF's own outline. It was the wrong list: most PDFs carry no bookmarks at all, so
     the commonest document of all had an empty column and a `No contents` hint, and even where there was an outline

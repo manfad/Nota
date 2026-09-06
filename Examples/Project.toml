@@ -1,0 +1,54 @@
+# Project.toml — a Cargo/pyproject-style manifest for Nota's ⚡ demo crate.
+# Exercises the value types Nota's TOML tree preview needs to render.
+
+[package]
+name = "nota-demo"
+version = "0.3.1"
+authors = ["Nota Team <team@nota.app>", "Ada L. <ada@example.com>"]
+description = """
+A tiny demo crate used to show off Nota's tree preview for TOML files.
+It doesn't build anything real, but every table and value type here
+is meant to be representative of what a real manifest looks like.
+"""
+edition = "2021"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive", "rc"] }
+tokio = { version = "1.38", features = ["full"] }
+nota-core.version = "0.9"
+nota-core.path = "../nota-core"
+log = "0.4"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bin]]
+name = "nota-demo"
+path = "src/main.rs"
+
+[[bin]]
+name = "nota-demo-cli"
+path = "src/bin/cli.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+overflow-checks = false
+sample-count = 1_000
+sample-rate = 44_100.5
+timeout-seconds = inf
+
+[build]
+released-at = 2026-09-06T09:00:00+08:00
+frozen-since = 2025-01-01
+build-flags = 0xFF
+windows-scratch-dir = 'C:\Users\nota\scratch'
+
+[metadata]
+tagline = "Fast notes, no lag."
+homepage = "https://nota.app"
