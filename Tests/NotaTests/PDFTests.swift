@@ -263,91 +263,148 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(controller.footerRegions.lineEnding.stringValue, "LF")
     }
 
-    // MARK: - The outline in the sidebar
+    // MARK: - The pages in the sidebar
 
-    /// A document with an outline brings the column up on its own — the way a
-    /// note with a picture in it does — and what stands in it is the
-    /// document's own outline, nesting and all.
+    /// A document brings the column up on its own — the way a note with a
+    /// picture in it does — and what stands in it is a card per page, under
+    /// the one word saying so. Every PDF has pages, so this is every PDF:
+    /// there is nothing an outline-less document has to be told about.
     @MainActor
-    func testAPDFsOutlineIsWhatTheSidebarLists() throws {
+    func testAPDFsPagesAreWhatTheSidebarLists() throws {
         let controller = try makeKeyController()
-        controller.open(url: try makeOutlinedPDF())
+        controller.open(url: try makePDF(pages: 3, named: "plain.pdf",
+                                         in: try makeTemporaryDirectory()))
+        let sidebar = controller.pageListSidebarView
 
         XCTAssertTrue(controller.isImageSidebarVisible, "the column came up with the document")
-        XCTAssertTrue(controller.sidebarShowsContents)
-        XCTAssertEqual(controller.contentsSidebarView.rowTitles, [
-            "1. Introduction",
-            "1.1 Background",
-            "2. Method",
-            "2.1 Sampling",
-            "3. Results",
-        ])
-        XCTAssertEqual(controller.contentsSidebarView.rowIndents, [0, 12, 0, 12, 0],
-                       "a subsection sits one step in from its section")
-        XCTAssertEqual(controller.contentsSidebarView.selectedRowTitle, "1. Introduction",
-                       "the page on screen is the line that is rung")
+        XCTAssertTrue(controller.sidebarShowsPages)
+        XCTAssertFalse(controller.sidebarShowsContents, "a document has no contents column")
+        XCTAssertFalse(sidebar.isHidden)
+        XCTAssertTrue(controller.quickLookSidebar.isHidden)
+        XCTAssertTrue(controller.contentsSidebarView.isHidden)
+        XCTAssertEqual(sidebar.headerTitle, "Pages")
+        XCTAssertEqual(sidebar.pageCaptions, ["Page 1", "Page 2", "Page 3"])
+        XCTAssertEqual(sidebar.selectedPageIndex, 0, "the page in front is the card that is rung")
     }
 
-    /// Clicking a line goes to the destination it names, and the line rung
-    /// goes with it.
+    /// A document whose author wrote bookmarks is listed exactly the same
+    /// way: the outline is not in the column any more, and the quiet
+    /// "No contents" hint is no longer anything a PDF can show.
     @MainActor
-    func testClickingAnOutlineEntryGoesToItsPage() throws {
+    func testAPDFWithAnOutlineListsItsPagesJustTheSame() throws {
         let controller = try makeKeyController()
         controller.open(url: try makeOutlinedPDF())
-        let sidebar = controller.contentsSidebarView
-        let row = try XCTUnwrap(sidebar.rowTitles.firstIndex(of: "2. Method"))
+        let sidebar = controller.pageListSidebarView
 
-        sidebar.chooseRow(row)
+        XCTAssertTrue(controller.isImageSidebarVisible)
+        XCTAssertEqual(sidebar.headerTitle, "Pages")
+        XCTAssertEqual(sidebar.pageCaptions,
+                       ["Page 1", "Page 2", "Page 3", "Page 4", "Page 5", "Page 6"])
+        XCTAssertTrue(controller.contentsSidebarView.isHidden)
+        XCTAssertEqual(controller.previewPanes.pdf.contentsEntries.count, 0,
+                       "the pane has no contents to offer any more")
+        XCTAssertNil(controller.previewPanes.pdf.currentContentsLine)
+    }
 
-        XCTAssertEqual(controller.previewPanes.pdf.currentPageIndex, 2)
-        XCTAssertEqual(controller.currentTabState.selection, 2,
+    /// Clicking a card goes to the top of that page, and the ring goes with
+    /// it.
+    @MainActor
+    func testClickingAPageCardGoesToThatPage() throws {
+        let controller = try makeKeyController()
+        controller.open(url: try makePDF(pages: 5, named: "plain.pdf",
+                                         in: try makeTemporaryDirectory()))
+        let sidebar = controller.pageListSidebarView
+
+        sidebar.choosePage(3)
+
+        XCTAssertEqual(controller.previewPanes.pdf.currentPageIndex, 3)
+        XCTAssertEqual(controller.currentTabState.selection, 3,
                        "and that is where the tab is left")
-        XCTAssertEqual(sidebar.selectedRowTitle, "2. Method")
+        XCTAssertEqual(sidebar.selectedPageIndex, 3)
     }
 
-    /// An outline names where a section begins, so the line rung is the one
-    /// the reader has most recently passed — and it follows the pages.
+    /// And the other way about: paging through the document in the pane rings
+    /// the card for the page that came up.
     @MainActor
-    func testTheRungOutlineEntryFollowsThePageInFront() throws {
+    func testTheRungPageCardFollowsThePageInFront() throws {
         let controller = try makeKeyController()
-        controller.open(url: try makeOutlinedPDF())
+        controller.open(url: try makePDF(pages: 4, named: "plain.pdf",
+                                         in: try makeTemporaryDirectory()))
         let pane = controller.previewPanes.pdf
+        let pdfView = try XCTUnwrap(descendant(of: pane, ofType: NotaPDFView.self))
+        XCTAssertEqual(controller.pageListSidebarView.selectedPageIndex, 0)
 
-        XCTAssertEqual(pane.currentContentsLine, 0)
-        pane.currentPageIndex = 1
-        XCTAssertEqual(pane.currentContentsLine, 1, "page two is inside 1.1")
-        pane.currentPageIndex = 3
-        XCTAssertEqual(pane.currentContentsLine, 3)
-        pane.currentPageIndex = 5
-        XCTAssertEqual(pane.currentContentsLine, 4,
-                       "a page past the last entry is still inside it")
+        pdfView.goToNextPage(nil)
+
+        XCTAssertEqual(pane.currentPageIndex, 1)
+        XCTAssertEqual(controller.pageListSidebarView.selectedPageIndex, 1)
     }
 
-    /// A document with no outline has nothing to list, so the column stays
-    /// away — and ⌘B on it says so rather than offering a gallery a document
-    /// has no pictures for.
+    /// The cards stand at once and the pictures land on them afterwards: a
+    /// page is drawn off the main thread, so a long document opens at the
+    /// cost of a screenful rather than of every page it has.
     @MainActor
-    func testAPDFWithNoOutlineKeepsTheColumnAwayUntilItIsAskedFor() throws {
+    func testThePageCardsAreDrawnOnABackgroundQueue() throws {
         let controller = try makeKeyController()
         controller.open(url: try makePDF(pages: 3, named: "plain.pdf",
                                          in: try makeTemporaryDirectory()))
 
-        XCTAssertFalse(controller.isImageSidebarVisible)
-        XCTAssertTrue(controller.sidebarShowsContents,
-                      "it is still a table of contents, empty or not")
+        let settled = expectation(description: "every thumbnail asked for has landed")
+        controller.previewPanes.pdf.whenThumbnailsSettleForTesting { settled.fulfill() }
+        wait(for: [settled], timeout: 10)
 
-        controller.toggleImageSidebar()
-        XCTAssertTrue(controller.isImageSidebarVisible)
-        XCTAssertFalse(controller.contentsSidebarView.isHidden)
-        XCTAssertTrue(controller.quickLookSidebar.isHidden)
-        XCTAssertEqual(controller.contentsSidebarView.rowTitles, [])
-        XCTAssertTrue(controller.contentsSidebarView.showsEmptyHint)
+        XCTAssertEqual(controller.pageListSidebarView.drawnPageThumbnails, 3,
+                       "each card got its page")
     }
 
-    /// The column belongs to the tab in front: a document's outline while a
+    /// One pane shows every PDF tab in turn, so the column has to tell one
+    /// document from another: two of the same length are not the same list,
+    /// and the second must not be shown the first one's pages.
+    @MainActor
+    func testTwoDocumentsOfTheSameLengthDoNotShareAPageList() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeKeyController()
+        let blank = try makePDF(pages: 2, named: "blank.pdf", in: directory)
+        let written = try makeTextPDF(pages: ["alpha beta", "gamma delta"],
+                                      named: "written.pdf", in: directory)
+        let sidebar = controller.pageListSidebarView
+
+        controller.open(url: blank)
+        let firstDrawn = expectation(description: "the blank document is drawn")
+        controller.previewPanes.pdf.whenThumbnailsSettleForTesting { firstDrawn.fulfill() }
+        wait(for: [firstDrawn], timeout: 10)
+        let blankPage = try XCTUnwrap(sidebar.pageThumbnail(0)?.tiffRepresentation)
+
+        controller.open(url: written)
+        let secondDrawn = expectation(description: "the written document is drawn")
+        controller.previewPanes.pdf.whenThumbnailsSettleForTesting { secondDrawn.fulfill() }
+        wait(for: [secondDrawn], timeout: 10)
+
+        XCTAssertEqual(sidebar.pageCaptions, ["Page 1", "Page 2"])
+        XCTAssertNotEqual(try XCTUnwrap(sidebar.pageThumbnail(0)?.tiffRepresentation), blankPage,
+                          "the cards were built again for the document that came forward")
+    }
+
+    /// The View item is named after what the column lists, in the longer
+    /// words a menu has room for.
+    @MainActor
+    func testTheViewItemIsNamedAfterWhatTheColumnLists() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeKeyController()
+        let markdown = directory.appendingPathComponent("notes.md")
+        try "Just words.".write(to: markdown, atomically: true, encoding: .utf8)
+
+        controller.open(url: markdown)
+        XCTAssertEqual(controller.sidebarListTitle, "Image Gallery")
+
+        controller.open(url: try makeOutlinedPDF())
+        XCTAssertEqual(controller.sidebarListTitle, "Page List")
+    }
+
+    /// The column belongs to the tab in front: a document's pages while a
     /// document is being read, a note's pictures the moment one is.
     @MainActor
-    func testSwitchingToATextTabSwapsTheOutlineBackForTheGallery() throws {
+    func testSwitchingToATextTabSwapsThePagesBackForTheGallery() throws {
         let directory = try makeTemporaryDirectory()
         let controller = try makeKeyController()
         let markdown = directory.appendingPathComponent("notes.md")
@@ -355,29 +412,30 @@ final class PDFTests: XCTestCase {
 
         controller.open(url: markdown)
         let textTab = controller.selectedTabIndex
-        controller.open(url: try makeOutlinedPDF())
+        controller.open(url: try makePDF(pages: 2, named: "plain.pdf", in: directory))
         let pdfTab = controller.selectedTabIndex
 
-        XCTAssertTrue(controller.sidebarShowsContents)
-        XCTAssertFalse(controller.contentsSidebarView.isHidden)
+        XCTAssertTrue(controller.sidebarShowsPages)
+        XCTAssertFalse(controller.pageListSidebarView.isHidden)
         XCTAssertTrue(controller.quickLookSidebar.isHidden)
 
         controller.selectTab(at: textTab)
-        XCTAssertFalse(controller.sidebarShowsContents)
+        XCTAssertFalse(controller.sidebarShowsPages)
         controller.toggleImageSidebar()
         XCTAssertFalse(controller.quickLookSidebar.isHidden)
-        XCTAssertTrue(controller.contentsSidebarView.isHidden)
+        XCTAssertTrue(controller.pageListSidebarView.isHidden)
+        XCTAssertEqual(controller.quickLookSidebar.headerTitle, "Images")
 
         controller.selectTab(at: pdfTab)
-        XCTAssertTrue(controller.sidebarShowsContents)
-        XCTAssertFalse(controller.contentsSidebarView.isHidden)
+        XCTAssertTrue(controller.sidebarShowsPages)
+        XCTAssertFalse(controller.pageListSidebarView.isHidden)
         XCTAssertTrue(controller.quickLookSidebar.isHidden)
     }
 
-    /// A picture is not read through a table of contents: its column is the
+    /// A picture is not read through a list of pages: its column is the
     /// gallery's, and a picture tab has nothing to put in it.
     @MainActor
-    func testAPictureTabHasNoContentsColumn() throws {
+    func testAPictureTabHasNoReadingColumn() throws {
         let directory = try makeTemporaryDirectory()
         let controller = try makeKeyController()
         let picture = directory.appendingPathComponent("shot.png")
@@ -394,6 +452,7 @@ final class PDFTests: XCTestCase {
         controller.open(url: picture)
 
         XCTAssertEqual(controller.currentTabState.kind, .image)
+        XCTAssertFalse(controller.sidebarShowsPages)
         XCTAssertFalse(controller.sidebarShowsContents)
         XCTAssertFalse(controller.isImageSidebarVisible, "and nothing brings it up on its own")
     }

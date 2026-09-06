@@ -368,13 +368,22 @@
 - The page you were on comes back: it rides in the session in the same key the caret does, and the tab reopens there.
   A file that has gone — deleted while the tab was open, or missing when the session comes back — keeps its tab, stays
   clean, and shows a quiet centred `Couldn't open "name.pdf".` in the editor's own font.
-- The document's own outline stands in the sidebar (decided 2026-09-05), the column a note's pictures are shown in:
-  `PDFDocument.outlineRoot` walked depth first, the depth kept as an indent, and clicking a line goes to the
-  destination it names rather than the top of its page. The line rung is the last entry landing on or before the page
-  in front — an outline says where a section begins, so you are inside the one you most recently passed — and it
-  follows the pages. A PDF with no outline lists nothing, so the column stays away exactly as it does for a note with
-  no pictures; ⌘B pins it open on the quiet `No contents` hint rather than offering a gallery for a document that has
-  no pictures to gather. See Images for the column itself.
+- The document's pages stand in the sidebar (done 2026-09-06), the column a note's pictures are shown in: one card
+  per page, in order, under the word `Pages`, in the shape the gallery draws a picture in — the page fitted to a
+  104pt square on a white card with a drop shadow, `Page N` under it. Clicking one goes to the top of that page. The
+  card for the page in front wears the gallery's own accent wash and follows the reader as they scroll and page,
+  scrolling itself into view. Every document has pages, so the column comes up on its own for every PDF the way it
+  does for a note with a picture in it, and the quiet `No contents` hint is no longer anything a PDF can show. The
+  View item reads "Page List" there. See Images for the column itself.
+- The outline is not in the sidebar (decided 2026-09-06, and it was there from 2026-09-05 to then — see Done 29).
+  Most PDFs have no bookmarks at all, so the column was empty for the common case, and a document is navigated by
+  its pages. `PDFOutlineContents` is gone with it and the pane answers `contentsEntries` no more.
+- A thumbnail is drawn off the main thread and only for the cards being looked at — a screenful either side of what
+  is on screen, filled in as it is scrolled — at twice the card's size so it is a Retina picture, and kept for as
+  long as the document is open, so a trip through another tab and back does not draw it again. The pages are drawn
+  from a second `PDFDocument` opened on the thumbnail queue rather than from the one being read, since PDFKit's
+  objects are not safe to touch from two threads at once. A five-hundred-page document therefore opens at the cost
+  of a screenful of pages.
 - ⌘F searches the document (done 2026-09-04): the same pill in the same corner, "Find in document", over PDFKit's own
   selections rather than a text storage. Every match wears a quiet band drawn over the page, the one you are on wears
   `findHighlightColor` and is the page's selection, and the count reads the same `3 of 12` / `12 matches` /
@@ -491,7 +500,7 @@
   is the author's own. EPUB 2 and 3; no DRM.
 - The contents come from EPUB 3's `nav` document, and from the NCX off the spine's `toc` attribute when there is no
   nav — flattened, with the nesting kept as a level. They stand in the sidebar (decided 2026-09-05), the column a
-  note's pictures are shown in and a PDF's outline stands in: the same split item, the same 150pt, the same side,
+  note's pictures and a document's pages are shown in: the same split item, the same 150pt, the same side,
   brought up on its own when a book tab comes to the front and put away by the same ⌘B, which reads "Table of
   Contents" there. The line naming the chapter on screen is rung and follows along as chapters turn; clicking one
   goes to that chapter and to the `#anchor` it named. Zen takes the column the way it takes the gallery. A book whose
@@ -818,15 +827,22 @@
 - Sidebar (native split pane, 150pt, side per Settings): 104pt thumbnails with `Image N` captions. Auto-shows when the note has ≥1 image,
   hides when none; ⌘B toggles it manually for the session. Settings: sidebar side Left / Right (default Right). Click → select chip; double-click → open in Preview.
   Context menu: Copy Image / Save Image As… / Reveal in Finder.
-- The same column is a table of contents while a tab that is read rather than edited is in front — a book's chapters
-  (see EPUB), a PDF's outline (see PDF). One split item, one width, one side, one ⌘B and one pin; what stands in it is
-  whatever the tab in front has to list. The lines arrive as a title, a nesting level and the line's own number, and
-  the content view they came from is the only thing that knows what going there means, so one column serves both. A
-  line is 13pt, one line truncated, indented 12pt a level, and the line naming what is on screen carries a grey wash
-  — the ⌘P switcher's own selection rather than a blue document one. A picture tab has no contents and keeps the
-  column away, and every editable tab — `.md`, `.tex`, `.html`, `.svg`, a plain note — is the gallery as before. The
-  View item is named after what is listed: "Image Gallery" over a note, "Table of Contents" over a book or a PDF, ⌘B
-  and its tick unchanged either way.
+- The same column lists what a tab that is read rather than edited offers instead — a book's chapters (see EPUB), a
+  document's pages (see PDF). Three lists, one at a time: one split item, one width, one side, one ⌘B and one pin,
+  and the tab's kind alone says which of the three stands in it. The lines arrive as a title, a nesting level and
+  the line's own number, and the pages as a count, a thumbnail and where the reader is; the content view they came
+  from is the only thing that knows what going there means, so one column serves every kind. A line is 13pt, one
+  line truncated, indented 12pt a level, and the line naming what is on screen carries a grey wash — the ⌘P
+  switcher's own selection rather than a blue document one. A page card is the gallery's own card with a `Page N`
+  caption, and the one in front wears the gallery's accent wash. A picture tab has nothing to list and keeps the
+  column away, and every editable tab — `.md`, `.tex`, `.html`, `.svg`, a plain note — is the gallery as before.
+- Each list stands under one word saying what it is, in the shape of Finder's own sidebar sections: 11pt semibold,
+  secondary, at the list's leading margin, with air above and below. `Images` over a note's pictures, `Contents`
+  over a book's chapters, `Pages` over a document's pages. It sits at the top of the column, outside the scroll
+  view, so it is still there when the list has been scrolled and still there when there is no list — an empty
+  gallery says `Images` over its `No images`. The View menu keeps the longer names, which a menu has room for:
+  "Image Gallery" over a note, "Table of Contents" over a book, "Page List" over a PDF, ⌘B and its tick unchanged in
+  all three.
 - ⌘A ⌘C carries images (RTFD) to other apps, and when the selection holds exactly one image the picture also goes
   as PNG/TIFF, so it pastes into terminals, browsers and Slack; two or more images offer no picture flavour.
   Nota→Nota paste prefers Nota's own flavour, re-linking without duplicating assets.
@@ -950,6 +966,27 @@
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+29. **A PDF's sidebar lists its pages, and the outline it listed before is dropped (done 2026-09-06).** Done 22, a
+    day earlier, gave the column a PDF's own outline. It was the wrong list: most PDFs carry no bookmarks at all, so
+    the commonest document of all had an empty column and a `No contents` hint, and even where there was an outline
+    it was a table of contents for a thing the reader navigates by page. The outline is gone from the column —
+    `PDFOutlineContents` and the pane's `contentsEntries` / `currentContentsLine` / `goToContentsLine` with it — and
+    a PDF now lists its pages: one card per page in the shape the gallery already draws a picture in, `Page N` under
+    it, a click going to the top of that page, and the card for the page in front wearing the accent wash and
+    following the reader through the document. Every document has pages, so the column comes up on its own for every
+    PDF and the hint is only an outline-less EPUB's. The column now holds three siblings rather than two —
+    `ImageSidebarView`, `ContentsSidebarView`, `PageListSidebarView` — picked by the tab's kind through
+    `MainWindowController.SidebarList`, and the card and the section title they share live in `SidebarCards.swift`
+    so the gallery and the page list cannot drift apart. `PreviewContent` grew `pageList`, a `PageListSource`
+    answering for a count, the page in front, going to one and drawing one, so the window still asks the content
+    view rather than switching on a kind; the source carries an identity of its own, since one pane shows every PDF
+    tab in turn and two documents of the same length would otherwise look like the same list. Thumbnails are the
+    cost that had to be designed around: drawn on one serial queue from a second `PDFDocument` of the file (PDFKit
+    is not safe from two threads at once), only for the cards being looked at and a screenful either side, at 2× the
+    card, cached per document for as long as the tab is open. Above each list is one word in the shape of Finder's
+    sections — `Images`, `Contents`, `Pages` — outside the scroll view, so the column says what it is however far
+    the list has been scrolled; the View item keeps the longer "Image Gallery" / "Table of Contents" / "Page List",
+    from `sidebarListTitle` on the window rather than a flag on the menu.
 28. **GitHub releases, ad-hoc signed (done 2026-09-06).** `release.sh` is the one-shot publisher: tags the version
     from `Version.swift`, runs `./build.sh --universal` (see its own `--universal` flag) for an arm64+x86_64
     `Nota.app`, zips it as `Nota-<version>.zip`, pushes, and opens a GitHub release with generated notes. A Homebrew

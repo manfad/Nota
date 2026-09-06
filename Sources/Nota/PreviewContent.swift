@@ -75,6 +75,37 @@ struct ContentsEntry: Equatable {
     let line: Int
 }
 
+/// A document that is read page by page, for the sidebar column to list.
+///
+/// The other half of `ContentsEntry`: an outline says where the parts of a
+/// document begin, and this says what its pages are. A document has pages
+/// whether or not its author wrote an outline, which is why every PDF has
+/// something in the column and an outline-less one is no longer a blank.
+///
+/// Class-bound, and held weakly by the column: the source is the content view
+/// itself, which the preview pane owns and keeps alive behind whatever is in
+/// front of it.
+///
+/// A thumbnail is asked for rather than read: drawing a page costs real work,
+/// so it is done off the main thread and handed back on it, and a page nobody
+/// has scrolled to is never drawn at all.
+protocol PageListSource: AnyObject {
+    var pageCount: Int { get }
+    /// What the pages belong to. One content view shows every document of its
+    /// kind in turn, so the column cannot tell one from another by the source
+    /// alone — two documents of the same length would look like the same list
+    /// and keep each other's thumbnails.
+    var pageListIdentity: AnyHashable { get }
+    /// Which page is in front, counted from zero.
+    var currentPageIndex: Int { get }
+    /// Goes to a page, and reports the move the way the reader's own scroll
+    /// would — the tab is left there.
+    func goToPage(_ index: Int)
+    /// The page drawn small, handed back on the main thread. `nil` for a page
+    /// that could not be drawn.
+    func thumbnail(forPage index: Int, completion: @escaping (NSImage?) -> Void)
+}
+
 /// What the window hands a content view along with the note: the editor's own
 /// font, so a render matches the text beside it, the store its pictures come
 /// from, and whether the column is on screen at all — a render nobody can see
@@ -249,6 +280,11 @@ protocol PreviewContent: NSView {
     /// rather than landing somewhere arbitrary.
     func goToContentsLine(_ line: Int)
 
+    /// The content's own pages, when it is read a page at a time. `nil` for
+    /// everything else: a note is one scroll of text and a chapter is one
+    /// page of a book, and neither has pages to lay out in a column.
+    var pageList: PageListSource? { get }
+
     /// Files let go on the content from the Finder. Every kind takes them and
     /// every kind does the same thing with them — hands them straight up, to
     /// be opened as tabs — so this is a requirement rather than something a
@@ -387,4 +423,6 @@ extension PreviewContent {
     var currentContentsLine: Int? { nil }
 
     func goToContentsLine(_ line: Int) { }
+
+    var pageList: PageListSource? { nil }
 }

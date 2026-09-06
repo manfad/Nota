@@ -3512,6 +3512,23 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(relaunched.previewMode, .off, "closed is how it was left")
     }
 
+    // MARK: - The gallery's own title
+
+    /// Every list in the sidebar column stands under one word saying what it
+    /// is listing, in the shape Finder gives its own sections, at the top of
+    /// the column rather than in the list — so it is still there when the
+    /// list has been scrolled, and still there when there is no list.
+    @MainActor
+    func testTheGalleryStandsUnderItsOwnTitle() throws {
+        let sidebar = ImageSidebarView(topInset: 8)
+
+        sidebar.setAssetIDs(["a.png", "b.png"])
+        XCTAssertEqual(sidebar.headerTitle, "Images")
+
+        sidebar.setAssetIDs([])
+        XCTAssertEqual(sidebar.headerTitle, "Images", "the column still says what it is for")
+    }
+
     // MARK: - Helpers
 
     @MainActor

@@ -7,12 +7,13 @@ protocol ImageSidebarViewDelegate: AnyObject {
 /// The right-hand panel showing the current tab's images full width, in the
 /// order they appear in the text. The inline chips stay small; this is where
 /// the pictures are actually looked at.
+///
+/// The cards are `SidebarCardItemView`s, the same ones a PDF's pages stand on
+/// in the same column: what the gallery adds is the store behind each picture,
+/// the context menu and the double click that opens the file.
 final class ImageSidebarView: NSView {
     static let width: CGFloat = 150
-    /// The picture square (104) plus 6pt of selection wash on each side.
-    static let cellSize: CGFloat = 116
     private static let margin: CGFloat = 8
-    private static let gap: CGFloat = 12
 
     weak var delegate: ImageSidebarViewDelegate?
     var assets: AssetStore?
@@ -20,6 +21,7 @@ final class ImageSidebarView: NSView {
     private let scrollView = NSScrollView()
     private let container = FlippedView()
     private let stack = NSStackView()
+    private let header = SidebarSectionHeader(title: L10n.text("Images"))
     private let emptyLabel = NSTextField(labelWithString: "No images")
     private var itemViews: [SidebarImageItemView] = []
 
@@ -42,8 +44,12 @@ final class ImageSidebarView: NSView {
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .centerX
-        stack.spacing = Self.gap
+        stack.spacing = SidebarCard.gap
         container.addSubview(stack)
+
+        // Above the scroll view rather than inside it: the column says what
+        // it is listing however far the list has been scrolled.
+        addSubview(header)
 
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         emptyLabel.font = .systemFont(ofSize: 12)
@@ -51,7 +57,11 @@ final class ImageSidebarView: NSView {
         addSubview(emptyLabel)
 
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: topAnchor),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: topInset),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            scrollView.topAnchor.constraint(equalTo: header.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -60,9 +70,11 @@ final class ImageSidebarView: NSView {
             // free to grow taller than it and scroll.
             container.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
 
-            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: topInset),
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: Self.margin),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -Self.margin),
+            stack.topAnchor.constraint(
+                equalTo: container.topAnchor, constant: SidebarCard.gap / 2
+            ),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -Self.margin),
 
             emptyLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
@@ -77,6 +89,7 @@ final class ImageSidebarView: NSView {
     /// Rebuilds only when the sequence of asset ids actually changed, so
     /// typing next to an image does not make the sidebar flicker.
     func setAssetIDs(_ ids: [String], force: Bool = false) {
+        header.title = L10n.text("Images")
         guard force || ids != assetIDs else { return }
         assetIDs = ids
 
@@ -85,12 +98,7 @@ final class ImageSidebarView: NSView {
             view.removeFromSuperview()
         }
         itemViews = ids.enumerated().map { index, assetID in
-            let item = SidebarImageItemView(
-                index: index,
-                assetID: assetID,
-                assets: assets,
-                width: Self.cellSize
-            )
+            let item = SidebarImageItemView(index: index, assetID: assetID, assets: assets)
             item.onActivate = { [weak self] in
                 guard let self else { return }
                 self.delegate?.imageSidebar(self, didActivateItemAt: index)
@@ -124,6 +132,12 @@ final class ImageSidebarView: NSView {
         let item = itemViews[index]
         item.scrollToVisible(item.bounds)
     }
+
+    // MARK: - Tests
+
+    /// The title standing over the column, which a note's column always has:
+    /// it says what the column is for, empty or not.
+    var headerTitle: String { header.title }
 }
 
 /// Document views are bottom-up by default; images should stack downwards.
@@ -133,82 +147,29 @@ private final class FlippedView: NSView {
 
 // MARK: - One image
 
-/// A thumbnail in the shape Preview.app uses for pages: the picture on a
-/// white card with a soft drop shadow, an `Image N` caption underneath, and —
-/// when it is the one the caret is on — a rounded selection wash behind it.
-private final class SidebarImageItemView: NSView {
-    private static let captionGap: CGFloat = 4
-    private static let captionHeight: CGFloat = 15
-
+/// A gallery card: the shared thumbnail card, with an `Image N` caption and
+/// the three things only a picture out of the store can offer — copy, save a
+/// copy, and reveal the file behind it.
+private final class SidebarImageItemView: SidebarCardItemView {
     let index: Int
     let assetID: String
 
-    var onActivate: (() -> Void)?
-    var onOpen: (() -> Void)?
-
-    var isHighlighted: Bool {
-        get { thumbnail.isHighlighted }
-        set { thumbnail.isHighlighted = newValue }
-    }
-
     private let assets: AssetStore?
-    private let thumbnail: ThumbnailView
-    private let caption = NSTextField(labelWithString: "")
 
-    init(index: Int, assetID: String, assets: AssetStore?, width: CGFloat) {
+    init(index: Int, assetID: String, assets: AssetStore?) {
         self.index = index
         self.assetID = assetID
         self.assets = assets
-        self.thumbnail = ThumbnailView(image: assets?.image(for: assetID))
-        super.init(frame: .zero)
-
-        translatesAutoresizingMaskIntoConstraints = false
+        super.init(
+            caption: "\(L10n.text("Image")) \(index + 1)",
+            image: assets?.image(for: assetID),
+            placeholderGlyph: "\u{1F5BC}"
+        )
         toolTip = assetID
-
-        thumbnail.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(thumbnail)
-
-        caption.translatesAutoresizingMaskIntoConstraints = false
-        caption.stringValue = "\(L10n.text("Image")) \(index + 1)"
-        caption.font = .systemFont(ofSize: 11)
-        caption.textColor = .secondaryLabelColor
-        caption.alignment = .center
-        caption.lineBreakMode = .byTruncatingTail
-        caption.maximumNumberOfLines = 1
-        addSubview(caption)
-
-        NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: width),
-            heightAnchor.constraint(
-                equalToConstant: width + Self.captionGap + Self.captionHeight
-            ),
-
-            thumbnail.topAnchor.constraint(equalTo: topAnchor),
-            thumbnail.leadingAnchor.constraint(equalTo: leadingAnchor),
-            thumbnail.trailingAnchor.constraint(equalTo: trailingAnchor),
-            thumbnail.heightAnchor.constraint(equalToConstant: width),
-
-            caption.topAnchor.constraint(
-                equalTo: thumbnail.bottomAnchor, constant: Self.captionGap
-            ),
-            caption.leadingAnchor.constraint(equalTo: leadingAnchor),
-            caption.trailingAnchor.constraint(equalTo: trailingAnchor),
-        ])
-
         menu = buildMenu()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
-
-    func redraw() { thumbnail.needsDisplay = true }
-
-    override func mouseDown(with event: NSEvent) {
-        if event.clickCount >= 2 {
-            onOpen?()
-        } else {
-            onActivate?()
-        }
-    }
 
     // MARK: Context menu
 
@@ -247,84 +208,5 @@ private final class SidebarImageItemView: NSView {
     @objc private func revealInFinder() {
         guard let assetURL, FileManager.default.fileExists(atPath: assetURL.path) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([assetURL])
-    }
-}
-
-/// The picture itself: a white card sized to the image's aspect, shadowed,
-/// with the selection wash sitting behind it.
-private final class ThumbnailView: NSView {
-    /// The square the picture is fitted into; the wash extends past it.
-    static let squareSize: CGFloat = 104
-    private static let selectionPadding: CGFloat = 6
-    private static let selectionRadius: CGFloat = 8
-    private static let cardRadius: CGFloat = 2
-
-    private let image: NSImage?
-    var isHighlighted = false {
-        didSet { if isHighlighted != oldValue { needsDisplay = true } }
-    }
-
-    init(image: NSImage?) {
-        self.image = image
-        super.init(frame: .zero)
-    }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    /// Clicks belong to the item, so it can tell single from double.
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let square = NSRect(
-            x: bounds.midX - Self.squareSize / 2,
-            y: bounds.midY - Self.squareSize / 2,
-            width: Self.squareSize,
-            height: Self.squareSize
-        )
-        let card = image.map { ImageFitting.aspectFit($0.size, in: square) } ?? square
-
-        if isHighlighted {
-            let isKey = window?.isKeyWindow ?? false
-            let wash = isKey
-                ? NSColor.controlAccentColor.withAlphaComponent(0.25)
-                : NSColor.unemphasizedSelectedContentBackgroundColor
-            wash.setFill()
-            NSBezierPath(
-                roundedRect: card.insetBy(dx: -Self.selectionPadding, dy: -Self.selectionPadding),
-                xRadius: Self.selectionRadius, yRadius: Self.selectionRadius
-            ).fill()
-        }
-
-        let cardPath = NSBezierPath(
-            roundedRect: card, xRadius: Self.cardRadius, yRadius: Self.cardRadius
-        )
-
-        // The card and its shadow, then the picture clipped onto it.
-        NSGraphicsContext.saveGraphicsState()
-        let shadow = NSShadow()
-        shadow.shadowBlurRadius = 3
-        shadow.shadowOffset = NSSize(width: 0, height: -1)
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.25)
-        shadow.set()
-        NSColor.textBackgroundColor.setFill()
-        cardPath.fill()
-        NSGraphicsContext.restoreGraphicsState()
-
-        NSGraphicsContext.saveGraphicsState()
-        cardPath.addClip()
-        if let image {
-            image.draw(in: card, from: .zero, operation: .sourceOver, fraction: 1)
-        } else {
-            let glyph = "\u{1F5BC}" as NSString
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 20),
-            ]
-            let size = glyph.size(withAttributes: attributes)
-            glyph.draw(
-                at: NSPoint(x: card.midX - size.width / 2, y: card.midY - size.height / 2),
-                withAttributes: attributes
-            )
-        }
-        NSGraphicsContext.restoreGraphicsState()
     }
 }

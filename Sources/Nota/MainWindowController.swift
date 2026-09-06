@@ -146,10 +146,12 @@ final class MainWindowController: NSWindowController {
     private var lineNumberRuler: LineNumberRulerView?
     private let tabBar = TabBarView()
     private lazy var imageSidebar = ImageSidebarView(topInset: 8)
-    /// The same column, showing the tab's own table of contents instead,
-    /// while the tab in front is one that is read rather than edited — a book
-    /// or a PDF. Exactly one of the two is on screen.
+    /// The same column, showing a book's own table of contents instead, while
+    /// a book is in front.
     private lazy var contentsSidebar = ContentsSidebarView(topInset: 8)
+    /// And the same column again, showing a document's pages, while a PDF is.
+    /// Exactly one of the three is on screen.
+    private lazy var pageListSidebar = PageListSidebarView(topInset: 8)
     /// The outer split keeps the optional sidebar outside the document.
     private let splitViewController = NSSplitViewController()
     /// The document owns the shared tab strip and the editor/preview split
@@ -831,6 +833,10 @@ final class MainWindowController: NSWindowController {
         contentsSidebar.delegate = self
         contentsSidebar.isHidden = true
         container.addSubview(contentsSidebar)
+        pageListSidebar.translatesAutoresizingMaskIntoConstraints = false
+        pageListSidebar.delegate = self
+        pageListSidebar.isHidden = true
+        container.addSubview(pageListSidebar)
         NSLayoutConstraint.activate([
             imageSidebar.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
             imageSidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -843,6 +849,13 @@ final class MainWindowController: NSWindowController {
             contentsSidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             contentsSidebar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             contentsSidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            pageListSidebar.topAnchor.constraint(
+                equalTo: container.safeAreaLayoutGuide.topAnchor
+            ),
+            pageListSidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            pageListSidebar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            pageListSidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
     }
 
@@ -4505,21 +4518,42 @@ extension MainWindowController {
 
     var isImageSidebarVisible: Bool { sidebarIsVisible }
 
-    /// Whether the column is a table of contents rather than a note's
-    /// pictures — which is what the View item is named after. It goes by the
-    /// tab's kind rather than by whether there is anything to list, so ⌘B on
-    /// a PDF with no outline brings up the quiet "No contents" hint instead
-    /// of a gallery for a document that has no pictures to gather.
-    var sidebarShowsContents: Bool {
+    /// Which of the three lists the column holds for the tab in front. By the
+    /// tab's kind and by nothing else: a book is read by its contents and a
+    /// document by its pages whether or not either has anything in it, and a
+    /// book with no contents at all is what the quiet hint is for.
+    enum SidebarList { case gallery, contents, pages }
+
+    var sidebarList: SidebarList {
         switch currentNote?.kind {
-        case .pdf, .epub: true
-        default: false
+        case .epub: .contents
+        case .pdf: .pages
+        default: .gallery
         }
     }
 
-    /// The list of contents itself — for the tests, which have no other way
-    /// to ask the column which of its two lists it is holding.
+    /// Whether the column is a book's table of contents rather than a note's
+    /// pictures.
+    var sidebarShowsContents: Bool { sidebarList == .contents }
+
+    /// Whether it is a document's pages.
+    var sidebarShowsPages: Bool { sidebarList == .pages }
+
+    /// What the View item is named after: what the column is listing. The
+    /// item keeps the long names — the titles in the column itself are one
+    /// word each. English keys; the menu is what puts them through `L10n`.
+    var sidebarListTitle: String {
+        switch sidebarList {
+        case .gallery: "Image Gallery"
+        case .contents: "Table of Contents"
+        case .pages: "Page List"
+        }
+    }
+
+    /// The two lists a tab that is read puts up — for the tests, which have
+    /// no other way to ask the column which of its three it is holding.
     var contentsSidebarView: ContentsSidebarView { contentsSidebar }
+    var pageListSidebarView: PageListSidebarView { pageListSidebar }
 
     /// ⌘B. Pins the sidebar open or shut, overriding the follow-the-tab
     /// default for the rest of the session. One pin for both lists: hiding
@@ -4547,8 +4581,8 @@ extension MainWindowController {
     fileprivate func refreshImages(force: Bool = false) {
         sidebarWorkItem?.cancel()
         sidebarWorkItem = nil
-        if let note = currentNote, sidebarShowsContents {
-            refreshContents(of: note, force: force)
+        if let note = currentNote, sidebarList != .gallery {
+            refreshReadingList(of: note, force: force)
             return
         }
         guard let storage = currentNote?.storage else { return }
@@ -4575,25 +4609,46 @@ extension MainWindowController {
 
         applySidebarVisibility(itemCount: assetIDs.count)
         if sidebarIsVisible {
-            contentsSidebar.isHidden = true
-            imageSidebar.isHidden = false
+            showSidebarList(.gallery)
             imageSidebar.setAssetIDs(assetIDs, force: force)
             updateSidebarHighlight()
         }
     }
 
-    /// The document in front, listed. What the lines are is the content
-    /// view's business — a book's chapters, a PDF's outline — and nothing
-    /// here asks which it has. One with no contents at all lists nothing, so
-    /// the column follows the tab exactly as an empty note's does and stays
-    /// away until ⌘B pins it open on the hint.
-    private func refreshContents(of note: Note, force: Bool) {
-        let entries = previewColumn.content(for: note).contentsEntries
-        applySidebarVisibility(itemCount: entries.count)
-        guard sidebarIsVisible else { return }
-        imageSidebar.isHidden = true
-        contentsSidebar.isHidden = false
-        contentsSidebar.setEntries(entries, force: force)
+    /// Which of the three views in the column is the one on screen.
+    private func showSidebarList(_ list: SidebarList) {
+        imageSidebar.isHidden = list != .gallery
+        contentsSidebar.isHidden = list != .contents
+        pageListSidebar.isHidden = list != .pages
+    }
+
+    /// The tab in front, listed: a book's contents, a document's pages. What
+    /// either of them is remains the content view's business, and nothing
+    /// here asks — one hands over `ContentsEntry` lines, the other a page
+    /// source, and the count of whichever it is says whether the column comes
+    /// up at all.
+    ///
+    /// Every document has pages, so a PDF always brings the column up; only a
+    /// book with no contents lists nothing and stays away until ⌘B pins it
+    /// open on the hint.
+    private func refreshReadingList(of note: Note, force: Bool) {
+        let content = previewColumn.content(for: note)
+        switch sidebarList {
+        case .gallery:
+            return
+        case .contents:
+            let entries = content.contentsEntries
+            applySidebarVisibility(itemCount: entries.count)
+            guard sidebarIsVisible else { return }
+            showSidebarList(.contents)
+            contentsSidebar.setEntries(entries, force: force)
+        case .pages:
+            let pages = content.pageList
+            applySidebarVisibility(itemCount: pages?.pageCount ?? 0)
+            guard sidebarIsVisible else { return }
+            showSidebarList(.pages)
+            pageListSidebar.setPages(pages, force: force)
+        }
         updateContentsSelection()
     }
 
@@ -4601,8 +4656,13 @@ extension MainWindowController {
     /// listed and again on every move the content reports, so a chapter
     /// turned and a page scrolled past both walk the list.
     fileprivate func updateContentsSelection() {
-        guard sidebarIsVisible, sidebarShowsContents, let note = currentNote else { return }
-        contentsSidebar.setSelectedLine(previewColumn.content(for: note).currentContentsLine)
+        guard sidebarIsVisible, let note = currentNote else { return }
+        let content = previewColumn.content(for: note)
+        switch sidebarList {
+        case .gallery: break
+        case .contents: contentsSidebar.setSelectedLine(content.currentContentsLine)
+        case .pages: pageListSidebar.setSelectedPage(content.pageList?.currentPageIndex)
+        }
     }
 
     private func applySidebarVisibility(itemCount: Int) {
@@ -4640,9 +4700,9 @@ extension MainWindowController {
     /// Rings the sidebar item for the chip the caret is touching, or for any
     /// chip inside the selection.
     fileprivate func updateSidebarHighlight() {
-        // A contents column is rung by what is on screen, not by a caret in
-        // text there is none of.
-        guard sidebarIsVisible, !sidebarShowsContents else { return }
+        // A book's or a document's column is rung by what is on screen, not
+        // by a caret in text there is none of.
+        guard sidebarIsVisible, sidebarList == .gallery else { return }
         let highlighted = ChipHighlight.resolve(
             clickedChipLocation: clickedChipLocation,
             selection: textView.selectedRange(),
@@ -4686,6 +4746,17 @@ extension MainWindowController: ContentsSidebarViewDelegate {
     func contentsSidebar(_ sidebar: ContentsSidebarView, didChooseLine line: Int) {
         guard let note = currentNote, sidebarShowsContents else { return }
         previewColumn.content(for: note).goToContentsLine(line)
+        updateContentsSelection()
+    }
+}
+
+extension MainWindowController: PageListSidebarViewDelegate {
+    /// Clicking a page card goes to the top of that page, and the ring goes
+    /// with it. The keyboard stays where it was, the way a chosen line leaves
+    /// it: a document is read, and there is no editor to go back to.
+    func pageListSidebar(_ sidebar: PageListSidebarView, didChoosePage page: Int) {
+        guard let note = currentNote, sidebarShowsPages else { return }
+        previewColumn.content(for: note).pageList?.goToPage(page)
         updateContentsSelection()
     }
 }

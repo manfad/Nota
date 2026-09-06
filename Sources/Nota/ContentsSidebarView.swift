@@ -4,20 +4,21 @@ protocol ContentsSidebarViewDelegate: AnyObject {
     func contentsSidebar(_ sidebar: ContentsSidebarView, didChooseLine line: Int)
 }
 
-/// A read-only tab's own table of contents, in the sidebar column a note's
-/// pictures are shown in: a book's chapters, a PDF's outline.
+/// A book's own table of contents, in the sidebar column a note's pictures are
+/// shown in.
 ///
-/// A sibling of `ImageSidebarView` rather than a second mode inside it: the
-/// two share a column and nothing else. One is a stack of picture cards with
-/// an asset store, a caption and a context menu behind each; this is a list of
-/// lines of text with a nesting level. Folding them together would be one
-/// class with two of everything, so the split item holds both and shows
-/// whichever the tab in front has something to say through.
+/// A sibling of `ImageSidebarView` and of `PageListSidebarView` rather than a
+/// mode inside either: the three share a column and nothing else. One is a
+/// stack of picture cards with an asset store, a caption and a context menu
+/// behind each; one is a document's pages, drawn small; this is a list of lines
+/// of text with a nesting level. Folding them together would be one class with
+/// three of everything, so the split item holds all three and shows whichever
+/// the tab in front has something to say through.
 ///
 /// Nothing here knows what it is listing. The lines arrive as `ContentsEntry`
 /// values — a title, a nesting level and the entry's own place in the list —
 /// and the content view they came from is what turns a chosen line into a
-/// chapter or a page. That is what lets one column serve both kinds.
+/// chapter. That is what lets the column list a kind it knows nothing about.
 final class ContentsSidebarView: NSView {
     /// A line is a label, not a paragraph: one row, one line of text.
     static let rowHeight: CGFloat = 24
@@ -30,6 +31,12 @@ final class ContentsSidebarView: NSView {
     private let scrollView = NSScrollView()
     private let container = FlippedContentsView()
     private let stack = NSStackView()
+    /// The title starts where the lines do; the stack under it is inset by
+    /// `margin`, so the title gives that back.
+    private let header = SidebarSectionHeader(
+        title: L10n.text("Contents"),
+        leadingInset: SidebarSectionHeader.leadingInset - margin
+    )
     private let emptyLabel = NSTextField(labelWithString: L10n.text("No contents"))
     private var rowViews: [ContentsRowView] = []
 
@@ -42,6 +49,10 @@ final class ContentsSidebarView: NSView {
 
     init(topInset: CGFloat) {
         super.init(frame: .zero)
+
+        // Above the scroll view rather than inside it, so the column goes on
+        // saying what it is listing however far the list has been scrolled.
+        addSubview(header)
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
@@ -64,7 +75,11 @@ final class ContentsSidebarView: NSView {
         addSubview(emptyLabel)
 
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: topAnchor),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: topInset),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.margin),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            scrollView.topAnchor.constraint(equalTo: header.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -73,7 +88,7 @@ final class ContentsSidebarView: NSView {
             // grow taller than it and scroll.
             container.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
 
-            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: topInset),
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
             stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: Self.margin),
             stack.trailingAnchor.constraint(
                 equalTo: container.trailingAnchor, constant: -Self.margin
@@ -94,6 +109,7 @@ final class ContentsSidebarView: NSView {
     /// Rebuilt only when the lines actually changed, so coming back to a tab
     /// does not throw the list away and lay it out again.
     func setEntries(_ newEntries: [ContentsEntry], force: Bool = false) {
+        header.title = L10n.text("Contents")
         guard force || newEntries != entries else { return }
         entries = newEntries
 
@@ -118,8 +134,7 @@ final class ContentsSidebarView: NSView {
     }
 
     /// Rings the line naming what is on screen and keeps it in view — a
-    /// chapter turned with `→`, a page scrolled past — the same way a click
-    /// on the list moves it.
+    /// chapter turned with `→` — the same way a click on the list moves it.
     func setSelectedLine(_ line: Int?) {
         selectedLine = line
         applySelection()
@@ -148,6 +163,11 @@ final class ContentsSidebarView: NSView {
     /// a document with no outline, pinned open with ⌘B.
     var showsEmptyHint: Bool { !emptyLabel.isHidden }
     var rowIndents: [CGFloat] { rowViews.map(\.indent) }
+
+    /// The title standing over the column, which it always has: it says what
+    /// the column is for, empty or not.
+    var headerTitle: String { header.title }
+
     var selectedRowTitle: String? {
         rowViews.first(where: \.isSelected)?.title
     }

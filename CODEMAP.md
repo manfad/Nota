@@ -37,7 +37,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | The corner slot (Editor · Split · Reading, or JSON Beautify / Compact) | `ModeControlOverlay.swift` |
 | Laying a `.json` file out or pulling it together | `JSONFormat.swift` |
 | Gutter / line numbers | `LineNumberRulerView.swift` |
-| The sidebar column: a note's thumbnails, a book's or PDF's contents | `ImageSidebarView.swift`, `ContentsSidebarView.swift`, which chips light up `ChipHighlight.swift` |
+| The sidebar column: a note's thumbnails, a book's contents, a PDF's pages, the title over each | `ImageSidebarView.swift`, `ContentsSidebarView.swift`, `PageListSidebarView.swift`, the card and the title they share `SidebarCards.swift`, which chips light up `ChipHighlight.swift` |
 | Tab / picker / bookmark-menu icons | `FileKindIcon.swift`, art in `FileKindArt.swift` (generated) |
 | Bookmarks | `Bookmarks.swift` (store), `BookmarksMenu.swift` (File › Bookmarks) |
 | Open Recent | `RecentDocumentsMenu.swift` |
@@ -79,8 +79,10 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `ModeControlOverlay.swift` (~390) — the corner slot: the hover band per column, and the one control the
   front tab puts in it (`Content` — the Editor · Split · Reading segments, the JSON Beautify / Compact
   button, or nothing). The band, the fade, the hit testing and the drop under ⌘F know nothing of which.
-- `ImageSidebarView.swift` (~330) — thumbnail column (no utility strip any more).
-- `ContentsSidebarView.swift` (~255) — the same column for a tab that is read: the table of contents (a book's chapters, a PDF's outline), indented by nesting, the line naming what is on screen rung. Knows nothing of either kind — it lists `ContentsEntry` values and hands a chosen line back.
+- `ImageSidebarView.swift` (~210) — thumbnail column, under its own `Images` title; the cards are the shared ones, and what it adds is the asset store, the context menu and the double click that opens the file.
+- `ContentsSidebarView.swift` (~275) — the same column for a book: its table of contents, indented by nesting, the line naming what is on screen rung, under `Contents`. Knows nothing of the kind — it lists `ContentsEntry` values and hands a chosen line back.
+- `PageListSidebarView.swift` (~225) — and the same column for a document: its pages under `Pages`, one shared card each, the page in front washed and followed, thumbnails asked of a `PageListSource` only as the cards come into view.
+- `SidebarCards.swift` (~245) — what the three columns are made of: `SidebarCard` (the metrics), `SidebarSectionHeader` (the Finder-shaped title at the top of a column) and `SidebarCardItemView` (the white card, its shadow, its selection wash and its caption).
 - `ChipHighlight.swift` (~50) — which thumbnails match the caret/selection.
 - `NoteSearch.swift` (~100) — the search itself, `NoteSearchMatch`; the panel's `.search` mode draws what it returns.
 
@@ -122,7 +124,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `ExternalChangePill.swift` (~90) — "Changed on disk · Reload / Keep mine".
 
 ### Preview column and renderers
-- `PreviewContent.swift` (~385) — `PreviewContentKind` (markdown/latex/html/pdf/image/epub/sql/csv/rtf), `ContentsEntry` (one line of a table of contents), the `PreviewContent` protocol every content view adopts (`show`, zoom, find, `rememberedPosition`, `rememberedScroll`, `footerStatus`, `contentsEntries` / `currentContentsLine` / `goToContentsLine`, `onStateChange`, `onBlockClick` and `onSourceReveal` — a click that takes the caret with it and one that only moves it — `onDropFiles`), and `PreviewFileDrop` — the drop from the Finder every view in the column answers the same way.
+- `PreviewContent.swift` (~430) — `PreviewContentKind` (markdown/latex/html/pdf/image/epub/sql/csv/rtf), `ContentsEntry` (one line of a table of contents), `PageListSource` (a document read page by page: count, page in front, go to one, draw one), the `PreviewContent` protocol every content view adopts (`show`, zoom, find, `rememberedPosition`, `rememberedScroll`, `footerStatus`, `contentsEntries` / `currentContentsLine` / `goToContentsLine`, `pageList`, `onStateChange`, `onBlockClick` and `onSourceReveal` — a click that takes the caret with it and one that only moves it — `onDropFiles`), and `PreviewFileDrop` — the drop from the Finder every view in the column answers the same way.
 - `PreviewPaneView.swift` (~280) — holds one content view at a time; `panes` for tests; `onDropFiles` goes to every content view and to zen's drag band, so the whole column is a tab target.
 - `RenderedPreviewView.swift` (~670) — base class for rendered text panes (blocks, band, click-back, find, frozen wrap width).
 - `MarkdownPreviewView.swift` (17) / `LaTeXPreviewView.swift` (21) — the two subclasses.
@@ -133,7 +135,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `MarkdownMath.swift` (~400) — `$…$` lifted out before parsing. `MathParser.swift` (~575), `MathLayout.swift` (~720), `MathAttachment.swift` (~40) — Nota's own formula layout.
 - `LaTeXParser.swift` (~1360) — `.tex` → blocks. `LaTeXRenderer.swift` (~480) — blocks → attributed string.
 - `HTMLPreviewView.swift` (~820) — WebKit page under `nota-file://`, scroll memory (pixels and fraction), `showPage(ofTab:at:…)` for EPUB chapters, chapter-key script, and the dark-mode reader theme a book asks for (`appliesReaderTheme`, `readerThemeCSS`).
-- `PDFPreviewView.swift` (~540) — PDFKit viewer tab, and `PDFOutlineContents` (`outlineRoot` walked depth first into `ContentsEntry` lines). `ImagePreviewView.swift` (~240) — picture tab.
+- `PDFPreviewView.swift` (~590) — PDFKit viewer tab, and `PDFPageThumbnails` (pages drawn small on one serial queue, from a second `PDFDocument` of the file, cached per document for the sidebar's page list). No outline: a PDF's sidebar is its pages. `ImagePreviewView.swift` (~240) — picture tab.
 - `EPUBBook.swift` (~425) — unpack (ditto), container/OPF/spine/nav/NCX parsing, `contentsEntries`, `contentsLine(ofChapter:)`. `EPUBPreviewView.swift` (~300) — chapter viewer; no floating chapter bar.
 - `RTFPreviewView.swift` (~430) — the rich-text viewer tab: `NSAttributedString(url:…)` into a read-only, selectable
   `NSTextView` at the editor's margin, the document's own fonts and colours kept (black body text swapped for
@@ -188,7 +190,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `MarkdownPreviewTests.swift` (~140) — preview modes, split, picker rows, the ⇧⌘F search dialog, sidebar.
 - `CornerSlotTests.swift` — which control the corner slot shows per tab kind, and the JSON button's edit.
 - `JSONFormatTests.swift` — the walker: order, escapes, empties, unicode, pretty detection, error line.
-- `HTMLPreviewTests.swift`, `PDFTests.swift`, `ImageTests.swift`, `EPUBTests.swift`, `RTFTests.swift` — the viewer tabs, including the contents sidebar each of them fills (an RTF has none).
+- `HTMLPreviewTests.swift`, `PDFTests.swift`, `ImageTests.swift`, `EPUBTests.swift`, `RTFTests.swift` — the viewer tabs, including the sidebar each of them fills (an RTF has none). `PDFTests` covers the page list: the title over it, the cards and their captions, a click going to a page, the ring following the pages, the thumbnails landing off a background queue, two documents of the same length not sharing a list, and a document with bookmarks listing pages just the same.
 - `CSVPreviewTests.swift` (~685) — the table: what counts as one, the scanner's every case (quotes, escapes, a
   record over two lines, CRLF, ragged rows, a blank header cell, header-only and empty files, a BOM, tabs), paging,
   sorting numerically and as text, the header click through `NSTableHeaderView`, refresh keeping the sort and the

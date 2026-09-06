@@ -12,7 +12,7 @@ import PDFKit
 /// Nothing here is a view of a note. There are no blocks to click, no source
 /// to jump back to and no band to light; the only thing it tells the window
 /// about is which page is in front, which is the one thing worth keeping.
-final class PDFPreviewView: NSView, PreviewContent {
+final class PDFPreviewView: NSView, PreviewContent, PageListSource {
 
     private let pdfView = NotaPDFView()
     /// Shown instead of the document when the file has gone — deleted while
@@ -148,6 +148,7 @@ final class PDFPreviewView: NSView, PreviewContent {
         // Read before the document goes in: installing one lands on its first
         // page, and the page we are about to restore must not be that.
         let page = note.selectionLocation
+        documentURL = note.fileURL
         show(document, missingName: document == nil ? note.title : nil)
         // Only when it is not already there: this is asked again on a resize
         // and a settings change, and going to the page you are on would jump
@@ -170,9 +171,6 @@ final class PDFPreviewView: NSView, PreviewContent {
             // being taken out, so the search goes with it.
             findSession.close()
             pdfView.document = document
-            // And a fresh outline, walked once here rather than on every
-            // question the sidebar asks.
-            outline = PDFOutlineContents(of: document)
             // A fresh document is a fresh page size: the fit the last one
             // was drawn at says nothing about this one.
             fittedSize = .zero
@@ -188,32 +186,65 @@ final class PDFPreviewView: NSView, PreviewContent {
     /// How many pages there are, and none at all when there is no document.
     var pageCount: Int { pdfView.document?.pageCount ?? 0 }
 
-    // MARK: - The document's own outline
+    // MARK: - The document's own pages
 
-    /// The outline of the document in the pane, read once when the document
-    /// goes in. Walking `outlineRoot` costs a traversal of the whole tree and
-    /// nothing about it changes while the tab is open, so it is not walked
-    /// again on every scroll.
-    private var outline = PDFOutlineContents()
+    /// The file the document in the pane was read from, which is what its
+    /// thumbnails are drawn from — see `PDFPageThumbnails`.
+    private var documentURL: URL?
 
-    /// What the sidebar lists for a PDF: its outline, flattened. A document
-    /// with none lists nothing, which is what keeps the column away.
-    var contentsEntries: [ContentsEntry] { outline.entries }
+    /// The thumbnails already drawn, per document rather than per pane: one
+    /// pane serves every PDF tab in the window, so a trip through another tab
+    /// and back must not throw a document's pages away and draw them again.
+    /// Weak keys, so they go when the tab that held the document closes.
+    private let thumbnailCaches
+        = NSMapTable<PDFDocument, PDFPageThumbnails>.weakToStrongObjects()
 
-    /// Which line names the page in front — the last entry landing on or
-    /// before it, since an outline names where a section starts and the
-    /// reader is inside the one they have most recently passed.
-    var currentContentsLine: Int? { outline.line(forPage: currentPageIndex) }
+    /// What the sidebar lists a document's pages from. A pane with no
+    /// document in it has none, which is what keeps the column away from a
+    /// file that has gone.
+    var pageList: PageListSource? { pageCount > 0 ? self : nil }
 
-    /// A line of the outline, chosen in the sidebar: the document goes to the
-    /// destination the entry names, which is a point on a page rather than
-    /// the top of it. An entry with no destination has nowhere to go.
-    func goToContentsLine(_ line: Int) {
-        guard let destination = outline.destination(ofLine: line) else { return }
-        pdfView.go(to: destination)
-        // `go(to:)` moves the page without a `PDFViewPageChanged` of its own
-        // in every case, so where the tab is left is reported by hand.
+    /// The document in the pane, as something a column can compare.
+    var pageListIdentity: AnyHashable {
+        ObjectIdentifier(pdfView.document ?? PDFDocument())
+    }
+
+    /// A page chosen in the column: the top of it, which is what was asked
+    /// for.
+    func goToPage(_ index: Int) {
+        guard let document = pdfView.document, document.pageCount > 0,
+              let page = document.page(at: min(max(index, 0), document.pageCount - 1))
+        else { return }
+        installedPage = max(index, 0)
+        isInstalling = true
+        pdfView.go(to: page)
+        isInstalling = false
+        // `go(to:)` does not always carry a `PDFViewPageChanged` of its own,
+        // and the one it does carry is swallowed above, so where the tab is
+        // left is reported by hand.
         onPositionChange?(currentPageIndex)
+    }
+
+    func thumbnail(forPage index: Int, completion: @escaping (NSImage?) -> Void) {
+        guard let thumbnails else { return completion(nil) }
+        thumbnails.thumbnail(forPage: index, completion: completion)
+    }
+
+    /// The cache for the document in the pane, made the first time it is
+    /// asked for.
+    private var thumbnails: PDFPageThumbnails? {
+        guard let document = pdfView.document, let url = documentURL else { return nil }
+        if let existing = thumbnailCaches.object(forKey: document) { return existing }
+        let made = PDFPageThumbnails(url: url)
+        thumbnailCaches.setObject(made, forKey: document)
+        return made
+    }
+
+    /// Runs once every thumbnail asked for so far has landed — the tests'
+    /// only way to wait for a background queue without a sleep.
+    func whenThumbnailsSettleForTesting(_ body: @escaping () -> Void) {
+        guard let thumbnails else { return body() }
+        thumbnails.whenSettled(body)
     }
 
     // MARK: - How big the page is drawn
@@ -390,73 +421,85 @@ final class PDFPreviewView: NSView, PreviewContent {
     }
 }
 
-// MARK: - The outline, flattened
+// MARK: - The pages, drawn small
 
-/// A PDF's own outline — its bookmarks, the thing every other reader puts in a
-/// drawer down the side — read into the shape the contents column lists.
+/// A document's pages as thumbnails: drawn off the main thread, handed back on
+/// it, and kept for as long as the document is open.
 ///
-/// PDFKit hands it over as a tree hanging off `PDFDocument.outlineRoot`, whose
-/// own node is a holder rather than an entry: its children are the top level.
-/// Walking it depth first is what makes the flattened list read in the order
-/// the document does, and the depth of the walk is the level the sidebar
-/// indents by — the same shape a book's chapters arrive in, so one column
-/// lists both without knowing which it has.
+/// It reads the file again rather than borrowing the `PDFDocument` the pane is
+/// drawing from. PDFKit's objects are not safe to touch from two threads at
+/// once, and the pane's document is being drawn, searched and scrolled on the
+/// main one the whole time a page list is filling in; a copy of its own, only
+/// ever touched on this one serial queue, is the cheap way to be sure. A
+/// `PDFDocument` parses lazily, so the second copy costs a file handle and the
+/// pages actually asked for.
 ///
-/// Everything is read once, when the document goes into the pane. A
-/// `PDFDestination` holds a page, and asking a page for its index means asking
-/// the document; doing that per scroll for every entry of a long outline is a
-/// traversal a scroll cannot afford.
-struct PDFOutlineContents {
-    /// The lines, in the order the document reads.
-    private(set) var entries: [ContentsEntry] = []
-    /// Where each of them goes, in the same order.
-    private var destinations: [PDFDestination?] = []
-    /// And which page that is, so the line naming the page in front is found
-    /// by comparing numbers rather than by asking PDFKit again.
-    private var pages: [Int?] = []
+/// Nothing is drawn until somebody asks for it, and the column asks only for
+/// the cards being looked at. A five-hundred-page document therefore opens at
+/// the cost of a screenful, and the rest arrive as it is scrolled.
+final class PDFPageThumbnails {
+    /// Drawn at twice the card's size, so the picture is a Retina one.
+    private static let renderScale: CGFloat = 2
 
-    /// An empty outline, which is what a pane with no document in it has.
-    init() { }
+    private let url: URL
+    private let queue = DispatchQueue(
+        label: "app.nota.pdf-thumbnails", qos: .userInitiated
+    )
 
-    init(of document: PDFDocument?) {
-        guard let document, let root = document.outlineRoot else { return }
-        walk(root, level: 0, in: document)
-    }
+    /// Only ever touched on `queue`.
+    private lazy var document: PDFDocument? = PDFDocument(url: url)
 
-    /// Depth first, the root itself skipped: `outlineRoot` is a holder with no
-    /// label of its own, so level 1 is its children.
-    private mutating func walk(_ node: PDFOutline, level: Int, in document: PDFDocument) {
-        for index in 0 ..< node.numberOfChildren {
-            guard let child = node.child(at: index) else { continue }
-            // An entry with no label is one the document did not name; there
-            // is nothing to list, but its children may still be worth
-            // listing, so the walk goes on through it at the same level.
-            let label = child.label ?? ""
-            if !label.isEmpty {
-                entries.append(
-                    ContentsEntry(level: level + 1, title: label, line: entries.count)
-                )
-                destinations.append(child.destination)
-                pages.append(child.destination?.page.map { document.index(for: $0) })
+    /// Only ever touched on the main thread.
+    private var cache: [Int: NSImage] = [:]
+    private var inFlight: Set<Int> = []
+
+    init(url: URL) { self.url = url }
+
+    /// The page drawn small. A page already drawn answers at once, on the
+    /// caller's own thread; anything else is queued and answered on the main
+    /// one. Asking again for a page already being drawn is not a second
+    /// render and gets no second answer — the first one is on its way.
+    func thumbnail(forPage index: Int, completion: @escaping (NSImage?) -> Void) {
+        if let image = cache[index] { return completion(image) }
+        guard !inFlight.contains(index) else { return }
+        inFlight.insert(index)
+        let box = NSSize(
+            width: SidebarCard.squareSize * Self.renderScale,
+            height: SidebarCard.squareSize * Self.renderScale
+        )
+        queue.async { [weak self] in
+            guard let self else { return }
+            let image = Self.render(page: index, of: self.document, fitting: box)
+            DispatchQueue.main.async {
+                self.inFlight.remove(index)
+                if let image { self.cache[index] = image }
+                completion(image)
             }
-            walk(child, level: label.isEmpty ? level : level + 1, in: document)
         }
     }
 
-    func destination(ofLine line: Int) -> PDFDestination? {
-        destinations.indices.contains(line) ? destinations[line] : nil
+    /// Runs once everything asked for so far has been drawn and handed over.
+    /// The queue is serial and every answer is posted to the main thread from
+    /// it, so a block put on the back of both queues in turn is behind all of
+    /// them.
+    func whenSettled(_ body: @escaping () -> Void) {
+        queue.async { DispatchQueue.main.async(execute: body) }
     }
 
-    /// The last entry landing on or before a page. An outline names where a
-    /// section begins, so the reader is inside the one they most recently
-    /// passed — and inside nothing at all until they have passed the first.
-    func line(forPage page: Int) -> Int? {
-        var found: Int?
-        for (line, entryPage) in pages.enumerated() {
-            guard let entryPage, entryPage != NSNotFound, entryPage <= page else { continue }
-            found = line
-        }
-        return found
+    private static func render(
+        page index: Int, of document: PDFDocument?, fitting box: NSSize
+    ) -> NSImage? {
+        guard let document, index >= 0, index < document.pageCount,
+              let page = document.page(at: index) else { return nil }
+        let image = page.thumbnail(of: box, for: .cropBox)
+        guard image.size.width > 1, image.size.height > 1 else { return nil }
+        // Half the size it was drawn at, so it is a 2× picture on the card
+        // rather than one twice as big.
+        image.size = NSSize(
+            width: image.size.width / Self.renderScale,
+            height: image.size.height / Self.renderScale
+        )
+        return image
     }
 }
 

@@ -361,6 +361,12 @@ final class EPUBTests: XCTestCase {
                        "a section sits one step in from its chapter")
         XCTAssertEqual(controller.contentsSidebarView.selectedRowTitle, "1. A Book in a Tab",
                        "the chapter on screen is the line that is rung")
+        XCTAssertEqual(controller.contentsSidebarView.headerTitle, "Contents",
+                       "the one word saying what the column is listing")
+        XCTAssertTrue(controller.pageListSidebarView.isHidden,
+                      "a book is read by its chapters; it has no pages to lay out")
+        XCTAssertEqual(controller.sidebarListTitle, "Table of Contents",
+                       "and that is the longer name the View item carries")
     }
 
     /// The Traditional Chinese example: a name in Han characters on disk, a
