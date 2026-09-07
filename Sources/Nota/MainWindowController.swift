@@ -1095,8 +1095,8 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         previewColumn.onTaskToggle = { [weak self] source in
             self?.toggleTask(inSource: source)
         }
-        previewColumn.onSourceReveal = { [weak self] source in
-            self?.revealSource(source)
+        previewColumn.onSourceReveal = { [weak self] sources in
+            self?.revealSource(sources)
         }
         // ⌘F in reading mode opens a bar over the content, in the corner the
         // column's own mode control floats in.
@@ -4950,9 +4950,11 @@ extension MainWindowController {
 
     /// The content pointed at a piece of the source without asking for the
     /// keyboard — a row of a dump clicked, which stands over the `INSERT`
-    /// that wrote it; a row of a tree, which stands over its member. The
-    /// source is *selected* and brought into view, and that is all: the pane
-    /// keeps the focus, so the arrows go on walking it.
+    /// that wrote it; a row of a tree, which stands over its member; a column
+    /// of a grid picked out of many rows, which is one range per row and not
+    /// the block of lines it sits beside. Every range is *selected* and
+    /// brought into view, and that is all: the pane keeps the focus, so the
+    /// arrows go on walking it.
     ///
     /// A reveal is something to look at; a jump — `goToSource`, the render's
     /// own click — is somewhere to type. That is the whole difference between
@@ -4961,17 +4963,29 @@ extension MainWindowController {
     /// keystroke.
     ///
     /// Split only, since the editor is only on screen there.
-    private func revealSource(_ source: NSRange) {
-        guard let note = currentNote, installedPreviewMode == .split else { return }
+    private func revealSource(_ sources: [NSRange]) {
+        guard let note = currentNote, installedPreviewMode == .split, !sources.isEmpty
+        else { return }
         let length = note.storage.length
-        let location = max(0, min(source.location, length))
-        let end = max(location, min(NSMaxRange(source), length))
+        let clamped = sources.map { source -> NSRange in
+            let location = max(0, min(source.location, length))
+            let end = max(location, min(NSMaxRange(source), length))
+            return NSRange(location: location, length: end - location)
+        }
         if preferences.vimMode, vimEngine.mode != .normal { vimEngine.enterNormalMode() }
-        textView.setSelectedRange(NSRange(location: location, length: end - location))
+        if let only = clamped.first, clamped.count == 1 {
+            textView.setSelectedRange(only)
+        } else {
+            textView.selectedRanges = clamped.map { NSValue(range: $0) }
+        }
         // Vim's rule that the caret may not sit past the last character is
-        // about a caret; a selection it would quietly throw away.
-        if preferences.vimMode, end == location { vimEngine.clampCaret() }
-        revealInEditor(textView.selectedRange())
+        // about a caret; a selection it would quietly throw away. Several
+        // ranges are never a caret, so this only ever asks about the one.
+        if preferences.vimMode, clamped.count == 1, clamped[0].length == 0 {
+            vimEngine.clampCaret()
+        }
+        guard let span = SQLGridView.span(of: clamped) else { return }
+        revealInEditor(span)
     }
 
     /// A heading chosen from the ⇧⌘J switcher's `@` list (Todo 9): the caret

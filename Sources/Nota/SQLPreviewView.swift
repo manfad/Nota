@@ -119,7 +119,7 @@ final class SQLPreviewView: NSView, PreviewContent {
     /// Where the row under a clicked cell is written in the file. Split only,
     /// which is what `sendsBlockClicks` says: in reading there is no editor on
     /// screen to point at.
-    var onSourceReveal: ((NSRange) -> Void)?
+    var onSourceReveal: (([NSRange]) -> Void)?
     /// Mirrors the render's own: true in split, where the grid is a way into
     /// the text beside it, and false in reading, where the database is simply
     /// what is being read.
@@ -975,28 +975,30 @@ final class SQLPreviewView: NSView, PreviewContent {
 
     /// And whatever is picked out, whatever shape it is: a run of whole rows
     /// from the `#` gutter or from Space, a rectangle a drag or a ⇧-arrow grew.
-    /// One range over the lot — from the earliest thing selected to the latest
-    /// — the way a selection over three paragraphs of text is one range. A run
-    /// of whole rows is the tuples they were written as, and not the values
-    /// inside them.
+    /// Whole rows are one span over the lot — the tuples they were written
+    /// as, and not the values inside them, from the earliest to the latest —
+    /// the way a selection over three paragraphs of text is one range. A
+    /// rectangle is one span *per row*: a column picked out of the grid is
+    /// that column, and not the block of lines it happens to sit beside.
     private func revealSource(of selection: SQLGridView.Selection) {
-        guard sendsBlockClicks, let onSourceReveal,
-              let range = sourceRange(of: selection)
-        else { return }
-        onSourceReveal(range)
+        guard sendsBlockClicks, let onSourceReveal else { return }
+        let ranges = sourceRanges(of: selection)
+        guard !ranges.isEmpty else { return }
+        onSourceReveal(ranges)
     }
 
-    private func sourceRange(of selection: SQLGridView.Selection) -> NSRange? {
+    private func sourceRanges(of selection: SQLGridView.Selection) -> [NSRange] {
         guard let dump, let page, let rowids = page.rowids, let table = page.rowidTable
-        else { return nil }
+        else { return [] }
         switch selection {
         case .none:
-            return nil
+            return []
         case .rows(let rows):
-            return SQLGridView.span(of: rows.compactMap { row -> NSRange? in
+            guard let span = SQLGridView.span(of: rows.compactMap { row -> NSRange? in
                 guard row >= 0, row < rowids.count else { return nil }
                 return dump.sourceMap.range(ofRowid: rowids[row], inTable: table)
-            })
+            }) else { return [] }
+            return [span]
         case .cells(let rows, let columns):
             // Asked of the schema once rather than once per cell: a drag over
             // a rectangle would otherwise put `PRAGMA table_info` to SQLite
@@ -1005,7 +1007,7 @@ final class SQLPreviewView: NSView, PreviewContent {
             var spans: [NSRange] = []
             for row in rows where row >= 0 && row < rowids.count {
                 let rowid = rowids[row]
-                var placed = false
+                var fields: [NSRange] = []
                 for column in columns {
                     // A column of the grid is one past its column of the page:
                     // the `#` gutter is the first of them.
@@ -1016,17 +1018,18 @@ final class SQLPreviewView: NSView, PreviewContent {
                               column: page.columns[index].name, tableColumns: tableColumns
                           )
                     else { continue }
-                    spans.append(range)
-                    placed = true
+                    fields.append(range)
                 }
                 // A cell that cannot be placed — a computed column, a name in
                 // neither list — falls back to the whole tuple and never to
-                // nothing.
-                if !placed, let tuple = dump.sourceMap.range(ofRowid: rowid, inTable: table) {
+                // nothing. Otherwise this row's own fields, spanned together.
+                if let span = SQLGridView.span(of: fields) {
+                    spans.append(span)
+                } else if let tuple = dump.sourceMap.range(ofRowid: rowid, inTable: table) {
                     spans.append(tuple)
                 }
             }
-            return SQLGridView.span(of: spans)
+            return spans
         }
     }
 

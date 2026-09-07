@@ -996,14 +996,27 @@
   when it did not, so a query that asked for its columns in any order still lands on the right one. A cell that
   cannot be placed — a computed column of a query, a name in neither list, a tuple that will not read — is the whole
   tuple instead, and never nothing.
-- And whatever else is picked out, in the same one call (done 2026-09-07, Done 49). A run of whole rows — a click in
-  the `#` gutter, a ⇧-click, Space — is the tuples those rows were written as, and not the values inside them; a
-  rectangle a drag or a ⇧-arrow grew is the values it crossed. Several of anything is *one* range, from the earliest
-  start to the latest end with whatever lies between them included, the way a selection over three paragraphs of text
-  is one range. The editor follows a drag rather than staying on the cell the press landed on: every mouse event that
-  actually moves an edge says so again, and one that moves nothing says nothing. The schema is asked once per
-  selection rather than once per cell, so a drag over a rectangle does not put a `PRAGMA table_info` to SQLite for
-  every cell it crosses. Same rules as the single click throughout: split only, and the grid keeps the keyboard.
+- Whatever dialect wrote the row (fixed 2026-09-07, Done 51). A `pg_dump`'s `COPY … FROM stdin` row is not SQL at
+  all — no parentheses, no quotes, no column list anywhere near it — so its fields are placed by the tabs that
+  separate them: a field is exactly what stands between two tabs, `\N` and an empty one included, named by the
+  header's own list when it gave one and by the table's own order when it gave none, and a line too short for the
+  column asked for is the whole row, the same fallback everything else takes. A `mysqldump`'s `INSERT` is rewritten
+  on its way into SQLite, and a rewritten insert is an insert: its rows go on the map like every other row's, which
+  they did not before, so clicking one of them pointed at nothing at all. Its `'Daniel O\'Brien'` is read as MySQL
+  means it too — the backslash takes the quote after it with it — which is *not* how SQLite or a `pg_dump` with
+  `standard_conforming_strings` writes a string, so the map is told which dialect it is reading rather than
+  guessing: read it the wrong way round and every value after the escape lands somewhere it is not.
+- And whatever else is picked out, in the same one call (done 2026-09-07, Done 49; a column across many rows fixed
+  2026-09-07, Done 51). A run of whole rows — a click in the `#` gutter, a ⇧-click, Space — is the tuples those rows
+  were written as, and not the values inside them, as *one* span from the earliest start to the latest end with
+  whatever lies between them included, the way a selection over three paragraphs of text is one range. A rectangle a
+  drag or a ⇧-arrow grew is one span *per row*: each row's own fields, spanned together with the separators between
+  them, exactly as a single-row rectangle always was — so a column picked out of the grid is that column in the
+  editor, and not the block of lines between its first row and its last, which one span over the lot used to make of
+  it. The editor follows a drag rather than staying on the cell the press landed on: every mouse event that actually
+  moves an edge says so again, and one that moves nothing says nothing. The schema is asked once per selection rather
+  than once per cell, so a drag over a rectangle does not put a `PRAGMA table_info` to SQLite for every cell it
+  crosses. Same rules as the single click throughout: split only, and the grid keeps the keyboard.
 - A query's rows jump too, when they are one table's rows (decided 2026-09-05, Todo 6-C). The last statement of the
   box is read once by `SQLQueryRewrite` — loosely, since SQLite has already said the text is good — and if it is
   plainly `SELECT <list> FROM <one table> [WHERE / ORDER BY / LIMIT …]` the page is asked of that query with the
@@ -1143,13 +1156,15 @@
   record's range begins where the record begins. A cell that cannot be placed falls back to the whole record and
   never to nothing: a ragged row that never wrote the field the column stands for, and a click with no column under
   it. The header row is unchanged: a click there sorts.
-- And whatever else is picked out, in the same one call (done 2026-09-07, Done 49). A run of whole rows — a click in
-  the `#` gutter, a ⇧-click, Space — is `sources`, the records' own lines; a rectangle a drag or a ⇧-arrow grew is
-  the `fieldSources` it crossed. Several of anything is *one* range, from the earliest start to the latest end with
-  whatever lies between them included, the way a selection over three paragraphs of text is one range. The editor
-  follows a drag rather than staying on the cell the press landed on: every mouse event that actually moves an edge
-  says so again, and one that moves nothing says nothing. Same rules as the single click: split only, and the grid
-  keeps the keyboard.
+- And whatever else is picked out, in the same one call (done 2026-09-07, Done 49; a column across many rows fixed
+  2026-09-07, Done 51). A run of whole rows — a click in the `#` gutter, a ⇧-click, Space — is `sources`, the
+  records' own lines, as *one* span from the earliest start to the latest end with whatever lies between them
+  included, the way a selection over three paragraphs of text is one range. A rectangle a drag or a ⇧-arrow grew is
+  one span *per row* — each row's own `fieldSources` it crossed, spanned together with the separators between them,
+  exactly as a single-row rectangle always was — so a column picked out of the grid is that column in the editor,
+  and not the block of lines between its first row and its last. The editor follows a drag rather than staying on
+  the cell the press landed on: every mouse event that actually moves an edge says so again, and one that moves
+  nothing says nothing. Same rules as the single click: split only, and the grid keeps the keyboard.
 - Off the main thread, always: the read is asked on a serial queue and answered back on the main one carrying a
   token, so an answer about the file two keystrokes ago is dropped rather than drawn. An ordinary file is read again
   ~150 ms after typing stops, on the same debounce the Markdown render uses. A file past the `BigFile` threshold is
@@ -1372,6 +1387,29 @@
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
 
+51. **A column picked out of a grid is that column, not the lines it sits on (done 2026-09-07).** Dragging a
+    rectangle over one column across many rows — a `Name` column, ten rows down — made the editor light every line
+    in between: `sourceRange(of:)`, in both the `.csv` and the `.sql` pane, folded a selection of any shape into one
+    span from its earliest thing to its latest, which is right for a run of whole rows and wrong for a rectangle,
+    where the rows between two picked-out cells were never picked out at all. `onSourceReveal` (`PreviewContent` and
+    every adopter) now carries an array of ranges rather than one: whole rows stay a single span, unchanged, and a
+    rectangle is one span *per row* — each row's own fields spanned together with the separators between them,
+    exactly as a single-row rectangle always was. `MainWindowController.revealSource` sets
+    `NSTextView.selectedRanges` for more than one range, keeps `setSelectedRange` for one so nothing else about a
+    plain click changes, and scrolls to the span of the whole selection so a column too tall for the screen shows
+    what it can. Every other adopter — the render's block click, a dump's or a tree's single-row reveal, an HTML
+    page's pressed element — hands back the one range it always did, now wrapped in an array of one.
+
+    The same gesture over the two dialects' own dumps pointed at the wrong thing, or at nothing, so both are fixed
+    beside it. A `pg_dump`'s rows are `COPY … FROM stdin` lines rather than tuples, which the tuple reader could
+    make nothing of, so every cell of one fell back to the whole row: `SQLSourceMap.Statement` now says which shape
+    it was written in (`Form.copyRow`, carrying the header's own column list), and a `COPY` row's fields are placed
+    by the tabs that separate them — `\N` included, since that is what the file says there. A `mysqldump`'s inserts
+    are rewritten before SQLite sees them, and the rewrite branch recorded no table and no rowids at all, so the map
+    never claimed those rows and a click on one did nothing; both branches now take down what the insert made
+    through one `SQLDump.insertRecord`. And MySQL's `'Daniel O\'Brien'` needed the scanner to know that a backslash
+    inside a literal escapes what follows it, which standard SQL does not — `SQLSourceMap.backslashEscapes`, set
+    from the dump's own dialect, since guessing either way puts every value after the escape somewhere it is not.
 50. **Drag selects text in the render; a press in the page reveals its tag (done 2026-09-07).** Two halves of the same
     complaint: the preview column was readable and not usable. In a `.md` or `.tex` render every press was a block
     click, so there was no way to drag a sentence out of the rendered page — the gesture was spent before it began.

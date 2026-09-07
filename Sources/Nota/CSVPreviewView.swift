@@ -103,7 +103,7 @@ final class CSVPreviewView: NSView, PreviewContent {
     /// Where the row under a clicked cell is written in the file. Split only,
     /// which is what `sendsBlockClicks` says: in reading there is no editor on
     /// screen to point at.
-    var onSourceReveal: ((NSRange) -> Void)?
+    var onSourceReveal: (([NSRange]) -> Void)?
     /// Mirrors the render's own: true in split, where the grid is a way into
     /// the text beside it, and false in reading, where the table is simply
     /// what is being read.
@@ -678,30 +678,35 @@ final class CSVPreviewView: NSView, PreviewContent {
 
     /// And whatever is picked out, whatever shape it is: a run of whole rows
     /// from the `#` gutter or from Space, a rectangle a drag or a ⇧-arrow grew.
-    /// One range over the lot — from the earliest thing selected to the latest
-    /// — the way a selection over three paragraphs of text is one range.
+    /// Whole rows are one span over the lot — from the earliest record to the
+    /// latest, newlines between them included, the way a selection over three
+    /// paragraphs of text is one range. A rectangle is one span *per row*: a
+    /// column picked out of the grid is that column, and not the block of
+    /// lines it happens to sit beside.
     private func revealSource(of selection: SQLGridView.Selection) {
-        guard sendsBlockClicks, let onSourceReveal,
-              let range = sourceRange(of: selection)
-        else { return }
-        onSourceReveal(range)
+        guard sendsBlockClicks, let onSourceReveal else { return }
+        let ranges = sourceRanges(of: selection)
+        guard !ranges.isEmpty else { return }
+        onSourceReveal(ranges)
     }
 
-    private func sourceRange(of selection: SQLGridView.Selection) -> NSRange? {
-        guard let page else { return nil }
+    private func sourceRanges(of selection: SQLGridView.Selection) -> [NSRange] {
+        guard let page else { return [] }
         switch selection {
         case .none:
-            return nil
+            return []
         case .rows(let rows):
             // A whole row is the record as it is written, over as many lines
-            // as it took.
-            return SQLGridView.span(of: rows.compactMap { row in
+            // as it took. Whole rows stay one span: nobody asked for one row
+            // apart from the next.
+            guard let span = SQLGridView.span(of: rows.compactMap { row in
                 row >= 0 && row < page.sources.count ? page.sources[row] : nil
-            })
+            }) else { return [] }
+            return [span]
         case .cells(let rows, let columns):
             var spans: [NSRange] = []
             for row in rows where row >= 0 && row < page.sources.count {
-                var placed = false
+                var fields: [NSRange] = []
                 for column in columns {
                     // A column of the grid is one past its column of the page:
                     // the `#` gutter is the first of them.
@@ -709,15 +714,21 @@ final class CSVPreviewView: NSView, PreviewContent {
                     guard index >= 0, row < page.fieldSources.count,
                           index < page.fieldSources[row].count
                     else { continue }
-                    spans.append(page.fieldSources[row][index])
-                    placed = true
+                    fields.append(page.fieldSources[row][index])
                 }
                 // The record is the fallback and never nothing: a ragged row
                 // that never wrote the fields the columns stand for lands on
-                // the whole of itself.
-                if !placed { spans.append(page.sources[row]) }
+                // the whole of itself. Otherwise this row's own fields — one
+                // or several adjacent columns, spanned together with the
+                // separators between them, exactly as a single-row rectangle
+                // always has.
+                if let span = SQLGridView.span(of: fields) {
+                    spans.append(span)
+                } else {
+                    spans.append(page.sources[row])
+                }
             }
-            return SQLGridView.span(of: spans)
+            return spans
         }
     }
 

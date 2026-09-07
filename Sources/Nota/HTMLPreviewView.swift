@@ -136,7 +136,7 @@ final class HTMLPreviewView: NSView, PreviewContent {
     /// can say where that element is written: the editor selects the tag and
     /// brings it into view, and the page keeps the keyboard it had. Never a
     /// block click — the page is not a render, and nobody asked to leave it.
-    var onSourceReveal: ((NSRange) -> Void)?
+    var onSourceReveal: (([NSRange]) -> Void)?
 
     /// Where the page on screen is written in the note beside it, when the
     /// page *is* the note beside it. Built once per load, from the same text
@@ -697,7 +697,7 @@ final class HTMLPreviewView: NSView, PreviewContent {
         guard let onSourceReveal, let sourceMap,
               let range = sourceMap.range(ofElementAt: index, tagNames: tagNames)
         else { return }
-        onSourceReveal(range)
+        onSourceReveal([range])
     }
 
     // MARK: - A field in the page

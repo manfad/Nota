@@ -130,7 +130,7 @@ final class GridFindTests: AppKitTestCase {
     @MainActor
     func testTheEditorsCaretFollowsTheMatch() throws {
         let (pane, window) = try makeCSVPane()
-        var revealed: [NSRange] = []
+        var revealed: [[NSRange]] = []
         pane.onSourceReveal = { revealed.append($0) }
         try show(makeNote(named: "People.csv", text: Self.people), in: pane)
         let grid = pane.gridForTesting
@@ -139,7 +139,7 @@ final class GridFindTests: AppKitTestCase {
         grid.performTextFinderAction(finderItem(.showFindInterface))
         type("paris", into: pane.findBarForTesting)
 
-        let range = try XCTUnwrap(revealed.last)
+        let range = try XCTUnwrap(revealed.last?.first)
         XCTAssertEqual((Self.people as NSString).substring(with: range), "Paris",
                        "the field the match is in, as it is written")
         XCTAssertTrue(window.firstResponder === pane.findBarForTesting.field
@@ -329,7 +329,7 @@ final class GridFindTests: AppKitTestCase {
     @MainActor
     func testAGutterClickRevealsTheWholeRecord() throws {
         let (pane, window) = try makeCSVPane()
-        var revealed: [NSRange] = []
+        var revealed: [[NSRange]] = []
         pane.onSourceReveal = { revealed.append($0) }
         try show(makeNote(named: "People.csv", text: Self.people), in: pane)
         pane.layoutSubtreeIfNeeded()
@@ -339,7 +339,8 @@ final class GridFindTests: AppKitTestCase {
         ))
 
         XCTAssertEqual(pane.gridForTesting.selection, .rows(IndexSet(integer: 1)))
-        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last), in: Self.people),
+        XCTAssertEqual(revealed.last?.count, 1, "a whole row is one span")
+        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last?.first), in: Self.people),
                        "2,Bo,Berlin", "the record's own line, and all of it")
     }
 
@@ -349,7 +350,7 @@ final class GridFindTests: AppKitTestCase {
     @MainActor
     func testAShiftClickRevealsTheSpanOfEveryRowInTheRun() throws {
         let (pane, window) = try makeCSVPane()
-        var revealed: [NSRange] = []
+        var revealed: [[NSRange]] = []
         pane.onSourceReveal = { revealed.append($0) }
         try show(makeNote(named: "People.csv", text: Self.people), in: pane)
         pane.layoutSubtreeIfNeeded()
@@ -363,17 +364,19 @@ final class GridFindTests: AppKitTestCase {
         ))
 
         XCTAssertEqual(grid.selection, .rows(IndexSet(integersIn: 0...2)))
-        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last), in: Self.people),
+        XCTAssertEqual(revealed.last?.count, 1, "a run of whole rows stays one span")
+        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last?.first), in: Self.people),
                        "1,Ada,Paris\n2,Bo,Berlin\n3,Cara,Paris")
     }
 
     /// The editor follows the drag rather than staying on the cell the press
     /// landed on: every mouse event that moves an edge of the rectangle says
-    /// so again, and the last of them covers the whole of it.
+    /// so again, and the last of them says the rectangle's own rows — one
+    /// range per row, and not one span smeared across the ones between.
     @MainActor
     func testTheEditorFollowsACellDragAcrossTheRectangle() throws {
         let (pane, window) = try makeCSVPane()
-        var revealed: [NSRange] = []
+        var revealed: [[NSRange]] = []
         pane.onSourceReveal = { revealed.append($0) }
         try show(makeNote(named: "People.csv", text: Self.people), in: pane)
         pane.layoutSubtreeIfNeeded()
@@ -382,7 +385,7 @@ final class GridFindTests: AppKitTestCase {
         grid.mouseDown(with: try XCTUnwrap(
             cellEvent(.leftMouseDown, in: grid, window: window, row: 0, column: 1)
         ))
-        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last), in: Self.people), "1",
+        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last?.first), in: Self.people), "1",
                        "the press is one cell, exactly as it was")
 
         grid.mouseDragged(with: try XCTUnwrap(
@@ -390,8 +393,10 @@ final class GridFindTests: AppKitTestCase {
         ))
 
         XCTAssertEqual(grid.selection, .cells(rows: 0...1, columns: 1...2))
-        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last), in: Self.people),
-                       "1,Ada,Paris\n2,Bo", "from the first field to the last")
+        XCTAssertEqual(revealed.last?.map { substring(of: $0, in: Self.people) },
+                       ["1,Ada", "2,Bo"],
+                       "one range per row — the id and name columns of each, not the city field "
+                           + "beside them, and never the two rows squeezed into one span")
 
         // A second event over the same cell is the same rectangle, and the
         // editor is not told the same thing twice.
@@ -413,7 +418,7 @@ final class GridFindTests: AppKitTestCase {
         INSERT INTO t VALUES ('five', 'six');
         """
         let (pane, window) = try makeSQLPane()
-        var revealed: [NSRange] = []
+        var revealed: [[NSRange]] = []
         pane.onSourceReveal = { revealed.append($0) }
         try show(makeNote(named: "T.sql", text: text), in: pane)
         pane.layoutSubtreeIfNeeded()
@@ -422,19 +427,21 @@ final class GridFindTests: AppKitTestCase {
         grid.mouseDown(with: try XCTUnwrap(
             cellEvent(.leftMouseDown, in: grid, window: window, row: 1, column: 0)
         ))
-        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last), in: text),
+        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last?.first), in: text),
                        "INSERT INTO t VALUES ('three', 'four');",
                        "the tuple the row was written as, not one value in it")
 
         grid.mouseDown(with: try XCTUnwrap(
             cellEvent(.leftMouseDown, in: grid, window: window, row: 2, column: 0, shift: true)
         ))
-        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last), in: text),
+        XCTAssertEqual(revealed.last?.count, 1, "a run of whole rows stays one span")
+        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last?.first), in: text),
                        "INSERT INTO t VALUES ('three', 'four');\n"
                            + "INSERT INTO t VALUES ('five', 'six');")
     }
 
-    /// And a drag over a dump's cells spans the values it crossed.
+    /// And a drag over a dump's cells is one span per row of the values it
+    /// crossed on that row — never one span reaching into the next row.
     @MainActor
     func testADumpsCellDragSpansTheValuesItCrossed() throws {
         let text = """
@@ -443,7 +450,7 @@ final class GridFindTests: AppKitTestCase {
         INSERT INTO t VALUES ('three', 'four');
         """
         let (pane, window) = try makeSQLPane()
-        var revealed: [NSRange] = []
+        var revealed: [[NSRange]] = []
         pane.onSourceReveal = { revealed.append($0) }
         try show(makeNote(named: "T.sql", text: text), in: pane)
         pane.layoutSubtreeIfNeeded()
@@ -452,15 +459,15 @@ final class GridFindTests: AppKitTestCase {
         grid.mouseDown(with: try XCTUnwrap(
             cellEvent(.leftMouseDown, in: grid, window: window, row: 0, column: 1)
         ))
-        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last), in: text), "'one'")
+        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last?.first), in: text), "'one'")
 
         grid.mouseDragged(with: try XCTUnwrap(
             cellEvent(.leftMouseDragged, in: grid, window: window, row: 1, column: 2)
         ))
         XCTAssertEqual(grid.selection, .cells(rows: 0...1, columns: 1...2))
-        XCTAssertEqual(substring(of: try XCTUnwrap(revealed.last), in: text),
-                       "'one', 'two');\nINSERT INTO t VALUES ('three', 'four'",
-                       "from the first value to the last, whatever lies between")
+        XCTAssertEqual(revealed.last?.map { substring(of: $0, in: text) },
+                       ["'one', 'two'", "'three', 'four'"],
+                       "one range per row — both columns of that row, and never another row's")
     }
 
     // MARK: - Whose ⌘F it is

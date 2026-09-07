@@ -118,18 +118,19 @@ final class TreeFindTests: AppKitTestCase {
     @MainActor
     func testTheEditorsCaretFollowsTheMatchedPart() throws {
         let pane = try makePane(showing: Self.settings)
-        var revealed: [NSRange] = []
+        var revealed: [[NSRange]] = []
         pane.onSourceReveal = { revealed.append($0) }
 
         pane.find.perform(.showFindInterface)
         type("nota", into: pane.find.bar)
-        XCTAssertEqual(revealed.map { source(Self.settings, $0) }, ["\"Nota\""],
-                       "a value match gives the value alone")
+        XCTAssertEqual(revealed.compactMap(\.first).map { source(Self.settings, $0) },
+                       ["\"Nota\""], "a value match gives the value alone")
 
         revealed = []
         type("window", into: pane.find.bar)
         XCTAssertEqual(revealed.count, 1)
-        let member = try XCTUnwrap(source(Self.settings, revealed[0]))
+        let range = try XCTUnwrap(revealed[0].first)
+        let member = try XCTUnwrap(source(Self.settings, range))
         XCTAssertTrue(member.hasPrefix("\"window\": {"),
                       "a key match gives the whole member, got \(member)")
     }

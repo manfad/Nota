@@ -195,13 +195,20 @@ protocol PreviewContent: NSView {
     /// the content keeps the focus it has. A range with no length is a caret,
     /// which is all a pane with nothing wider to point at can give.
     ///
+    /// One range per thing selected; a column of a grid is one range per row.
+    /// A whole row, a value, an element's tag: each of those is one span, so
+    /// the array holds one entry. A rectangle picked out of a grid over more
+    /// than one column is the one case with more than one thing selected —
+    /// each row's own fields, spanned on that row alone — because a column is
+    /// the column and not the block of lines it happens to sit beside.
+    ///
     /// A block click is a jump — the reader is done with the render and wants
     /// to type — so it takes the caret with it. A dump's row click is not: the
     /// grid is being walked cell by cell with the arrows, and a click that
     /// moved the keyboard into the editor would end the walk. Same map, other
     /// half of the gesture, so it is its own callback rather than a flag on
     /// the first one.
-    var onSourceReveal: ((NSRange) -> Void)? { get set }
+    var onSourceReveal: (([NSRange]) -> Void)? { get set }
 
     /// Lights the block the editor's caret is sitting in and brings it into
     /// view. Returns whether there was one to light.
@@ -388,7 +395,7 @@ extension PreviewContent {
         set { }
     }
 
-    var onSourceReveal: ((NSRange) -> Void)? {
+    var onSourceReveal: (([NSRange]) -> Void)? {
         get { nil }
         set { }
     }

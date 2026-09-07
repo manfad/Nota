@@ -215,6 +215,16 @@ final class SQLDump {
 
     // MARK: - Running the file
 
+    /// One statement's own place in the file while the run is still going:
+    /// byte offsets into the C buffer rather than the UTF-16 ranges the map
+    /// ends up holding, what the statement inserted, and which shape it was
+    /// written in. `sourceMap(of:in:backslashEscapes:)` turns a run's worth
+    /// of these into `SQLSourceMap.Statement`s in one pass.
+    private typealias Span = (
+        start: Int, end: Int, table: String?, rowids: ClosedRange<Int64>?,
+        form: SQLSourceMap.Statement.Form
+    )
+
     /// The tail loop: prepare one statement, run it, move on to whatever is
     /// left of the text, and stop at the first thing that will not go in.
     ///
@@ -234,7 +244,7 @@ final class SQLDump {
         // Byte offsets while the run is going — the C buffer is what the
         // cursor walks — and turned into the text's own UTF-16 offsets at the
         // end, in one pass.
-        var spans: [(start: Int, end: Int, table: String?, rowids: ClosedRange<Int64>?)] = []
+        var spans: [Span] = []
         var rowidTables: [String: Bool] = [:]
         // Whether the file has shown itself to be a MySQL dump yet (a
         // `LOCK TABLES`, a MySQL-only `SET`, or a `CREATE TABLE` with
@@ -389,7 +399,15 @@ final class SQLDump {
                                     return
                                 }
                             }
-                            spans.append((begin, start.distance(to: extentEnd), nil, nil))
+                            // A rewritten insert is an insert: its rows go
+                            // on the map like every other row's, read off
+                            // the statement as the *file* wrote it, since
+                            // that is what the ranges are into.
+                            let made = insertRecord(
+                                writtenBy: rawText, in: handle, rowidTables: &rowidTables
+                            )
+                            spans.append((begin, start.distance(to: extentEnd),
+                                          made.table, made.rowids, .statement))
                             cursor = extentEnd
                             continue
                         case .run:
@@ -426,28 +444,43 @@ final class SQLDump {
                     return
                 }
                 let end = tail.map { start.distance(to: $0) } ?? begin
-                var table: String?
-                var rowids: ClosedRange<Int64>?
-                if let name = SQLSourceMap.insertTable(in: text) {
-                    table = name
-                    let changes = Int64(sqlite3_changes(handle))
-                    // A `WITHOUT ROWID` table leaves `last_insert_rowid`
-                    // where it was, so its inserts are recorded with no
-                    // rowids at all rather than with somebody else's.
-                    let keepsRowids = rowidTables[name]
-                        ?? SQLDump.hasRowid(name, in: handle)
-                    rowidTables[name] = keepsRowids
-                    if changes > 0, keepsRowids {
-                        let last = sqlite3_last_insert_rowid(handle)
-                        rowids = (last - changes + 1)...last
-                    }
-                }
-                spans.append((begin, end, table, rowids))
+                let made = insertRecord(
+                    writtenBy: text, in: handle, rowidTables: &rowidTables
+                )
+                spans.append((begin, end, made.table, made.rowids, .statement))
                 guard let tail, tail != cursor else { return }
                 cursor = tail
             }
         }
-        return (failure, sourceMap(of: spans, in: sql))
+        return (failure, sourceMap(of: spans, in: sql, backslashEscapes: mysqlDetected))
+    }
+
+    /// What the statement just run put in, for the source map: the table an
+    /// `INSERT` named and the run of rowids it made — `sqlite3_changes` says
+    /// how many rows went in and `sqlite3_last_insert_rowid` says the last of
+    /// them, so the run is the pair read together, and it has to be asked the
+    /// moment the statement is done.
+    ///
+    /// A `WITHOUT ROWID` table leaves `last_insert_rowid` where it was, so
+    /// its inserts are recorded with no rowids at all rather than with
+    /// somebody else's; `rowidTables` remembers the answer, since the
+    /// question is the same for every insert into the same table.
+    ///
+    /// Both halves of the run ask this: the statement SQLite prepared for
+    /// itself, and the one `SQLDumpDialect` rewrote on the way in. A
+    /// mysqldump's `INSERT` is rewritten and is still an insert, and its rows
+    /// belong on the map beside everybody else's.
+    private static func insertRecord(
+        writtenBy text: String, in handle: OpaquePointer,
+        rowidTables: inout [String: Bool]
+    ) -> (table: String?, rowids: ClosedRange<Int64>?) {
+        guard let name = SQLSourceMap.insertTable(in: text) else { return (nil, nil) }
+        let changes = Int64(sqlite3_changes(handle))
+        let keepsRowids = rowidTables[name] ?? SQLDump.hasRowid(name, in: handle)
+        rowidTables[name] = keepsRowids
+        guard changes > 0, keepsRowids else { return (name, nil) }
+        let last = sqlite3_last_insert_rowid(handle)
+        return (name, (last - changes + 1)...last)
     }
 
     /// One `COPY` block's rows, run as `INSERT`s two hundred at a time —
@@ -468,7 +501,7 @@ final class SQLDump {
     private static func runCopyBlock(
         _ block: SQLDumpDialect.CopyBlock, handle: OpaquePointer, begin: Int,
         booleanColumns: Set<String>,
-        spans: inout [(start: Int, end: Int, table: String?, rowids: ClosedRange<Int64>?)]
+        spans: inout [Span]
     ) -> Bool {
         guard !block.rows.isEmpty else { return true }
         let quotedTable = quote(block.table)
@@ -480,6 +513,12 @@ final class SQLDump {
         // somebody else's — the same rule a plain `INSERT`'s own rows
         // follow.
         let keepsRowids = hasRowid(block.table, in: handle)
+        // The header's own list, as the source map wants it: lowercased, and
+        // `nil` for a header that named no columns at all — which is the
+        // table's own order, and what `range(ofRowid:…column:)` falls back to.
+        let mappedColumns = block.columns.flatMap {
+            $0.isEmpty ? nil : $0.map { $0.lowercased() }
+        }
         let batchSize = 200
         var index = 0
         while index < block.rows.count {
@@ -521,7 +560,8 @@ final class SQLDump {
                         let rowid = firstRowid + Int64(offset)
                         spans.append((
                             begin + row.range.lowerBound, begin + row.range.upperBound,
-                            block.table.lowercased(), rowid...rowid
+                            block.table.lowercased(), rowid...rowid,
+                            .copyRow(columns: mappedColumns)
                         ))
                     }
                 }
@@ -537,10 +577,11 @@ final class SQLDump {
     /// two are the same number, and for any other one this is the single pass
     /// that turns them over.
     private static func sourceMap(
-        of spans: [(start: Int, end: Int, table: String?, rowids: ClosedRange<Int64>?)],
-        in sql: String
+        of spans: [Span], in sql: String, backslashEscapes: Bool
     ) -> SQLSourceMap {
-        guard !spans.isEmpty else { return SQLSourceMap(source: sql) }
+        guard !spans.isEmpty else {
+            return SQLSourceMap(source: sql, backslashEscapes: backslashEscapes)
+        }
         let offsets = spans.flatMap { [$0.start, $0.end] }
         let positions = utf16Positions(ofUTF8: offsets, in: sql)
         let statements = spans.enumerated().map { index, span in
@@ -548,10 +589,12 @@ final class SQLDump {
             let end = max(start, positions[index * 2 + 1])
             return SQLSourceMap.Statement(
                 range: NSRange(location: start, length: end - start),
-                table: span.table, rowids: span.rowids
+                table: span.table, rowids: span.rowids, form: span.form
             )
         }
-        return SQLSourceMap(source: sql, statements: statements)
+        return SQLSourceMap(
+            source: sql, statements: statements, backslashEscapes: backslashEscapes
+        )
     }
 
     /// UTF-8 byte offsets, in increasing order, as UTF-16 offsets into the
