@@ -426,6 +426,7 @@ final class TabPickerPanel: NSObject {
         topRowTable.style = tableView.effectiveStyle
         topRowTable.reloadData()
         panel.setContentSize(NSSize(width: Self.panelWidth, height: panelHeight))
+        panel.invalidateShadow()
         if let frame = window.screen?.visibleFrame {
             panel.setFrameOrigin(NSPoint(
                 x: frame.midX - Self.panelWidth / 2,
@@ -648,6 +649,11 @@ final class TabPickerPanel: NSObject {
             selectListRow(row)
         }
         panel.setContentSize(NSSize(width: Self.panelWidth, height: panelHeight))
+        // The panel grows and shrinks with its rows while it is on screen, and
+        // the window server kept drawing the shadow of the taller frame under
+        // the shorter one — a ghost box hanging below the list. A resize has
+        // to ask for the shadow again.
+        panel.invalidateShadow()
         // The list just reshuffled under whatever the pointer was resting on;
         // that is not a move of its own, so hover starts fresh from here.
         primeHoverBaseline()
