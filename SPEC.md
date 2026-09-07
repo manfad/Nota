@@ -358,6 +358,14 @@
   `== text ==>` or `-->|text|`; chains `A --> B --> C` and fans `A & B --> C & D`. `subgraph id [Title]` /
   `subgraph Title` … `end`, nested as deep as it likes. `%%` comments, `;` between statements, and
   `click` / `style` / `classDef` / `class` / `linkStyle` / `direction` / `:::class` parsed and ignored.
+  `sequenceDiagram`: `participant A`, `participant A as Alice`, `actor A` (a stick figure), and any name a message
+  uses first, in order of first use; messages `->`, `-->`, `->>`, `-->>`, `-x`, `--x`, `-)`, `--)` (solid or dotted,
+  open, filled, cross or async head), `+` / `-` activation suffixes and `activate` / `deactivate` (bars on the
+  lifeline, nesting stacks them), self-messages as a loop off the lifeline, `Note left of` / `right of` / `over A`
+  / `over A,B` with `<br/>`, frames `loop` / `alt`-`else` / `opt` / `par`-`and` / `critical`-`option` / `break` /
+  `rect` nested freely, `autonumber` (each message numbered), and `title` / `accTitle` / `accDescr` / `box … end` /
+  `link` / `links` / `create` / `destroy` read and never failed on. Headers stand at the top and again at the bottom
+  as Mermaid draws them.
 - **The layout** is Sugiyama's, in points measured against the render's own font: cycles broken by reversing the
   edges that close them, longest-path ranks along the direction, barycenter sweeps for the order inside each rank, a
   dummy node standing in every rank a long edge crosses so it is routed rather than drawn through what is in the
@@ -1233,10 +1241,16 @@
     crosses; then drawing through `MermaidPalette`, whose colours are resolved at draw time so one layout is right
     in both appearances. The fence is lifted out of the note in `MarkdownMath`'s one pass, beside the maths and for
     the same reason, and comes back as `MermaidAttachment` — centred with a display formula's air, scaled down to
-    a narrow column. Nothing is lifted out unless `Mermaid.canDraw` says it can be drawn, so a `gantt`, a bracket
-    that never closes and a half-typed arrow all stay the code block they already were. Pinned by
-    `MermaidFlowchartTests` (the grammar, the layout, a fuzz run, a draw that has to leave ink) and
-    `MarkdownMermaidTests` (the seam, the fallbacks, the source map, the maths beside it).
+    a narrow column. `MermaidSequence.swift` is the sequence diagram, written the same afternoon in a parallel
+    worktree against the same door: participants and actors, the eight arrow forms, activations, self-messages,
+    notes, every frame kind with its dividers, `autonumber`; the lane layout spaces lifelines so every label between
+    two neighbours fits, and headers stand top and bottom. Both files build their labels with
+    `kCTForegroundColorFromContext`, so a label is the palette's colour and not CoreText's default black — the dark
+    render was unreadable until it was. Nothing is lifted out unless `Mermaid.canDraw` says it can be drawn, so a
+    `gantt`, a bracket that never closes and a half-typed arrow all stay the code block they already were. Pinned by
+    `MermaidFlowchartTests` (the grammar, the layout, a fuzz run, a draw that has to leave ink),
+    `MermaidSequenceTests` (the grammar, the lanes, ink in both appearances) and `MarkdownMermaidTests` (the seam,
+    the fallbacks, the source map, the maths beside it).
 41. **The cursorline at the end of the document (done 2026-09-07).** With the caret after the last character the
     band lit every line: `lineBand` had no glyph to ask about at that index and fell back to the whole view. It
     now takes the extra line fragment when the text ends in a newline or is empty, and the last glyph's line

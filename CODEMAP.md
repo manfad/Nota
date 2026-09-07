@@ -164,7 +164,13 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   ignore), then a Sugiyama layout over it — cycles broken by reversing back edges, longest-path ranks, barycenter
   sweeps for the order, a dummy node in every rank a long edge crosses — and the drawing. `parse` is pure and takes
   no font; anything it cannot read comes back `nil` and the fence stays code.
-- `MermaidSequence.swift` — `sequenceDiagram`: the same three passes for lanes and messages, being built alongside.
+- `MermaidSequence.swift` (~1290) — `sequenceDiagram`: `participant` / `actor` with aliases and the ones a message
+  declares by using them, all eight arrow forms (solid or dotted, open, filled, cross or async head), `+` / `-`
+  activation suffixes and `activate` / `deactivate` stacking bars on the lifeline, self-messages, `Note left of` /
+  `right of` / `over` one or two lifelines, `loop` / `alt`-`else` / `opt` / `par`-`and` / `critical` / `break` /
+  `rect` frames nested freely, `autonumber`, and `title` / `accTitle` / `box` / `link` parsed and never failed on;
+  then the lane layout (headers top and bottom, lifelines spaced so every label between neighbours fits, one row per
+  message) and the drawing. `parse` is pure; junk comes back `nil` and the fence stays code.
 - `MermaidAttachment.swift` (~55) — one diagram as one character in the render, on `MathAttachment`'s pattern: an
   image drawn through a handler so the palette resolves at draw time, scaled down when the diagram is wider than
   the column.
@@ -293,6 +299,11 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   without falling over; then the layout (frames that do not overlap, the direction each way round, an edge that
   starts and ends on the right borders, a labelled edge's box on its line, a cycle, a self loop) and a draw into a
   bitmap that has to leave ink.
+- `MermaidSequenceTests.swift` (30) — the sequence engine: every arrow form, aliases, actors, implicit participants
+  in order of first use, activations both ways, notes of each placement, every frame kind with `else` / `and` and
+  nesting, `autonumber`, comments, ignored lines, junk; the layout (participants left to right as declared, messages
+  descending in order, a message spanning its two lifelines, a self-message right of its own) and a draw that has
+  to leave ink in both appearances.
 - `MarkdownMermaidTests.swift` (15) — the seam: a fence that becomes one centred `MermaidAttachment`, one scaled to
   a narrow column, `gantt` and a malformed or half-typed flowchart staying code blocks, the source map finding each
   fence back, and the maths beside them untouched.
