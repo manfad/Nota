@@ -34,6 +34,10 @@ struct MarkdownSourceMap {
         /// its own — it is one attachment — so its punctuation is all there is
         /// to find it by.
         case displayMath
+        /// Found by its ```` ```mermaid ```` fence, and closed by the matching
+        /// one. A diagram renders one attachment and no words at all, so it is
+        /// found exactly the way a display formula's fence is.
+        case diagram
     }
 
     /// The longest run of a block's text worth searching for whole. Beyond
@@ -80,6 +84,8 @@ struct MarkdownSourceMap {
             return firstLine(from: from) { $0.contains("|") } ?? from
         case .displayMath:
             return firstLine(from: from, where: Self.opensDisplayMath) ?? from
+        case .diagram:
+            return firstLine(from: from, where: MarkdownMath.isDiagramFence) ?? from
         case .prose:
             return locateProse(text: text, from: from) ?? from
         }
@@ -118,6 +124,8 @@ struct MarkdownSourceMap {
             return consumeLines(from: start) { $0.contains("|") }
         case .displayMath:
             return consumeDisplayMath(from: start)
+        case .diagram:
+            return consumeFence(from: start)
         case .prose:
             return consumeProse(from: start, text: text)
         }

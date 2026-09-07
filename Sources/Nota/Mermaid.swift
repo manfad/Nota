@@ -44,6 +44,24 @@ enum Mermaid {
         case nil: return nil
         }
     }
+
+    /// Whether this fence is one Nota can draw at all — asked by the Markdown
+    /// pass *before* the fence is lifted out of the note, so a diagram in a
+    /// grammar we do not read, or one half way through being typed, stays the
+    /// code block it already is rather than becoming a blank in the page.
+    /// The answer costs a parse; the font it is measured against afterwards
+    /// cannot change it.
+    static func canDraw(_ source: String) -> Bool {
+        switch kind(of: source) {
+        case .flowchart: return MermaidFlowchart.parse(source) != nil
+        case .sequence: return MermaidSequence.layout(source, font: probeFont) != nil
+        case nil: return false
+        }
+    }
+
+    /// A font to ask the question with, since layout wants one. Nothing about
+    /// whether a diagram can be drawn depends on it.
+    private static let probeFont = NSFont.systemFont(ofSize: 13)
 }
 
 /// One laid-out diagram: a box of `size` (points, origin top-left, y down —

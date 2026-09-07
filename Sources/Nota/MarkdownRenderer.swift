@@ -145,11 +145,20 @@ enum MarkdownRenderer {
                 // A paragraph that is nothing but a display formula is found
                 // in the source by its `$$` or its fence, not by its words —
                 // it renders none.
-                let shape = isDisplayMath(block, in: maths.spans)
-                    ? MarkdownSourceMap.Shape.displayMath : block.shape
+                let shape: MarkdownSourceMap.Shape
+                if isDisplayMath(block, in: maths.spans) {
+                    shape = .displayMath
+                } else if block.soleDiagramIndex != nil {
+                    // A diagram renders no words either; its fence is all
+                    // there is to find it by.
+                    shape = .diagram
+                } else {
+                    shape = block.shape
+                }
                 source = map.next(text: block.plainText, shape: shape)
                 append(block, to: result, font: font, assets: assets,
-                       maths: maths.spans, width: width, wantsMarker: wantsMarker)
+                       maths: maths.spans, diagrams: maths.diagrams,
+                       width: width, wantsMarker: wantsMarker)
                 index += 1
             }
 
@@ -171,7 +180,7 @@ enum MarkdownRenderer {
     }
 
     /// Whether the render holds anything that was sized to the column it was
-    /// made for. Only pictures and rules are. A formula is not: it is measured
+    /// made for. Pictures, rules and diagrams are. A formula is not: it is measured
     /// against the font, so the column can widen under one without the note
     /// being rendered again.
     private static func fitsThePane(_ text: NSAttributedString) -> Bool {
@@ -180,6 +189,7 @@ enum MarkdownRenderer {
             .attachment, in: NSRange(location: 0, length: text.length)
         ) { value, _, stop in
             guard value is MarkdownImageAttachment || value is MarkdownRuleAttachment
+                || value is MermaidAttachment
             else { return }
             found = true
             stop.pointee = true
@@ -237,7 +247,9 @@ enum MarkdownRenderer {
             default: break
             }
             let hasImage = pieces.contains { piece in
-                piece.imageURL.map { MarkdownMath.spanIndex(from: $0) == nil } ?? false
+                guard let url = piece.imageURL else { return false }
+                return MarkdownMath.spanIndex(from: url) == nil
+                    && MarkdownMath.diagramIndex(from: url) == nil
             }
             let hasWords = plainText.contains { $0.isLetter || $0.isNumber }
             return hasImage && !hasWords ? .image : .prose
@@ -250,6 +262,22 @@ enum MarkdownRenderer {
             var found: Int?
             for piece in pieces {
                 if let url = piece.imageURL, let index = MarkdownMath.spanIndex(from: url) {
+                    guard found == nil else { return nil }
+                    found = index
+                } else if piece.text.contains(where: { !$0.isWhitespace && $0 != "\u{FFFC}" }) {
+                    return nil
+                }
+            }
+            return found
+        }
+
+        /// The one diagram token this block holds, when a token is all it
+        /// holds. A ```` ```mermaid ```` fence always comes back as one of
+        /// these, since the pass puts blank lines around its token.
+        var soleDiagramIndex: Int? {
+            var found: Int?
+            for piece in pieces {
+                if let url = piece.imageURL, let index = MarkdownMath.diagramIndex(from: url) {
                     guard found == nil else { return nil }
                     found = index
                 } else if piece.text.contains(where: { !$0.isWhitespace && $0 != "\u{FFFC}" }) {
@@ -339,14 +367,15 @@ enum MarkdownRenderer {
 
     private static func append(
         _ block: Block, to result: NSMutableAttributedString, font: NSFont,
-        assets: AssetStore?, maths: [MarkdownMath.Span], width: CGFloat, wantsMarker: Bool
+        assets: AssetStore?, maths: [MarkdownMath.Span], diagrams: [MarkdownMath.Diagram],
+        width: CGFloat, wantsMarker: Bool
     ) {
         let start = result.length
         let unit = RenderStyle.indentUnit(for: font)
         let style = NSMutableParagraphStyle()
         var blockFont = font
         var isCodeBlock = false
-        let isFormulaBlock = isDisplayMath(block, in: maths)
+        let isFormulaBlock = isDisplayMath(block, in: maths) || block.soleDiagramIndex != nil
 
         switch block.kind {
         case .header(let level):
@@ -371,8 +400,8 @@ enum MarkdownRenderer {
                                 range: NSRange(location: start, length: result.length - start))
             return
         case _ where isFormulaBlock:
-            // A formula on its own stands in the middle of the pane, with the
-            // same air above and below that a fenced block is given.
+            // A formula or a diagram on its own stands in the middle of the
+            // pane, with the same air above and below a fenced block is given.
             style.alignment = .center
             style.paragraphSpacingBefore = Self.codeBoxPadding
             style.paragraphSpacing = Self.codeBoxPadding + (font.pointSize * 0.6).rounded()
@@ -448,7 +477,7 @@ enum MarkdownRenderer {
             for piece in block.pieces {
                 let piece = piece.dropping(&unwritten)
                 append(piece, to: result, font: blockFont, base: font,
-                       assets: assets, maths: maths, width: width)
+                       assets: assets, maths: maths, diagrams: diagrams, width: width)
             }
         }
 
@@ -464,11 +493,17 @@ enum MarkdownRenderer {
 
     private static func append(
         _ piece: Piece, to result: NSMutableAttributedString, font: NSFont,
-        base: NSFont, assets: AssetStore?, maths: [MarkdownMath.Span], width: CGFloat
+        base: NSFont, assets: AssetStore?, maths: [MarkdownMath.Span],
+        diagrams: [MarkdownMath.Diagram], width: CGFloat
     ) {
         if let imageURL = piece.imageURL {
             if let index = MarkdownMath.spanIndex(from: imageURL), maths.indices.contains(index) {
                 appendMath(maths[index], to: result, font: font, base: base)
+                return
+            }
+            if let index = MarkdownMath.diagramIndex(from: imageURL),
+               diagrams.indices.contains(index) {
+                appendDiagram(diagrams[index], to: result, font: font, base: base, width: width)
                 return
             }
             appendImage(imageURL, alt: piece.text, to: result,
@@ -516,6 +551,30 @@ enum MarkdownRenderer {
             return
         }
         result.append(NSAttributedString(string: span.raw, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: base.pointSize, weight: .regular),
+            .foregroundColor: NSColor.labelColor,
+            .backgroundColor: NSColor.labelColor.withAlphaComponent(0.05),
+        ]))
+    }
+
+    /// A diagram, laid out against the render's own font and scaled down to
+    /// the column when it is wider than one.
+    ///
+    /// The fence only reached here because `Mermaid.canDraw` said it could be
+    /// drawn, so this never fails in practice; if it ever did, the source
+    /// comes back as itself in the code-span look, the way unreadable TeX
+    /// does. Never a blank, and never a crash.
+    private static func appendDiagram(
+        _ diagram: MarkdownMath.Diagram, to result: NSMutableAttributedString,
+        font: NSFont, base: NSFont, width: CGFloat
+    ) {
+        if let laid = Mermaid.layout(diagram.source, font: font) {
+            result.append(NSAttributedString(attachment: MermaidAttachment(
+                diagram: laid, font: font, maximumWidth: max(0, width)
+            )))
+            return
+        }
+        result.append(NSAttributedString(string: diagram.source, attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: base.pointSize, weight: .regular),
             .foregroundColor: NSColor.labelColor,
             .backgroundColor: NSColor.labelColor.withAlphaComponent(0.05),
