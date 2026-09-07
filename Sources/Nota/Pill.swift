@@ -65,9 +65,20 @@ class PillView: NSView {
             widthAnchor.constraint(equalToConstant: Self.width),
             heightAnchor.constraint(equalToConstant: Self.height),
         ])
+        // The words are drawn in the language set, so a change to it lays
+        // them on again — the same pass an appearance change makes.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(preferencesChanged),
+            name: Preferences.didChange, object: nil
+        )
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func preferencesChanged() {
+        applySymbols()
+        applyLeadWordColour()
+    }
 
     /// Floats the pill in a column's corner, under whatever it stacks below —
     /// the column's own top edge, or the pill above it.
@@ -239,9 +250,11 @@ class PillView: NSView {
         return button
     }
 
+    /// The identifier is the English key; what is drawn is that key in the
+    /// language set, so a language change only needs the title laid on again.
     static func applyTitle(to button: NSButton) {
         button.attributedTitle = NSAttributedString(
-            string: button.identifier?.rawValue ?? "",
+            string: L10n.text(button.identifier?.rawValue ?? ""),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 11),
                 .foregroundColor: NSColor.secondaryLabelColor,
@@ -337,9 +350,10 @@ class PillView: NSView {
 
 // MARK: - The words
 
-/// A pill's leading word. `Find`, `Replace` and `Jump` are not localized —
-/// each is one short word naming the pill, the size the field's own text is
-/// set in, and each is lit or muted by the pill that owns it.
+/// A pill's leading word. `Find`, `Replace` and `Jump` are English keys the
+/// language tables translate — the identifier keeps the key, the title wears
+/// the translation — each one short word naming the pill, the size the
+/// field's own text is set in, lit or muted by the pill that owns it.
 protocol PillWord: NSView {
     /// What it says, for the tests and for whoever reads the identifier.
     var word: String { get }
@@ -354,9 +368,10 @@ final class PillWordButton: NSButton, PillWord {
 
     func applyWordColour(_ colour: NSColor) {
         attributedTitle = NSAttributedString(
-            string: word,
+            string: L10n.text(word),
             attributes: [.font: PillView.wordFont, .foregroundColor: colour]
         )
+        invalidateIntrinsicContentSize()
     }
 
     /// The title's own box. A borderless button would otherwise carry
@@ -370,9 +385,13 @@ final class PillWordButton: NSButton, PillWord {
 
 /// A word that is only a word: ⌘J's `Jump`.
 final class PillWordLabel: NSTextField, PillWord {
-    var word: String { stringValue }
+    var word: String { identifier?.rawValue ?? "" }
 
-    func applyWordColour(_ colour: NSColor) { textColor = colour }
+    func applyWordColour(_ colour: NSColor) {
+        stringValue = L10n.text(word)
+        textColor = colour
+        invalidateIntrinsicContentSize()
+    }
 }
 
 // MARK: - The fields

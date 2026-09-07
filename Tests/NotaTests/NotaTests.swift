@@ -2431,6 +2431,39 @@ final class NotaTests: AppKitTestCase {
         XCTAssertFalse(bar.replacePill.isShown)
     }
 
+    /// The words are drawn in the language set — the identifier keeps the
+    /// English key, the title wears the translation — and follow the setting
+    /// as it changes, with no pill rebuilt.
+    func testThePillWordsFollowTheLanguageSetting() {
+        let original = Preferences.shared.language
+        defer { Preferences.shared.language = original }
+        Preferences.shared.language = .english
+
+        let bar = FindBarView()
+        let jump = GoToLinePill()
+        let one = bar.replacePill.subviews.compactMap { $0 as? NSButton }
+            .first { $0.identifier?.rawValue == "One" }
+        let all = bar.replacePill.subviews.compactMap { $0 as? NSButton }
+            .first { $0.identifier?.rawValue == "All" }
+        XCTAssertEqual(bar.findWord.attributedTitle.string, "Find")
+        XCTAssertEqual(jump.jumpWord.stringValue, "Jump")
+        XCTAssertEqual(one?.attributedTitle.string, "One")
+
+        Preferences.shared.language = .simplifiedChinese
+        XCTAssertEqual(bar.findWord.attributedTitle.string, "查找")
+        XCTAssertEqual(bar.findWord.word, "Find", "the key stays English")
+        XCTAssertEqual(bar.replacePill.replaceWord.attributedTitle.string, "替换")
+        XCTAssertEqual(jump.jumpWord.stringValue, "跳转")
+        XCTAssertEqual(jump.jumpWord.word, "Jump")
+        XCTAssertEqual(one?.attributedTitle.string, "单个")
+        XCTAssertEqual(all?.attributedTitle.string, "全部")
+
+        Preferences.shared.language = .malay
+        XCTAssertEqual(bar.findWord.attributedTitle.string, "Cari")
+        XCTAssertEqual(jump.jumpWord.stringValue, "Lompat")
+        XCTAssertEqual(all?.attributedTitle.string, "Semua")
+    }
+
     /// Neither field carries a placeholder any more: the word beside it is
     /// what says where typing goes, so a grey sentence would only say it
     /// twice.

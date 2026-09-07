@@ -107,7 +107,7 @@
   and the corner. A tab switch closes the bar.
 - Replace is a **second pill**, not a taller one: clicking `Find` fades in another 300×34 pill of the same
   surface 6pt below the find one, holding the word `Replace`, a replace field (no placeholder) and two quiet
-  words, `One` and `All`. It goes when `Find` or `Replace` is clicked again and when the find pill closes; neither pill
+  words, `One` and `All`. Every one of these words — `Find`, `Replace`, `Jump`, `One`, `All` — is drawn in the language set and follows the setting as it changes (the identifier keeps the English key). It goes when `Find` or `Replace` is clicked again and when the find pill closes; neither pill
   ever changes size, and the mode control clears the whole stack. Both ⌘R ("Find and Replace…") and ⌘F are toggles:
   ⌘R with the bar closed opens both rows, with the keyboard in the replace field when there is already a query; ⌘R or
   ⌘F over a row that is out folds it away and puts the keyboard back in the query field; ⌘F over a folded bar refocuses
