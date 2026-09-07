@@ -1196,8 +1196,10 @@ final class MarkdownPreviewTests: AppKitTestCase {
         XCTAssertEqual(try splitFraction(of: controller), 0.5, accuracy: 0.02, "50/50 to start")
 
         for round in 1 ... 3 {
-            // The whole lap, one ⌘P at a time.
-            for mode in [PreviewMode.reading, .off, .split] {
+            // The whole lap, one ⌘P at a time: split is the middle and the
+            // key moves on from wherever the tab came, so from split it goes
+            // out to reading, back through split, out to the editor and back.
+            for mode in [PreviewMode.reading, .split, .off, .split] {
                 controller.toggleMarkdownPreview()
                 settle(0.4)
                 XCTAssertEqual(controller.previewMode, mode, "round \(round): the cycle's order")

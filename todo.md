@@ -47,17 +47,8 @@ Done 2026-09-07, SPEC Done 47.
 
 **Where.** New `DiffTab.swift` + `LineDiff.swift` (pure, tested); a new `RenderedPreviewKind`-adjacent kind so the mode control works; colours in `RenderStyle.swift` for both appearances.
 
-## 6. Mermaid diagrams inside Markdown
-
-**What.** A ```` ```mermaid ```` fence renders as a diagram in the Markdown preview: flowcharts and sequence diagrams alongside the writing, for technical notes.
-
-**Approach.** Nota's renderer is native (`MarkdownRenderer.swift`), so the honest options are:
-- (a) native parse + layout for the two common grammars (`flowchart`/`graph` with a simple layered layout, `sequenceDiagram` with lanes) → an `NSImage`/`NSView` block in the render, the same way maths blocks are placed (`MarkdownMath.swift`). Offline, themed, fast, limited grammar.
-- (b) a hidden `WKWebView` running a bundled mermaid.js, snapshot to an image per block. Whole grammar, heavier, and dark-mode is a theme string.
-Start with (a) for flowchart + sequence; fall back to showing the fence as code (today's behaviour) for anything else, with a faint "unsupported diagram" caption. Errors never break the page.
-
-**Tests.** Parser → graph model round-trips; a render test that a mermaid fence produces a block attachment and an unknown diagram type stays a code block.
-
 ---
+
+Shipped: **6. Mermaid diagrams inside Markdown** — a ```` ```mermaid ```` fence draws natively (option (a): flowchart and sequence parsed, laid out and drawn by Nota, anything else left as code). See `SPEC.md` "Mermaid diagrams in Markdown", Done 52.
 
 Later / unsorted: overflow chevron on the tab strip and Developer ID signing stay in `SPEC.md` Todo.

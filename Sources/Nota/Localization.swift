@@ -122,6 +122,10 @@ enum L10n {
         "Bookmark This Tab": "为此标签页添加书签",
         "Show Bookmarks…": "显示书签…",
         "Format": "格式",
+        "Save As": "另存为",
+        "Location": "位置",
+        "Choose…": "选择…",
+        "Choose": "选择",
         "“%@” already exists. Do you want to replace it?": "“%@”已存在，是否替换？",
         "A file with this name already exists in this location. Replacing it will overwrite its current contents.":
             "此位置已存在同名文件，替换后将覆盖其当前内容。",
@@ -322,6 +326,10 @@ enum L10n {
         "Bookmark This Tab": "將此標籤頁加入書籤",
         "Show Bookmarks…": "顯示書籤…",
         "Format": "格式",
+        "Save As": "另存新檔",
+        "Location": "位置",
+        "Choose…": "選擇…",
+        "Choose": "選擇",
         "“%@” already exists. Do you want to replace it?": "「%@」已經存在，要將它取代嗎？",
         "A file with this name already exists in this location. Replacing it will overwrite its current contents.":
             "此位置已有同名檔案，取代後將覆寫它目前的內容。",
@@ -520,6 +528,10 @@ enum L10n {
         "Bookmark This Tab": "Tanda Buku Tab Ini",
         "Show Bookmarks…": "Tunjukkan Tanda Buku…",
         "Format": "Format",
+        "Save As": "Simpan Sebagai",
+        "Location": "Lokasi",
+        "Choose…": "Pilih…",
+        "Choose": "Pilih",
         "“%@” already exists. Do you want to replace it?":
             "“%@” sudah wujud. Adakah anda mahu menggantikannya?",
         "A file with this name already exists in this location. Replacing it will overwrite its current contents.":
