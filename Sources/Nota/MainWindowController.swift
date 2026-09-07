@@ -2520,56 +2520,19 @@ final class MainWindowController: NSWindowController {
         return presentSavePanel(for: note)
     }
 
+    /// Nota's own dialog, not `NSSavePanel` (SPEC Done 42): a sheet on this
+    /// window, run to its end here so `save(note:forcePanel:)` and everything
+    /// that calls it still see one synchronous `URL?`.
     private func presentSavePanel(for note: Note) -> URL? {
-        let panel = NSSavePanel()
-        // The extension lives in the Format combo below, not in the name
-        // field, so the panel is left with no type opinion of its own —
-        // `allowedContentTypes` would otherwise rename the field itself and
-        // fight the combo — and the final name is composed by hand once
-        // `runModal` returns.
-        panel.allowedContentTypes = []
-        panel.allowsOtherFileTypes = true
-        panel.canCreateDirectories = true
-        panel.isExtensionHidden = false
-
-        let suggested = SuggestedName.panelName(for: note.fileURL, text: note.countableText)
-        let (base, ownExtension) = SaveNameComposer.split(name: suggested)
-        panel.nameFieldStringValue = base
-
-        let extensionCombo = NSComboBox()
-        extensionCombo.addItems(withObjectValues: SaveNameComposer.knownExtensions())
-        extensionCombo.completes = false
-        // A named file keeps its own extension preselected; a new note
-        // offers whatever was chosen last.
-        extensionCombo.stringValue = ownExtension ?? preferences.lastSaveExtension
-        panel.accessoryView = Self.saveFormatAccessory(combo: extensionCombo)
-
-        // The panel would otherwise check its own name field — the bare
-        // base name, since the extension lives in the combo — against
-        // what's on disk, so a save of "notes" over an existing "notes.md"
-        // would never trip its "already exists" alert. `validate` composes
-        // the real destination by hand and raises Nota's own alert for it.
-        // `delegate` is weak, so the validator must outlive `runModal`.
-        let validator = SavePanelReplaceValidator(
-            combo: extensionCombo, existingFileURL: note.fileURL,
-            confirmReplace: { [weak self] url in self?.confirmReplace(url) ?? false }
+        guard let window else { return nil }
+        let dialog = SaveDialog(
+            suggestedName: SuggestedName.panelName(for: note.fileURL, text: note.countableText),
+            existingFileURL: note.fileURL,
+            lastDirectory: preferences.lastSaveDirectory,
+            lastExtension: preferences.lastSaveExtension
         )
-        panel.delegate = validator
-
-        if let existing = note.fileURL {
-            panel.directoryURL = existing.deletingLastPathComponent()
-        } else {
-            panel.directoryURL = preferences.lastSaveDirectory
-                ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-        }
-        let response = withExtendedLifetime(validator) { panel.runModal() }
-        guard response == .OK, let directory = panel.url?.deletingLastPathComponent() else {
-            return nil
-        }
-        let url = SaveNameComposer.composedURL(
-            directory: directory, name: panel.nameFieldStringValue,
-            extension: extensionCombo.stringValue
-        )
+        dialog.confirmReplace = { [weak self] url in self?.confirmReplace(url) ?? false }
+        guard let url = dialog.runSheet(on: window) else { return nil }
         // Next save opens where this one landed, offering the same extension.
         preferences.lastSaveDirectory = url.deletingLastPathComponent()
         if let chosen = SaveNameComposer.split(name: url.lastPathComponent).extension {
@@ -2578,9 +2541,9 @@ final class MainWindowController: NSWindowController {
         return url
     }
 
-    /// The panel's own "already exists, replace?" alert, raised by hand for
-    /// the composed destination `validate` found — real unless a test hands
-    /// in something else, the same way `confirmDiscard` does.
+    /// The "already exists, replace?" alert, raised for the destination the
+    /// Save dialog composed — real unless a test hands in something else, the
+    /// same way `confirmDiscard` does.
     private func confirmReplace(_ url: URL) -> Bool {
         if let confirmReplaceOverrideForTesting { return confirmReplaceOverrideForTesting(url) }
         let alert = NSAlert()
@@ -2597,83 +2560,6 @@ final class MainWindowController: NSWindowController {
         alert.addButton(withTitle: L10n.text("Replace", chinese: "替换"))
         alert.addButton(withTitle: L10n.text("Cancel", chinese: "取消"))
         return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    /// Checks the save panel's *actual* destination — name field plus the
-    /// Format combo, which the panel itself never sees as one string —
-    /// against what's already on disk, since the panel's own overwrite
-    /// check only ever looks at the bare name field.
-    private final class SavePanelReplaceValidator: NSObject, NSOpenSavePanelDelegate {
-        let combo: NSComboBox
-        let existingFileURL: URL?
-        let confirmReplace: (URL) -> Bool
-
-        init(combo: NSComboBox, existingFileURL: URL?, confirmReplace: @escaping (URL) -> Bool) {
-            self.combo = combo
-            self.existingFileURL = existingFileURL
-            self.confirmReplace = confirmReplace
-        }
-
-        func panel(_ sender: Any, validate url: URL) throws {
-            guard let panel = sender as? NSSavePanel, let directory = panel.directoryURL else {
-                return
-            }
-            let composed = SaveNameComposer.composedURL(
-                directory: directory, name: panel.nameFieldStringValue,
-                extension: combo.stringValue
-            )
-            guard composed.path != existingFileURL?.path,
-                  FileManager.default.fileExists(atPath: composed.path)
-            else { return }
-            guard confirmReplace(composed) else {
-                throw NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError)
-            }
-        }
-    }
-
-    /// The Format row that goes in the save panel's `accessoryView`: a label
-    /// and the editable extension combo, apart from the panel's own name
-    /// field so a typed extension there is never mistaken for the combo's.
-    /// One more row of the panel's own form, under "Save As:" and "Tags:":
-    /// the label right-aligned into the same column theirs stand in, the
-    /// combo starting where the name field starts. The panel centres an
-    /// accessory in its width, so the row is built to the panel's own width
-    /// with the label column measured to match the system's.
-    private static func saveFormatAccessory(combo: NSComboBox) -> NSView {
-        let label = NSTextField(labelWithString: L10n.text("Format", chinese: "格式") + ":")
-        label.alignment = .right
-        label.translatesAutoresizingMaskIntoConstraints = false
-        combo.translatesAutoresizingMaskIntoConstraints = false
-
-        let row = NSView()
-        row.translatesAutoresizingMaskIntoConstraints = false
-        row.addSubview(label)
-        row.addSubview(combo)
-        NSLayoutConstraint.activate([
-            row.widthAnchor.constraint(equalToConstant: SavePanelForm.width),
-            row.heightAnchor.constraint(equalToConstant: SavePanelForm.rowHeight),
-            label.trailingAnchor.constraint(equalTo: row.centerXAnchor,
-                                            constant: -SavePanelForm.labelColumn),
-            label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-            combo.leadingAnchor.constraint(equalTo: row.centerXAnchor,
-                                           constant: -SavePanelForm.fieldColumn),
-            combo.widthAnchor.constraint(equalToConstant: 120),
-            combo.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-        ])
-        return row
-    }
-
-    /// Where the system save panel puts its own form, so the Format row can
-    /// stand in it: the right edge of "Save As:" and the left edge of the
-    /// name field, both measured leftwards from the panel's centre line —
-    /// the panel centres its form and the accessory alike, so an offset from
-    /// the centre holds whether the panel is collapsed or expanded. Measured
-    /// on macOS 15 (2026-09-06).
-    enum SavePanelForm {
-        static let width: CGFloat = 480
-        static let rowHeight: CGFloat = 36
-        static let labelColumn: CGFloat = 100
-        static let fieldColumn: CGFloat = 91
     }
 
     /// No type filter: Notepad++ opens whatever you point it at, and the

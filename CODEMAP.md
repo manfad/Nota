@@ -16,7 +16,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 |---|---|
 | A menu item, its key, or app launch / windows / summon | `AppDelegate.swift`, keys in `Shortcuts.swift` |
 | Anything in the main window: footer, split, modes, tabs, opening files, saving | `MainWindowController.swift` (see its sections below) |
-| The save panel's Format combo, or the extensions it offers | `SaveNameComposer.swift` (pure logic), `MainWindowController.presentSavePanel` (the panel itself) |
+| The Save dialog: its rows, its Format popup, or the extensions it offers | `SaveDialog.swift` (the dialog itself), `SaveNameComposer.swift` (pure logic), `MainWindowController.presentSavePanel` (which puts it up) |
 | The tab strip (drawing, drag, close, +, tear-off) | `TabBarView.swift`, geometry in `TabStripLayout.swift` |
 | ⇧⌘J switcher, `@` headings (text notes only), bookmarks dialog, ⇧⌘F search dialog, hover/arrow selection | `TabPickerPanel.swift` (also `refocusIfShowing`: the caret back in the field when Nota returns from another app or space), ranking in `FuzzyMatch.swift` |
 | Settings window (draft + Save, sidebar pages) | `SettingsWindowController.swift`, values in `Preferences.swift` |
@@ -74,7 +74,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `GlobalHotKey.swift` (~170) — Carbon hotkey; `KeyCodeNames` (key code / key-equivalent display names).
 
 ### Main window
-- `MainWindowController.swift` (~5200) — the whole window. Sections by `MARK`:
+- `MainWindowController.swift` (~5150) — the whole window. Sections by `MARK`:
   Setup (346) · Text attributes (1105) · Auto-hidden tab strip (1414) · Session restore (1537) · Tabs (1688) · Encoding and line endings (1827) · Vim footer (2082) · Files (2443, open/save/close, sniff → viewer kinds) · External changes (2779) · Persistence (2927) · Font size and zoom (3035) · Menu actions (3118) · Zen mode (3220) · Tab picker (3698, `@` headings, text notes only) · Markdown preview (3808, modes, split, footer status of viewers; the sidebar side is recorded when the split is built) · The action in the corner (4296, the corner slot's segments and what a click on a tree, cell or block selects) · Images and book contents: chips and sidebar (4606) · Search across tabs (4856, `beginSearchAllNotes` opens the picker in `.search` over every tab's `searchSource`; `reveal` takes a hit to where it lives — the editor's selection, the document's page, the book's chapter) · Delegates / Vim's window (4891) · Background (5216) · Quick Look (5229).
   Also here: `DocumentSplitViewController` + `DocumentSplitView` (the editor/preview split; the divider is not drawn outside split mode), `VimCommandPane`, `DragRegionView`, `BackgroundView`.
   Footer regions: `statusLabel` (counts, `updateCountsLabel` / `availableCountsWidth`), `footerTrailingStack` (encoding · line ending · cursor), `modeBadge` (vim).
@@ -112,7 +112,13 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `Assets.swift` (~250) — `NotaImageAttachment` chips, `AssetStore` on disk.
 - `TextFile.swift` (~430) — `LineEnding`, `TextFileFormat`, encoding detection, `FileSniff.classify` (PDF, image, EPUB, RTF, text, binary), `FileClass`, `isDrawing` (an `.svg` is text, not a picture — `Note.isImageFile` and the exclusions ask it).
 - `Session.swift` (~555) — `TextStats` (footer count phrases incl. pages/chapters/tables, a table's rows and columns, and a row range), `SessionTab` / `SessionWindow` codables (`sqlTable` / `sqlQuery` for a dump's tab), `SessionStore`.
-- `SaveNameComposer.swift` (~55) — pure logic for the save panel's Format combo: known extensions, splitting a name from its extension, composing the final name.
+- `SaveNameComposer.swift` (~80) — pure logic for the Save dialog's Format popup: known extensions, the list one
+  the popup does not know is put in front of (`formatOptions(including:)`), splitting a name from its extension,
+  composing the final name.
+- `SaveDialog.swift` (~380) — Nota's own Save dialog in place of `NSSavePanel`: the sheet's two rows (name with the
+  Format popup at its end, read-only location with `Choose…`), Cancel and a default Save, `runSheet(on:)` pumping
+  `NSApp.runModal` so the window still sees one synchronous `URL?`, the replace question handed back to the window,
+  and the `Preferences.didChange` relabelling that lets a language change land while it is open.
 - `FileWatcher.swift` (~230) — `FileStamp`, watching a path for change.
 - `Bookmarks.swift` (~120) — pinned paths store. `BookmarksMenu.swift` (~130) — the File submenu + ⇧⌘D toggle.
 - `RecentDocumentsMenu.swift` (~55) — File › Open Recent.
@@ -279,7 +285,12 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `UpdateCheckTests.swift` (18) — the update check with a stub transport: a newer release, the same version, a version ahead of the server, a tag without its `v`, malformed JSON, 403/429, another status, a transport error, a tag that is not a version, the comparison table, and the Homebrew rule. The button itself is in `NotaTests.testAboutPageChecksForUpdates`.
 - `ZoomPillTests.swift` (12) — the pill: which tabs carry it, the percentage it reads, showing on a zoom and on
   hover, the hold and its restart, pressing it as the keys, and taking itself away at once for a tab with no zoom.
-- `SaveNameComposerTests.swift` (13) — the save panel's name logic: splitting a known extension off, a typed name winning over the combo, dotfiles, trimming, the composed URL, and the last extension round-tripping through Preferences.
+- `SaveNameComposerTests.swift` (16) — the Save dialog's name logic: splitting a known extension off, a typed name winning over the popup, dotfiles, trimming, the composed URL, what the Format popup lists, and the last extension round-tripping through Preferences.
+- `SaveDialogTests.swift` (10) — the dialog itself, built and read without a modal session: what a named file and an
+  untitled note open on, Documents as the last resort, a remembered extension the known list has never heard of,
+  the URL composed from the name and the popup (and from a name spelling its own extension), Save unavailable on a
+  blank name, the replace question asked once and not asked when the file is the note's own, and a language change
+  relabelling it where it stands.
 - `TabHoverTests.swift` (3) — the strip's three greys: selected fill, the pointer's wash on an unselected tab, nothing at rest.
 - `WindowChromeTests.swift` (11) — Settings › Appearance › Window: the strip, the traffic lights and the strip's two trailing buttons each switched off and back.
 - `BookmarksTests.swift` (also the ⇧⌘J picker tests), `OpenRecentTests.swift`, `ShortcutsTests.swift`, `MultiWindowTests.swift`, `ExternalChangeTests.swift`, `ZoomTests.swift`, `TabStripLayoutTests.swift`, `DropOnStripTests.swift`, `SidecarTests.swift`, `BigFileTests.swift`, `NoteBigFileTests.swift`, `SpellCheckPolicyTests.swift`.

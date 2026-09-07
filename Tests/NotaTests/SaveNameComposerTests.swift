@@ -76,6 +76,30 @@ final class SaveNameComposerTests: XCTestCase {
         XCTAssertTrue(extensions.contains("ts"))
     }
 
+    // MARK: - What the Format popup lists
+
+    /// The popup cannot be typed into, so whatever the dialog opens on has to
+    /// be in the list — and a known extension is never listed twice.
+    func testFormatOptionsCarryAnExtensionTheListDoesNotKnow() {
+        let options = SaveNameComposer.formatOptions(including: "mdx")
+        XCTAssertEqual(options.first, "mdx")
+        XCTAssertEqual(options.dropFirst().map { $0 }, SaveNameComposer.knownExtensions())
+    }
+
+    func testFormatOptionsLeaveAKnownExtensionWhereItIs() {
+        XCTAssertEqual(SaveNameComposer.formatOptions(including: "md"),
+                       SaveNameComposer.knownExtensions())
+        XCTAssertEqual(SaveNameComposer.formatOptions(including: "MD"),
+                       SaveNameComposer.knownExtensions(),
+                       "the list is matched case-insensitively, as it is deduped")
+    }
+
+    func testFormatOptionsTrimAndIgnoreAnEmptyExtension() {
+        XCTAssertEqual(SaveNameComposer.formatOptions(including: " .mdx ").first, "mdx")
+        XCTAssertEqual(SaveNameComposer.formatOptions(including: "  "),
+                       SaveNameComposer.knownExtensions())
+    }
+
     // MARK: - Preferences round trip
 
     func testTheLastChosenExtensionRoundTripsThroughPreferences() {

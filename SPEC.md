@@ -28,14 +28,22 @@
   imported as plain text instead (Done 17, superseded).
 - Editing a named file only updates the cache; disk changes on ⌘S only. A named file keeps its extension, encoding
   (UTF-8 / UTF-16 / Latin-1 / Windows-1252 detected on open) and line endings (LF / CRLF) on save.
-- The save panel splits the extension out of the name field into its own editable "Format" combo box (pick one of
-  Nota's known extensions, or type another), so it is never lost to the panel's own name-typed-with-a-dot handling; a
-  named file's extension preselects it, and otherwise the last extension chosen through the panel is remembered
-  (`Preferences.lastSaveExtension`, default `md`) and offered again next time. The combo stands as one more row of the
-  panel's own form (2026-09-06): "Format:" right-aligned into the column "Save As:" and "Where:" share, the combo
-  starting where the fields start, both anchored to the panel's centre line (`SavePanelForm`), since the panel centres
-  its form and the accessory alike. It sits under "Where:" — the accessory area is the only place macOS gives an app,
-  and a row between "Save As:" and "Tags:" is not on offer; decided to keep it there rather than hide Tags.
+- **Save is Nota's own dialog**, not `NSSavePanel` (done 2026-09-07, see Done 42): a sheet on the window, in the
+  shape of the macOS save form and nothing else — "Save As:" over "Location:", the labels right-aligned into one
+  column and the fields starting in the next; the name field and the Format popup share the first row, the popup at
+  the field's end, since the extension is the tail of the name (merged 2026-09-07), with Cancel and Save (the default button,
+  Return; Escape is Cancel) at the bottom. The name field carries the base name only, preselected, and the
+  extension lives in the Format popup, so it is never lost to a panel's own name-typed-with-a-dot handling; a name
+  typed with an extension of its own still wins over the popup (`SaveNameComposer`). A named file opens on its own
+  name, extension and folder; a new note on the last extension chosen (`Preferences.lastSaveExtension`, default
+  `md`, listed even when it is none of Nota's known ones) and the last folder saved into
+  (`Preferences.lastSaveDirectory`), or Documents. Location is read only — `Choose…` opens the system's folder
+  picker over the dialog (a nested modal, the form AppKit documents for a panel raised from a modal window), the
+  one part worth keeping — and shows the folder's own icon and name with the
+  whole path behind its tooltip. Saving over a file that is not the note's own asks first. The dialog is relabelled
+  where it stands on a language change. Before this the extension lived in an accessory combo bolted under the
+  system panel's "Where:" row, lined up with its form by measured offsets from the panel's centre line; the
+  accessory area was the only place macOS gave an app, and the arithmetic went with it.
 - The footer shows a text note's own shape at the right of the counts, `UTF-8` and `LF` as two capsule badges in
   the vim chip's family (done 2026-09-04, see Done 2): clicking either pops a menu to convert it, which marks the tab
   dirty for the next ⌘S; hover brightens the capsule so it reads as pressable. Empty over a PDF or a picture, which
@@ -1190,6 +1198,19 @@
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+42. **Nota's own Save dialog (done 2026-09-07).** `NSSavePanel` is gone from Save and Save As. `SaveDialog` is a
+    sheet on the window with two rows — "Save As:" (the base name, selected and first responder, with the Format
+    popup at the field's end: `SaveNameComposer.knownExtensions()`, carrying a remembered extension the list does
+    not know) and "Location:" (read only: the folder's icon and name, the whole path in its tooltip) — over Cancel and a default
+    Save. `Choose…` is the one thing left to the system, an `NSOpenPanel` for folders run modally over the dialog (nested in its own modal session).
+    `presentSavePanel(for:)` keeps its signature and its synchronicity: `beginSheet` then `NSApp.runModal(for:)`
+    until a button stops it, so `save(note:forcePanel:)` and every caller are untouched, and the `savePanelProvider`
+    seam still stands the whole thing down for the tests. Save composes the URL with `SaveNameComposer` (a typed
+    `notes.txt` still beating the popup), is unavailable while the name is blank, asks `confirmReplace` before
+    writing over somebody else's file and stays put when the answer is no, and writes `lastSaveDirectory` /
+    `lastSaveExtension` on the way out. Every word goes through `L10n` and the dialog relabels itself on
+    `Preferences.didChange`, so a language changed while it is open takes effect at once. `SavePanelReplaceValidator`,
+    `saveFormatAccessory` and the `SavePanelForm` offsets are deleted. Pinned by `SaveDialogTests`.
 41. **The cursorline at the end of the document (done 2026-09-07).** With the caret after the last character the
     band lit every line: `lineBand` had no glyph to ask about at that index and fell back to the whole view. It
     now takes the extra line fragment when the text ends in a newline or is empty, and the last glyph's line
