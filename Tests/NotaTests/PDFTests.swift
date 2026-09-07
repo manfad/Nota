@@ -488,7 +488,7 @@ final class PDFTests: AppKitTestCase {
         controller.open(url: try makeTextPDF(pages: ["alpha beta"], named: "paper.pdf",
                                              in: try makeTemporaryDirectory()))
         let (pdfView, bar) = try findChrome(of: controller)
-        XCTAssertEqual(bar.field.placeholderString, "Find in document")
+        XCTAssertTrue(bar.field.placeholderString?.isEmpty ?? true)
         XCTAssertFalse(bar.isShown)
         XCTAssertFalse(bar.canReplace, "there is nothing in a document to replace")
 

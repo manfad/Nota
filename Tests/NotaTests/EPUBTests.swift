@@ -500,7 +500,7 @@ final class EPUBTests: AppKitTestCase {
         let controller = try makeReadingController(named: "novel.epub")
         let pane = controller.previewPanes.epub
         let bar = try XCTUnwrap(descendant(of: pane, ofType: FindBarView.self))
-        XCTAssertEqual(bar.field.placeholderString, "Find in page")
+        XCTAssertTrue(bar.field.placeholderString?.isEmpty ?? true)
         XCTAssertFalse(bar.isShown)
 
         let page = try XCTUnwrap(pane.chapterPage.webView)

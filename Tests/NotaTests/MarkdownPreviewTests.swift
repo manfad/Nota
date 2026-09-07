@@ -2753,7 +2753,7 @@ final class MarkdownPreviewTests: AppKitTestCase {
         let preview = try previewView(of: controller)
         let rendered = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
         let bar = try XCTUnwrap(descendant(of: preview, ofType: FindBarView.self))
-        XCTAssertEqual(bar.field.placeholderString, "Find in page")
+        XCTAssertTrue(bar.field.placeholderString?.isEmpty ?? true)
         XCTAssertFalse(bar.isShown)
 
         let find = NSMenuItem(title: "Find…", action: nil, keyEquivalent: "f")
@@ -3405,7 +3405,7 @@ final class MarkdownPreviewTests: AppKitTestCase {
         let textFrame = scrollView.frame
         let queryFrame = bar.frame
 
-        bar.magnifierButton.performClick(nil)
+        bar.findWord.performClick(nil)
         window.layoutIfNeeded()
 
         XCTAssertTrue(bar.isExpanded)
@@ -3433,7 +3433,7 @@ final class MarkdownPreviewTests: AppKitTestCase {
             controlFrame.maxY, stackFrame.minY, "still clear of the whole stack"
         )
 
-        bar.magnifierButton.performClick(nil)
+        bar.findWord.performClick(nil)
         window.layoutIfNeeded()
         XCTAssertFalse(bar.isExpanded)
         XCTAssertFalse(bar.replacePill.isShown)
@@ -3467,9 +3467,9 @@ final class MarkdownPreviewTests: AppKitTestCase {
         XCTAssertFalse(bar.replacePill.isShown)
         XCTAssertEqual(bar.stackHeight, PillView.height)
 
-        bar.magnifierButton.performClick(nil)
+        bar.findWord.performClick(nil)
         window.layoutIfNeeded()
-        XCTAssertFalse(bar.isExpanded, "the glass is only a glass here")
+        XCTAssertFalse(bar.isExpanded, "the word is only a word here")
         XCTAssertFalse(bar.replacePill.isShown)
         XCTAssertEqual(
             controller.modeControlOverlays.preview.findBarClearance,

@@ -2027,7 +2027,10 @@ final class NotaTests: AppKitTestCase {
         let (_, textView, bar) = try makeFindBarController(text: "alpha beta alpha")
         XCTAssertFalse(bar.isShown, "nothing floats over the text at rest")
         XCTAssertEqual(bar.field.focusRingType, .none)
-        XCTAssertEqual(bar.field.placeholderString, "Find in note")
+        XCTAssertTrue(
+            bar.field.placeholderString?.isEmpty ?? true,
+            "the word beside the field says what is typed there"
+        )
 
         perform(.showFindInterface, on: textView)
         XCTAssertTrue(bar.isShown)
@@ -2400,30 +2403,140 @@ final class NotaTests: AppKitTestCase {
 
     // MARK: - The find bar: replacing
 
-    /// Both toggles wear a chevron, so they read as the toggles they are:
-    /// the glass points down and stays muted whether the replace pill is
-    /// away or out, and the arrows on the replace pill point up in the full
-    /// label colour — a click there folds the pill away, the mirror of the
-    /// glass that brought it out. Over a page with nothing to replace the
-    /// glass is a plain glyph.
+    /// Each pill leads with a word rather than a glyph, and the two words in
+    /// the find stack are the toggles the glass and the arrows used to be:
+    /// `Find` brings the replace pill out and `Replace` folds it away again.
     @MainActor
-    func testTheGlassAndTheArrowsWearAChevronAndBothToggleThePill() throws {
+    func testTheWordsLeadTheFindStackAndBothToggleTheReplacePill() throws {
         let (_, textView, bar) = try makeFindBarController(text: "alpha beta")
         perform(.showFindInterface, on: textView)
         XCTAssertFalse(bar.isExpanded)
-        let plain = PillView.symbol("magnifyingglass", pointSize: 12, label: "Find")
-        XCTAssertGreaterThan(bar.magnifierButton.image?.size.width ?? 0, plain?.size.width ?? 0,
-                             "the glass carries a chevron after it")
-        XCTAssertEqual(bar.magnifierButton.image?.accessibilityDescription, "Find")
+        XCTAssertEqual(bar.findWord.word, "Find")
+        XCTAssertEqual(bar.findWord.identifier?.rawValue, "Find")
+        XCTAssertEqual(bar.findWord.toolTip, "Replace (⌘R)")
+        XCTAssertNil(bar.findWord.image, "a word, not a glyph")
+        XCTAssertEqual(
+            bar.findWord.attributedTitle.attribute(.font, at: 0, effectiveRange: nil) as? NSFont,
+            PillView.wordFont, "set the size the field's own text is"
+        )
 
-        bar.magnifierButton.performClick(nil)
+        bar.findWord.performClick(nil)
         XCTAssertTrue(bar.isExpanded)
-        XCTAssertEqual(bar.replacePill.iconButton.image?.accessibilityDescription, "Replace")
-        XCTAssertEqual(bar.replacePill.iconButton.toolTip, "Hide Replace")
+        XCTAssertEqual(bar.replacePill.replaceWord.word, "Replace")
+        XCTAssertEqual(bar.replacePill.replaceWord.identifier?.rawValue, "Replace")
+        XCTAssertEqual(bar.replacePill.replaceWord.toolTip, "Hide Replace")
 
-        bar.replacePill.iconButton.performClick(nil)
-        XCTAssertFalse(bar.isExpanded, "the arrows fold the replace pill away")
+        bar.replacePill.replaceWord.performClick(nil)
+        XCTAssertFalse(bar.isExpanded, "the word folds the replace pill away")
         XCTAssertFalse(bar.replacePill.isShown)
+    }
+
+    /// Neither field carries a placeholder any more: the word beside it is
+    /// what says where typing goes, so a grey sentence would only say it
+    /// twice.
+    @MainActor
+    func testNeitherFieldInTheFindStackCarriesAPlaceholder() throws {
+        let (_, textView, bar) = try makeFindBarController(text: "alpha beta")
+        perform(.showReplaceInterface, on: textView)
+        XCTAssertTrue(bar.field.placeholderString?.isEmpty ?? true)
+        XCTAssertTrue(bar.replaceField.placeholderString?.isEmpty ?? true)
+    }
+
+    /// The word is lit while the keyboard is in its own pill's field and
+    /// muted the rest of the time — so in the two-pill stack the light moves
+    /// from `Find` to `Replace` and back as the keyboard does.
+    @MainActor
+    func testTheLitWordFollowsTheKeyboardBetweenTheTwoFields() throws {
+        let (_, textView, bar) = try makeFindBarController(text: "alpha beta")
+        XCTAssertEqual(wordColour(of: bar.findWord), .secondaryLabelColor,
+                       "quiet before anybody is typing in it")
+
+        perform(.showReplaceInterface, on: textView)
+        type("alpha", into: bar)
+        XCTAssertTrue(bar.fieldHasFocus, "⌘F opens with the keyboard in the query field")
+        XCTAssertEqual(wordColour(of: bar.findWord), .labelColor)
+        XCTAssertEqual(wordColour(of: bar.replacePill.replaceWord), .secondaryLabelColor)
+
+        bar.focusReplaceField()
+        XCTAssertFalse(bar.fieldHasFocus)
+        XCTAssertTrue(bar.replacePill.fieldHasFocus)
+        XCTAssertEqual(wordColour(of: bar.findWord), .secondaryLabelColor)
+        XCTAssertEqual(wordColour(of: bar.replacePill.replaceWord), .labelColor)
+
+        bar.focusField()
+        XCTAssertEqual(wordColour(of: bar.findWord), .labelColor)
+        XCTAssertEqual(wordColour(of: bar.replacePill.replaceWord), .secondaryLabelColor)
+
+        perform(.hideFindInterface, on: textView)
+        XCTAssertFalse(bar.fieldHasFocus, "the keyboard went back to the text")
+        XCTAssertEqual(wordColour(of: bar.findWord), .secondaryLabelColor)
+    }
+
+    /// ⌘R is a toggle both ways: it brings the replace row out, and pressed
+    /// again over a row that is out it folds it away and hands the keyboard
+    /// back to the query field.
+    @MainActor
+    func testCommandRTwiceFoldsTheReplaceRowAwayAgain() throws {
+        let (_, textView, bar) = try makeFindBarController(text: "alpha beta")
+        perform(.showReplaceInterface, on: textView)
+        XCTAssertTrue(bar.isExpanded)
+
+        perform(.showReplaceInterface, on: textView)
+        XCTAssertFalse(bar.isExpanded, "the second ⌘R folds it away")
+        XCTAssertFalse(bar.replacePill.isShown)
+        XCTAssertTrue(bar.isShown, "the bar itself stays")
+        XCTAssertTrue(bar.fieldHasFocus, "and the keyboard is back in the query field")
+        XCTAssertEqual(bar.stackHeight, PillView.height)
+    }
+
+    /// ⌘F over a stack with the replace row out folds that row away rather
+    /// than doing nothing: one key both opens find and comes back to it.
+    @MainActor
+    func testCommandFFoldsAnOpenReplaceRowAway() throws {
+        let (_, textView, bar) = try makeFindBarController(text: "alpha beta")
+        perform(.showReplaceInterface, on: textView)
+        XCTAssertTrue(bar.isExpanded)
+
+        perform(.showFindInterface, on: textView)
+        XCTAssertFalse(bar.isExpanded)
+        XCTAssertFalse(bar.replacePill.isShown)
+        XCTAssertTrue(bar.isShown)
+        XCTAssertTrue(bar.fieldHasFocus)
+
+        perform(.showFindInterface, on: textView)
+        XCTAssertTrue(bar.isShown, "and again is only a refocus")
+        XCTAssertFalse(bar.isExpanded)
+    }
+
+    /// Closing the bar closes the replace row with it: the next ⌘F is find
+    /// and no more, whatever the column was last replacing.
+    @MainActor
+    func testClosingTheBarForgetsTheReplaceRow() throws {
+        let (_, textView, bar) = try makeFindBarController(text: "alpha beta")
+        perform(.showReplaceInterface, on: textView)
+        XCTAssertTrue(bar.isExpanded)
+
+        perform(.hideFindInterface, on: textView)
+        XCTAssertFalse(bar.isShown)
+        XCTAssertFalse(bar.isExpanded)
+
+        perform(.showFindInterface, on: textView)
+        XCTAssertTrue(bar.isShown)
+        XCTAssertFalse(bar.isExpanded, "find only")
+        XCTAssertFalse(bar.replacePill.isShown)
+        XCTAssertEqual(bar.stackHeight, PillView.height)
+    }
+
+    /// What a pill's leading word is drawn in, whether it is a button or a
+    /// plain label.
+    @MainActor
+    private func wordColour(of word: any PillWord) -> NSColor? {
+        if let button = word as? PillWordButton {
+            return button.attributedTitle.attribute(
+                .foregroundColor, at: 0, effectiveRange: nil
+            ) as? NSColor
+        }
+        return (word as? PillWordLabel)?.textColor
     }
 
     /// ⌘R opens the same pill with its second row out, and Return in the
@@ -2501,8 +2614,8 @@ final class NotaTests: AppKitTestCase {
         )
     }
 
-    /// Escape closes the bar from the replace field too, and the row it was
-    /// showing is remembered for the next time ⌘F opens in this column.
+    /// Escape closes the bar from the replace field too, and takes the row it
+    /// was showing down with it.
     @MainActor
     func testEscapeInTheReplaceFieldClosesTheFindBar() throws {
         let (_, textView, bar) = try makeFindBarController(text: "alpha beta")
@@ -2516,7 +2629,7 @@ final class NotaTests: AppKitTestCase {
             doCommandBy: #selector(NSResponder.cancelOperation(_:))
         )
         XCTAssertFalse(bar.isShown)
-        XCTAssertTrue(bar.isExpanded, "the row is remembered for next time")
+        XCTAssertFalse(bar.isExpanded, "and the row goes down with it")
     }
 
     /// Return, or ⌥Return, in the pill's replace field — as AppKit hands it
@@ -2546,7 +2659,11 @@ final class NotaTests: AppKitTestCase {
         XCTAssertTrue(pill.isShown)
         XCTAssertEqual(pill.status, "200 lines")
         XCTAssertEqual(pill.field.focusRingType, .none)
-        XCTAssertEqual(pill.field.placeholderString, "Go to line")
+        XCTAssertEqual(pill.jumpWord.word, "Jump", "a word, not an arrow")
+        XCTAssertEqual(pill.jumpWord.identifier?.rawValue, "Jump")
+        XCTAssertTrue(pill.field.placeholderString?.isEmpty ?? true)
+        XCTAssertEqual(pill.jumpWord.textColor, .labelColor,
+                       "lit: the pill opens with the keyboard in its field")
         XCTAssertTrue(
             pill.field.currentEditor() is PillFieldEditor, "the pill's own field editor"
         )

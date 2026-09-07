@@ -111,7 +111,7 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
     /// The editor's own ⌘F bar, floating in the top-trailing corner of the
     /// editor column — the corner the mode control floats in, which the bar
     /// takes for as long as it is up.
-    private let findBar = FindBarView(placeholder: L10n.text("Find in note"))
+    private let findBar = FindBarView()
     private lazy var findSession = TextFindSession(bar: findBar, textView: textView)
     /// ⌘J's pill, sharing that corner with the find bar: one or the other, and
     /// opening either sends the other away.
@@ -367,6 +367,7 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
          restoring sessionWindow: SessionWindow? = nil,
          adopting adoptedNotes: [Note] = [],
          sessionWriter: (() -> Void)? = nil) {
+        LaunchTiming.mark("init: stored properties built")
         self.store = store
         self.sessionWriter = sessionWriter
 
@@ -411,6 +412,7 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         // autosaved frame cannot hold more than one of them.
         window.center()
 
+        LaunchTiming.mark("init: NSWindow made")
         let workspace = PaneView()
         workspacePane.view = workspace
         editorPane.view = NSView()
@@ -421,15 +423,21 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         )
         window.contentViewController = splitViewController
 
+        LaunchTiming.mark("init: window + text stack")
         buildUI()
+        LaunchTiming.mark("init: buildUI")
         // The counts are re-fitted once the two side regions have their
         // frames, which is the only moment their real widths are known.
         workspace.onLayout = { [weak self] in self?.updateCountsLabel() }
         buildSidebarPane()
+        LaunchTiming.mark("init: buildSidebarPane")
         buildPreviewPane()
+        LaunchTiming.mark("init: buildPreviewPane")
         buildWorkspaceSplitItems()
         rebuildSplitItems()
+        LaunchTiming.mark("init: split items")
         configureVim()
+        LaunchTiming.mark("init: configureVim")
 
         // A window with no session window of its own is the whole session:
         // it reads the file, takes the font size from it, and is the only
@@ -444,11 +452,13 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         // the frame it came back to rather than the one it was built with.
         if let frame = restored?.frame { window.setFrame(frame.rect, display: false) }
 
+        LaunchTiming.mark("window views built")
         if adoptedNotes.isEmpty {
             restoreSession(restored, pruningCache: sessionWindow == nil)
         } else {
             adopt(adoptedNotes)
         }
+        LaunchTiming.mark("window tabs restored")
 
         NotificationCenter.default.addObserver(
             self, selector: #selector(preferencesChanged),
@@ -1513,7 +1523,6 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
     /// Restyles every tab, not just the visible one, so switching tabs after a
     /// settings change never shows stale type.
     @objc private func preferencesChanged() {
-        findBar.field.placeholderString = L10n.text("Find in note")
         let attributes = defaultAttributes
         let font = preferences.font()
         for note in notes {
@@ -1770,6 +1779,7 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 
         selectedIndex = sessionWindow?.selectedTabID
             .flatMap { id in notes.firstIndex { $0.id == id } } ?? 0
+        LaunchTiming.mark("tab files read (\(notes.count) tabs)")
 
         if pruningCache { store.pruneCache(keeping: notes.map(\.id)) }
         finishRestore()
@@ -1787,10 +1797,15 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 
     private func finishRestore() {
         installCurrentNote()
+        LaunchTiming.mark("restore: installCurrentNote")
         refreshTabs()
+        LaunchTiming.mark("restore: refreshTabs")
         updateStatus()
+        LaunchTiming.mark("restore: updateStatus")
         refreshImages(force: true)
+        LaunchTiming.mark("restore: refreshImages")
         flush()
+        LaunchTiming.mark("restore: flush")
     }
 
     /// The cache is the source of truth for a dirty tab. A clean tab re-reads

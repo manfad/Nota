@@ -115,7 +115,7 @@ final class HTMLPreviewView: NSView, PreviewContent {
 
     /// The page's own ⌘F bar, floating in the top-trailing corner of the
     /// column — the same pill the editor, the render and a document use.
-    private let findBar = FindBarView(placeholder: "Find in page")
+    private let findBar = FindBarView()
     private lazy var findSession = HTMLFindSession(bar: findBar) { [weak self] in
         self?.webView
     }

@@ -3,13 +3,16 @@ import AppKit
 /// Nota's own ⌘F bar: the query pill, floating in the top-trailing corner of a
 /// column over the text rather than above it.
 ///
-/// The magnifying glass is a toggle. Clicking it fades a second pill in under
-/// this one — same width, same surface, 6pt below — holding the replacement
-/// and the two words that apply it, and clicking it again fades that away.
-/// Neither pill ever changes size or moves; the mode control drops below
-/// whichever stack is standing. Where nothing can be edited — the rendered
-/// page, a tab that cannot be typed in — the glass is only a glass and the
-/// second pill is out of reach.
+/// The pill leads with the word `Find` rather than a glyph, and that word is a
+/// toggle. Clicking it fades a second pill in under this one — same width,
+/// same surface, 6pt below — holding the replacement and the two words that
+/// apply it, and clicking it again fades that away. Neither pill ever changes
+/// size or moves; the mode control drops below whichever stack is standing.
+/// Where nothing can be edited — the rendered page, a tab that cannot be typed
+/// in — the word is only a word and the second pill is out of reach.
+///
+/// Neither field carries a placeholder: the word says what the row is for, and
+/// a grey sentence beside it would only say it again.
 ///
 /// The pills are only the pills. What a query *means* — the matches, the bands
 /// behind them, which one is current, what replacing one does — belongs to
@@ -23,9 +26,9 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
     let replacePill: ReplaceBarView
     var replaceField: PillTextField { replacePill.field }
 
-    /// The glass, which is also the replace pill's toggle — clicking it is how
-    /// that pill arrives and leaves.
-    private(set) var magnifierButton = NSButton()
+    /// The word `Find`, which is also the replace pill's toggle — clicking it
+    /// is how that pill arrives and leaves.
+    private(set) var findWord: PillWordButton!
     private let countLabel = PillView.quietLabel()
     private var previousButton = NSButton()
     private var nextButton = NSButton()
@@ -48,20 +51,19 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
     /// every bar over an `NSTextView` wants.
     var handlesAction: ((NSTextFinder.Action) -> Bool)?
 
-    /// Whether the replace pill is out. Remembered for as long as the bar
-    /// lives, which is as long as the column does: opening ⌘F again in a
-    /// column that was replacing brings that pill back with it.
+    /// Whether the replace pill is out. It goes down with the bar — closing
+    /// and opening again is find and no more, and ⌘R is what asks for the
+    /// second row.
     private(set) var isExpanded = false
 
     /// Whether there is anything here to replace. False over a rendered page
-    /// and over a tab that cannot be typed in, where the glass is only a glass
+    /// and over a tab that cannot be typed in, where the word is only a word
     /// and the second pill is out of reach.
     var canReplace = true {
         didSet {
             guard canReplace != oldValue else { return }
             if !canReplace { setExpanded(false) }
-            applySymbols()
-            magnifierButton.toolTip = canReplace ? "Replace (⌘R)" : nil
+            findWord.toolTip = canReplace ? "Replace (⌘R)" : nil
         }
     }
 
@@ -79,13 +81,15 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
 
     var replacement: String { replacePill.replacement }
 
-    init(placeholder: String) {
+    override init() {
         replacePill = ReplaceBarView()
         field = PillTextField()
         super.init()
 
-        PillView.style(field, placeholder: placeholder, owner: self)
-        magnifierButton = glyphButton(tooltip: "Replace (⌘R)", action: #selector(toggleReplace))
+        PillView.style(field, owner: self)
+        findWord = leadWordButton(
+            "Find", tooltip: "Replace (⌘R)", action: #selector(toggleReplace)
+        )
         previousButton = glyphButton(
             tooltip: "Previous match "
                 + "(\(Preferences.shared.combo(for: .findPrevious).displayName))",
@@ -103,7 +107,8 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
         field.nextKeyView = replacePill.field
         replacePill.field.nextKeyView = field
 
-        for view in [magnifierButton, field, countLabel, previousButton, nextButton, closeButton] {
+        addSubview(findWord)
+        for view in [field, countLabel, previousButton, nextButton, closeButton] {
             addSubview(view)
         }
         applySymbols()
@@ -114,10 +119,10 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
 
     private func installConstraints() {
         NSLayoutConstraint.activate([
-            magnifierButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            magnifierButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            findWord.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 11),
+            findWord.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            field.leadingAnchor.constraint(equalTo: magnifierButton.trailingAnchor, constant: 2),
+            field.leadingAnchor.constraint(equalTo: findWord.trailingAnchor, constant: 8),
             field.centerYAnchor.constraint(equalTo: centerYAnchor),
             field.trailingAnchor.constraint(equalTo: countLabel.leadingAnchor, constant: -6),
 
@@ -169,15 +174,11 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
 
     /// Puts the keyboard in the query field with everything in it selected, so
     /// the next thing typed replaces the query the bar came up holding.
-    func focusField() {
-        window?.makeFirstResponder(field)
-        field.selectText(nil)
-    }
+    func focusField() { field.focusSelectingAll() }
 
     func focusReplaceField() {
         guard isExpanded else { return }
-        window?.makeFirstResponder(replacePill.field)
-        replacePill.field.selectText(nil)
+        replacePill.field.focusSelectingAll()
     }
 
     // MARK: - The count
@@ -239,16 +240,10 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
         }
     }
 
-    /// The magnifying glass stays quiet — `secondaryLabelColor` with the
-    /// replace pill away and with it out alike. Where there is anything to
-    /// replace it wears a small chevron pointing down, so it reads as the
-    /// toggle it is; the pill it opens is the one that speaks up (see
-    /// `ReplaceBarView.applySymbols`). Over a rendered page the glass is a
-    /// plain glyph.
+    /// The word is coloured by `PillView`, by whether the keyboard is in this
+    /// pill's field; only the three glyphs at the trailing end are laid on
+    /// here.
     override func applySymbols() {
-        magnifierButton.image = canReplace
-            ? Self.symbolWithChevron("magnifyingglass", pointSize: 12, label: "Find", up: false)
-            : Self.symbol("magnifyingglass", pointSize: 12, label: "Find")
         previousButton.image = Self.symbol("chevron.up", pointSize: 11, label: "Previous")
         nextButton.image = Self.symbol("chevron.down", pointSize: 11, label: "Next")
         closeButton.image = Self.symbol("xmark", pointSize: 11, label: "Close")
@@ -259,14 +254,13 @@ final class FindBarView: PillView, NSTextFieldDelegate, PillActionResponder {
 
 /// The second pill: what to put in place of a match, and the two words that
 /// do it. It stands under the query pill and belongs to it — it arrives when
-/// the glass is clicked, and it leaves whenever the query pill does.
+/// `Find` is clicked, and it leaves whenever the query pill does.
 final class ReplaceBarView: PillView, NSTextFieldDelegate, PillActionResponder {
 
     let field: PillTextField
-    /// The arrows, with a chevron pointing up, both in the label colour: a
-    /// click folds this pill away, the mirror of the glass above that
-    /// brought it out.
-    private(set) var iconButton = NSButton()
+    /// The word `Replace`: a click folds this pill away, the mirror of the
+    /// `Find` above that brought it out.
+    private(set) var replaceWord: PillWordButton!
     private var replaceButton = NSButton()
     private var replaceAllButton = NSButton()
 
@@ -281,10 +275,9 @@ final class ReplaceBarView: PillView, NSTextFieldDelegate, PillActionResponder {
         field = PillTextField()
         super.init()
 
-        PillView.style(field, placeholder: "Replace", owner: self)
-        iconButton = glyphButton(tooltip: "Hide Replace", action: #selector(collapse))
-        iconButton.image = PillView.symbolWithChevron(
-            "arrow.2.squarepath", pointSize: 12, label: "Replace", up: true
+        PillView.style(field, owner: self)
+        replaceWord = leadWordButton(
+            "Replace", tooltip: "Hide Replace", action: #selector(collapse)
         )
         replaceButton = wordButton(
             title: "Replace", tooltip: "Replace this match (Return)",
@@ -294,13 +287,14 @@ final class ReplaceBarView: PillView, NSTextFieldDelegate, PillActionResponder {
             title: "All", tooltip: "Replace all matches (⌥Return)", action: #selector(replaceAll)
         )
 
-        for view in [iconButton, field, replaceButton, replaceAllButton] { addSubview(view) }
+        addSubview(replaceWord)
+        for view in [field, replaceButton, replaceAllButton] { addSubview(view) }
 
         NSLayoutConstraint.activate([
-            iconButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            iconButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            replaceWord.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 11),
+            replaceWord.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            field.leadingAnchor.constraint(equalTo: iconButton.trailingAnchor, constant: 2),
+            field.leadingAnchor.constraint(equalTo: replaceWord.trailingAnchor, constant: 8),
             field.centerYAnchor.constraint(equalTo: centerYAnchor),
             field.trailingAnchor.constraint(
                 equalTo: replaceButton.leadingAnchor, constant: -8
@@ -346,13 +340,10 @@ final class ReplaceBarView: PillView, NSTextFieldDelegate, PillActionResponder {
         }
     }
 
-    /// The arrows and their chevron wear `labelColor`: this pill is only ever
-    /// on screen because it was asked for, and the full colour is how it
-    /// says so, while the glass above stays muted.
+    /// The word follows the same rule the one above it does — lit while the
+    /// keyboard is in this pill's field, quiet otherwise — so only the two
+    /// small words at the trailing end are laid on here.
     override func applySymbols() {
-        iconButton.image = PillView.symbolWithChevron(
-            "arrow.2.squarepath", pointSize: 12, label: "Replace", colour: .labelColor, up: true
-        )
         PillView.applyTitle(to: replaceButton)
         PillView.applyTitle(to: replaceAllButton)
     }

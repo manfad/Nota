@@ -29,7 +29,7 @@ final class RTFPreviewView: NSView, PreviewContent {
     /// The document's own ⌘F bar, floating in the top-trailing corner of the
     /// column — the same pill the editor, the render and the PDF use, over
     /// this view's own text storage.
-    private let findBar = FindBarView(placeholder: "Find in document")
+    private let findBar = FindBarView()
     private lazy var findSession = TextFindSession(bar: findBar, textView: textView)
 
     /// The document as it was read, before a zoom was applied to it. Every

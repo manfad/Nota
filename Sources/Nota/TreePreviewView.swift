@@ -43,7 +43,7 @@ final class TreePreviewView: NSView, PreviewContent {
     /// The tree's own ⌘F bar, floating in the top-trailing corner of the
     /// column — the same pill the editor, the render and a document use, over
     /// the rows instead of a text storage.
-    private let findBar = FindBarView(placeholder: L10n.text("Find in tree"))
+    private let findBar = FindBarView()
     private lazy var findSession = TreeFindSession(bar: findBar, tree: self)
     /// What stands in the tree's place when the file will not parse: one
     /// centred line naming the format, the line and the reason.

@@ -28,7 +28,7 @@ final class GridFindTests: AppKitTestCase {
     func testTheTablesPillIsTheSameOneWithNothingToReplace() throws {
         let (pane, _) = try makeCSVPane()
         let bar = pane.findBarForTesting
-        XCTAssertEqual(bar.field.placeholderString, L10n.text("Find in table"))
+        XCTAssertTrue(bar.field.placeholderString?.isEmpty ?? true)
         XCTAssertFalse(bar.isShown)
         XCTAssertFalse(bar.canReplace, "a preview is read-only")
         XCTAssertFalse(pane.isFindBarVisible)

@@ -92,8 +92,10 @@
   In vim mode `/` `?` are vim's own search, typed in the command pane (see Vim mode); `n` `N` `*` `#` repeat it;
   `:noh` clears highlights. ⌘F is the same bar in every mode, and closing it hands the highlights back to vim.
 - The find bar is a pill floating in the top-trailing corner of the column, over the text, with that column's mode
-  control dropped below it: a magnifying glass, the query field, the count (`3 of 12`, `12 matches`, `No matches`),
-  and chevron-up / chevron-down / ✕, in `secondaryLabelColor` on a raised surface with a hairline round it. Nothing is
+  control dropped below it: the word `Find`, the query field (no placeholder), the count (`3 of 12`, `12 matches`,
+  `No matches`), and chevron-up / chevron-down / ✕, in `secondaryLabelColor` on a raised surface with a hairline round
+  it. The word is set in the field's own size (system 13) and is `secondaryLabelColor` until the keyboard is in that
+  pill's field, `labelColor` while it is — so the lit word says where typing goes. Nothing is
   pushed down for it; it fades (opacity, ≤150ms, no movement) and its field shows no focus ring. Typing searches as
   you go, from where the caret was when the bar opened; Return and ⇧Return step, Esc closes, ⌘G / ⇧⌘G wrap, ⌘E seeds
   the query from the selection and the find pasteboard. Case- and diacritic-insensitive.
@@ -103,18 +105,22 @@
   matches and the count then says `2000+`; an edit re-scans 150 ms after the keystrokes stop, and a note past
   `BigFile.threshold` not at all. Closing puts the bands down, leaves the match selected and hands back the keyboard
   and the corner. A tab switch closes the bar.
-- Replace is a **second pill**, not a taller one: the magnifying glass fades in another 300×34 pill of the same
-  surface 6pt below the find one, holding an `arrow.2.squarepath` glyph, a replace field ("Replace") and two quiet
-  words, `Replace` and `All`. It goes when the glass is clicked again and when the find pill closes; neither pill ever
-  changes size, and the mode control clears the whole stack. ⌘R ("Find and Replace…") opens both, with the keyboard
-  in the replace field when there is already a query. Tab walks between the fields; there Return replaces and steps
-  on, ⌥Return replaces all, Esc closes. The pill is remembered per column, not per tab.
+- Replace is a **second pill**, not a taller one: clicking `Find` fades in another 300×34 pill of the same
+  surface 6pt below the find one, holding the word `Replace`, a replace field (no placeholder) and two quiet
+  words, `Replace` and `All`. It goes when either word is clicked again and when the find pill closes; neither pill
+  ever changes size, and the mode control clears the whole stack. Both ⌘R ("Find and Replace…") and ⌘F are toggles:
+  ⌘R with the bar closed opens both rows, with the keyboard in the replace field when there is already a query; ⌘R or
+  ⌘F over a row that is out folds it away and puts the keyboard back in the query field; ⌘F over a folded bar refocuses
+  the query field. Closing the bar takes the row down with it, so the next ⌘F is find and no more. Tab walks between
+  the fields, and the lit word walks with it; there Return replaces and steps on, ⌥Return replaces all, Esc closes.
 - Replace acts on the match you are standing on; clicked away, it steps to the next instead. The replacement is
   verbatim, never a pattern, and goes in as an ordinary edit — undo, the dirty flag, the save and vim all see one.
   Replace All changes every match, not only the 2000 wearing a band, in one undo, and leaves the caret where it was.
-  Over the rendered page and in any tab that is not editable the glass is a plain glyph and ⌘R is ⌘F.
-- **Jump to line** is the same pill again (done 2026-09-04): ⌘J ("Jump to Line…") opens one with an
-  `arrow.right.to.line` glyph, a field ("Go to line"), the note's line total (`1,234 lines`) and a ✕. It takes `N` or
+  Over the rendered page and in any tab that is not editable `Find` is only a word — clicking it does nothing — and
+  ⌘R is ⌘F.
+- **Jump to line** is the same pill again (done 2026-09-04): ⌘J ("Jump to Line…") opens one with the word
+  `Jump` (a label, not a button, lit by the same rule), a field with no placeholder, the note's line total
+  (`1,234 lines`) and a ✕. It takes `N` or
   `N:M`, 1-based, and moves as you type — to the first thing on line N that is not a space, or to column M clamped to
   the line's end, centred where there is room. Past the end is the last line; junk leaves the caret alone and reads
   `Not a line`. Return and the ✕ keep the place, Esc puts the caret and the scroll position back. Editor only, so the
@@ -702,8 +708,8 @@
   `findHighlightColor` and is the page's selection, and the count reads the same `3 of 12` / `12 matches` /
   `No matches` (`2000+` past the same cap the editor stops at). Typing searches from the page you are reading; ⌘G,
   ⇧⌘G, Return and ⇧Return walk and wrap; ⌘E seeds from what is selected on the page; Esc puts the bands down, leaves
-  the match selected and hands the keyboard back to the document. A document cannot be typed into, so the glass is
-  only a glass and Find and Replace… is greyed out — the one Find item a PDF turns down. PDFKit's own find bar never
+  the match selected and hands the keyboard back to the document. A document cannot be typed into, so `Find` is
+  only a word and Find and Replace… is greyed out — the one Find item a PDF turns down. PDFKit's own find bar never
   appears: `NotaPDFView` takes `performTextFinderAction:` off it.
 - ⌘+ / ⌘- / ⌘0 zoom the page here (done 2026-09-04). The three keys are one pair of hands doing two jobs, and what
   decides is which of the two the reader can see: with an editor on screen — any text tab in edit or split — they are
@@ -1325,9 +1331,9 @@
   wash fades in and out over the same 0.12s the tab's dot→✕ cross-fade takes, rather than snapping on beside it. The
   strip buttons (+, bookmark, gear) wear the same wash and fade, one step darker at 9% (11.5% dark) while held; the
   disc behind a ✕ is 10% (13% dark) and 18% (22% dark) under a press.
-- The strip's top-right corner holds three buttons past the +, in this order (the first arrived 2026-09-07): a Bookmark button, `bookmark` and `bookmark.fill` once the front tab is one, which bookmarks that tab and unbookmarks it again — ⌘D by another door, tool tip "Bookmark" / "Remove Bookmark" with the key beside it, and greyed on a note with no file to bookmark; a Bookmark dialog button, `book.closed`, which is the ⇧⌘J picker in bookmarks mode (a closed book rather than a second ribbon, since two ribbons side by side said nothing about which was which); and, last before the reserve, a Settings gear (⌘, by another door). All three pin at the trailing edge, each in a 24pt slot with a 4pt gap; the tabs and the + step left by exactly the slots the visible ones take, and a hidden one hands its slot back and lets the rest close up.
+- The strip's top-right corner holds three buttons past the +, in this order (the first arrived 2026-09-07): a Bookmark button, `bookmark` and `bookmark.fill` once the front tab is one, which bookmarks that tab and unbookmarks it again — ⌘D by another door, tool tip "Bookmark" / "Remove Bookmark" with the key beside it, and greyed on a note with no file to bookmark; a Bookmark dialog button, Nota's own book-with-ribbon art rather than an SF Symbol (a template SVG in `BookmarksButton`, drawn at 14.5pt with a 5-unit stroke so its ink stands the same 12pt as the gear's; since 2026-09-07 — a closed book rather than a second loose ribbon, since two ribbons side by side said nothing about which was which); and, last before the reserve, a Settings gear (⌘, by another door). All three pin at the trailing edge, each in a 24pt slot with a 4pt gap; the tabs and the + step left by exactly the slots the visible ones take, and a hidden one hands its slot back and lets the rest close up.
 - The switcher's first row sits above its search field and never filters away: "Add new tab", with a `plus`, which ↑ from the top of the list reaches and Return (or a click) turns into a new tab, ⌘T by another door. It is there in the `@` mode too. It is a one-row table of its own, sharing the list's cell view and taking the list's own resolved table style, so it is drawn as a list row — same inset, same rounded selection highlight, icon and title at the list rows' own x. In the bookmarks panel the row is the front tab's bookmark instead: "Bookmark this tab" with a `bookmark`, or "Remove bookmark from this tab" with `bookmark.fill` once it is one, and choosing it is ⇧⌘D by another door; with no tab to bookmark it is greyed and takes no selection.
-- Every tab carries a leading icon for its kind, in the strip and in the switcher's rows, from `FileKindIcon`: a 96×64 rounded badge with the extension lettered inside it, drawn for 141 extensions and embedded as SVG text in the generated `FileKindArt.swift` (from `file-icon/` by `Icon/make-file-icons.py`). Every name gets one — a spelling the set did not draw twice folds onto the one it did (`.mjs` onto `js`, `.latex` and `.ltx` onto `tex`, `.zsh`/`.bash`/`.fish` onto `sh`, `.tif` onto `tiff`, `.mkd`/`.mdown` onto `md`, `.cc`/`.cxx` onto `cpp`, `.m`/`.mm` onto `c`), a name with no extension reads as `txt`, an unsaved note gets the empty badge (`untitled`) and a kind nobody drew gets the `?` badge (`unknown`), so nothing falls through to an SF Symbol. Each stem is drawn twice, outlined and solid; a bookmarked tab draws the solid one. The badge is three units wide to two high, so its slot is 24 × 16 and it stands 15pt high beside an 11pt title. Heading rows keep their bare indent, with no icon.
+- Every tab carries a leading icon for its kind, in the strip and in the switcher's rows, from `FileKindIcon`: a 96×64 rounded badge with the extension lettered inside it, drawn for 141 extensions and embedded as SVG text in the generated `FileKindArt.swift` (from `file-icon/` by `Icon/make-file-icons.py`). Every name gets one — a spelling the set did not draw twice folds onto the one it did (`.mjs` onto `js`, `.latex` and `.ltx` onto `tex`, `.zsh`/`.bash`/`.fish` onto `sh`, `.tif` onto `tiff`, `.mkd`/`.mdown` onto `md`, `.cc`/`.cxx` onto `cpp`, `.m`/`.mm` onto `c`), a name with no extension reads as `txt`, an unsaved note gets the lined-note badge (`untitled`: the rounded rectangle with three ruled lines, since 2026-09-07) and a kind nobody drew gets the `?` badge (`unknown`), so nothing falls through to an SF Symbol. Each stem is drawn twice, outlined and solid; a bookmarked tab draws the solid one. The badge is three units wide to two high, so its slot is 24 × 16 and it stands 15pt high beside an 11pt title. Heading rows keep their bare indent, with no icon.
 - `@` as the switcher's first character (Done 9) swaps the list for the front `.md` tab's headings, indented by level, and the rest of the query fuzzy-filters those instead; `MarkdownHeadings` reads them straight from the note's own text — ATX and setext, fences skipped the way `MarkdownSourceMap` skips them — off the main thread once a note is past `BigFile.threshold`. A tab that is not `.md` answers with a quiet "No headings" row.
 - Choosing a heading puts the caret at its line start and scrolls it into view; in split or reading the render is walked to that block too, by hand through the `highlightBlock(containingSource:)` a caret move already drives.
 - The selected tab is always fully in view: at 40pt the strip stops shrinking and becomes a sliding window over the tabs, anchored on the selected one. Closing with the ✕ freezes the widths until the pointer leaves the strip, so a run of closes keeps each next ✕ under it; ⌘W does not freeze.
@@ -1435,8 +1441,29 @@
    another Mac without the Gatekeeper allow-once dance (see Done 28 for the ad-hoc release itself).
 3. **Tab strip overflow chevron.** The one piece of the Chromium strip still open (Done 15-A): a chevron at the
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
+4. **Half-bounce launch.** The Dock icon stops before its first bounce lands: a window with the strip and the
+   selected tab's text on screen within ~300 ms of exec. Step 1 (done 2026-09-07): `LaunchTiming.swift` — marks
+   at each launch phase, reported on stderr when the binary runs with `NOTA_LAUNCH_TIMING=1`. Then, in the order the
+   numbers justify: housekeeping (cache prune, the launch-time session save, hotkey registration) after the first
+   frame; the ten preview content views built lazily like the sidebars; tabs other than the selected one restored
+   as shells and read on selection or in an idle pass.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+53. **The pills say what they are (done 2026-09-07).** All three floating pills led with an SF Symbol — a
+    magnifying glass wearing a chevron, two arrows wearing another, an arrow-to-line — and each field carried a
+    placeholder saying the same thing again ("Find in note", "Find in page", "Replace", "Go to line"). Each now
+    leads with one word instead, set in the field's own size: `Find`, `Replace`, `Jump`. No chevrons, no
+    placeholders anywhere, and the three "Find in …" strings are out of every localization table. The word is
+    `secondaryLabelColor` until the keyboard is in that pill's own field and `labelColor` while it is, so in the
+    two-pill stack Tab moves the light from `Find` to `Replace` and back; `PillTextField` notices the field
+    editor arriving (`becomeFirstResponder`) and leaving (`textDidEndEditing`), which is one mechanism for all
+    three pills. A window merely going inactive ends no editing, so the word stays lit while Nota is in the
+    background, as the caret stays where it was. `Find` is still the replace toggle where there is anything to
+    replace and inert where there is not; `Replace` still folds its own pill away. And both keys are toggles
+    now: ⌘R over a row that is out folds it, ⌘F over one folds it and refocuses the query field, and `hide()`
+    takes the row down so the next ⌘F is find-only — the row used to outlive the bar and come back uninvited.
+    `PillWord` / `PillWordButton` / `PillWordLabel` and the colour rule live in `Pill.swift`; the toggling is
+    `TextFindSession.show` / `showReplace` / `hideReplace` / `hide`.
 52. **Mermaid diagrams inside Markdown (done 2026-09-07).** A ```` ```mermaid ```` fence draws as a diagram in the
     preview, read and laid out and drawn by Nota itself — the honest option (a) from the note, native parse plus
     native layout, no WebView and no mermaid.js. `Mermaid.swift` is the one door: it names the grammar off the
@@ -1698,9 +1725,11 @@
     to Mode Toggle, then put back). "Go to" reads "Jump to" in every title and translation; the code keeps
     `goToLine` / `goToTab` / `GoToLine.swift`. The Shortcuts row for ⌘B is "Sidebar" and
     ⇧⌘F's is "Search All Tabs…" (`ShortcutAction.titleKey`; the View item's per-tab name is untouched). The
-    three Settings footnotes are gone. In the find bar the glass wears a chevron where there is anything to
-    replace, pointing down and muted whether the pill is away or out, and the replace pill's arrows are a
-    button with a chevron up in the label colour that folds the pill away (`ReplaceBarView.onCollapse`); both drawn by `PillView.symbolWithChevron`.
+    three Settings footnotes are gone. In the find bar the glass wore a chevron where there was anything to
+    replace, pointing down and muted whether the pill was away or out, and the replace pill's arrows were a
+    button with a chevron up in the label colour that folded the pill away (`ReplaceBarView.onCollapse`); both
+    were drawn by `PillView.symbolWithChevron`. Superseded by Done 53 — the glyphs are words now, and
+    `symbolWithChevron` is gone with them.
 34. **Settings tidy-ups (done 2026-09-07).** The About page's update line is a plain wrapping label with a
     360pt `preferredMaxLayoutWidth`, not a `WrappingLabel`: that class hugs and resists at low priority so a
     stretched page can size it, and the centred About stack stretches nothing, so it folded to a word a line

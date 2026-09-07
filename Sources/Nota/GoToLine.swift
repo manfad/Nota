@@ -3,12 +3,14 @@ import AppKit
 /// ⌘J's pill: a line number, and where in the note it lands you.
 ///
 /// The same chrome the find bar is made of, in the same corner — one row with
-/// a glyph, a field, the note's line total and a ✕. No chevrons: there is one
-/// place to go, not a walk through several.
+/// the word `Jump`, a field, the note's line total and a ✕. The word is only a
+/// label: there is one place to go, not a walk through several, and nothing
+/// here to fold out. It lights up while the keyboard is in the field, the way
+/// `Find` and `Replace` do.
 final class GoToLinePill: PillView, NSTextFieldDelegate, PillActionResponder {
 
     let field: PillTextField
-    private let icon: NSImageView
+    private(set) var jumpWord: PillWordLabel!
     private let countLabel = PillView.quietLabel()
     private var closeButton = NSButton()
 
@@ -29,21 +31,23 @@ final class GoToLinePill: PillView, NSTextFieldDelegate, PillActionResponder {
 
     override init() {
         field = PillTextField()
-        icon = PillView.glyphView(
-            PillView.symbol("arrow.right.to.line", pointSize: 12, label: "Go to line")
-        )
         super.init()
 
-        PillView.style(field, placeholder: "Go to line", owner: self)
+        PillView.style(field, owner: self)
+        jumpWord = leadWordLabel("Jump")
         closeButton = glyphButton(tooltip: "Close (Esc)", action: #selector(close))
 
-        for view in [icon, field, countLabel, closeButton] { addSubview(view) }
+        addSubview(jumpWord)
+        for view in [field, countLabel, closeButton] { addSubview(view) }
+        // The ✕ used to arrive only with the first appearance change, which
+        // in a window that opens in light mode never comes.
+        applySymbols()
 
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 11),
-            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            jumpWord.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 11),
+            jumpWord.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            field.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
+            field.leadingAnchor.constraint(equalTo: jumpWord.trailingAnchor, constant: 8),
             field.centerYAnchor.constraint(equalTo: centerYAnchor),
             field.trailingAnchor.constraint(equalTo: countLabel.leadingAnchor, constant: -6),
 
@@ -59,10 +63,7 @@ final class GoToLinePill: PillView, NSTextFieldDelegate, PillActionResponder {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    func focusField() {
-        window?.makeFirstResponder(field)
-        field.selectText(nil)
-    }
+    func focusField() { field.focusSelectingAll() }
 
     /// `"1,234 lines"` while the number is a line, `"Not a line"` when what is
     /// typed is not one at all.
@@ -110,7 +111,6 @@ final class GoToLinePill: PillView, NSTextFieldDelegate, PillActionResponder {
     }
 
     override func applySymbols() {
-        icon.image = PillView.symbol("arrow.right.to.line", pointSize: 12, label: "Go to line")
         closeButton.image = PillView.symbol("xmark", pointSize: 11, label: "Close")
     }
 }

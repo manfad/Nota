@@ -25,7 +25,7 @@ class RenderedPreviewView: NSView, PreviewContent {
     /// The page's own ⌘F bar, floating in the top-trailing corner of the
     /// column — reading mode searches what is on screen rather than fetching
     /// the editor back to search that.
-    private let findBar = FindBarView(placeholder: "Find in page")
+    private let findBar = FindBarView()
     private lazy var findSession = TextFindSession(bar: findBar, textView: textView)
 
     /// The block the reader last pointed at, or the one the caret is in.

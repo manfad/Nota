@@ -71,6 +71,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `WindowRegistry.swift` (~210) — every open window, which is in front, where closing tabs go.
 - `Preferences.swift` (~570) — every setting (`UserDefaults` + `Preferences.didChange`), enums `EditorFontFamily`, `LineSpacingOption`, `SidebarSide`, `PlainTextImageStyle`, `EditorPaddingOption`, `AppLanguage`, `AppTheme`; `shortcuts` table, `hotKey`; window chrome (`hidesTabBar`, `autoHidesTabBar`, `hidesTrafficLights`, `hidesBookmarkToggleButton`, `hidesBookmarkButton` — the older key, which means the *dialog* button, `hidesSettingsButton`); `highlightsCurrentLine` (the cursorline band, default off).
 - `Shortcuts.swift` (~200) — `KeyCombo`, `ShortcutAction` (every adjustable menu key, defaults, groups, reserved combos), `NSMenuItem.applyShortcut`. ⌘D bookmarks the tab, ⇧⌘D shows the bookmarks; Jump to Tab… ⇧⌘J, Mode Toggle ⌘P, Reading Mode ⇧⌘P, Find and Replace ⌘R (fixed); duplicating a line is ⇧⌥↓ only.
+- `LaunchTiming.swift` (~80) — where a launch's time goes: `mark(_:)` at each phase from `main` to the window becoming key, printed to stderr a second after launch when the binary runs with `NOTA_LAUNCH_TIMING=1` (the binary itself, not `open`, which drops the environment); the first line is the kernel's exec time, so dyld and the runtime show as the gap to `main`. A `Bool` read and nothing else without the variable.
 - `Version.swift` — `AppVersion.current`; bumped with `Info.plist` by `.githooks/pre-commit` on every commit (`git config core.hooksPath .githooks`).
 - `UpdateCheck.swift` (~190) — the About page's "Check for Updates": one anonymous request to GitHub's `releases/latest`, `Release` (tag without its `v`, page URL, name, date), `compare` over dotted integers, `Result` / `Reason` (offline, rate-limited, another status, unreadable, a tag that is not a version), and `installedWithHomebrew` — a `/Caskroom/` in the bundle path, or a `Caskroom/nota` under a Homebrew prefix. The transport is a closure, so no test reaches the network.
 - `Localization.swift` (~545) — `L10n.text` and one table per language, all keyed by the English string: 简体中文, 繁體中文, Bahasa Melayu. `AppLanguage.resolved` (in `Preferences.swift`) says which one, resolving `.system` against the Mac's preferred language.
@@ -154,9 +155,9 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `ListContinuation.swift` (~365) — what Return means on a list item, as pure functions: `ListMarker.parse(line:above:)`, `.next()`, `.prefix`, and `ListContinuation.edit(forReturnIn:at:)`. The header explains how a lone `i.` is read.
 
 ### Find, go-to-line, pills
-- `Pill.swift` (~330) — `PillView` chrome (`symbol`, `symbolWithChevron` — a glyph and a small chevron as one image, for a button that opens something), `PillFieldEditor`, `PillActionResponder`, `floatBottom`. `width` is a `class var` so the one pill carrying a sentence and two words can be wider; every other is the same 300.
-- `FindBar.swift` (~350) — `FindBarView` (query pill; the glass toggles the replace pill and wears a chevron while it can), `ReplaceBarView` (the replace pill; its arrows are a button with a chevron up that folds it away through `onCollapse`), tooltips from the shortcut table.
-- `FindSession.swift` (~530) — `TextFindSession` for the editor and rendered panes; `NSTextView.setFindHighlights` and `quietFindBand` (light: label wash, dark: dimmed find yellow).
+- `Pill.swift` (~400) — `PillView` chrome (`symbol`, `glyphButton`, `quietLabel`), the leading word every pill now opens with (`PillWord`, `PillWordButton`, `PillWordLabel`, `leadWordButton`, `leadWordLabel`, and the one colour rule: muted until the pill's own field has the keyboard, `labelColor` while it does), `PillTextField` (which notices the field editor arriving and leaving and tells its pill), `PillFieldEditor`, `PillActionResponder`, `floatBottom`. `width` is a `class var` so the one pill carrying a sentence and two words can be wider; every other is the same 300.
+- `FindBar.swift` (~340) — `FindBarView` (query pill; the word `Find` toggles the replace pill where there is anything to replace and is inert where there is not), `ReplaceBarView` (the replace pill; its word `Replace` folds it away through `onCollapse`), no placeholders in either field, tooltips from the shortcut table.
+- `FindSession.swift` (~545) — `TextFindSession` for the editor and rendered panes; ⌘F and ⌘R both toggle the replace row (`show`, `showReplace`, `hideReplace`) and `hide` takes it down with the bar; `NSTextView.setFindHighlights` and `quietFindBand` (light: label wash, dark: dimmed find yellow).
 - `HTMLFindSession.swift` (~525) — same for WebKit pages (CSS highlights).
 - `PDFFindSession.swift` (~380) — same for PDFKit.
 - `TreeFindSession.swift` (~400) — same for a tree preview's rows: the keys and the values as the rows spell
@@ -168,7 +169,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   the page on screen starts, how many columns it has, what a cell says, and "turn to this row"), the anchor, the
   wrap, the `2000+` cap, and the band a cell is asked for as it draws. Knows nothing of what is under it — one pane
   walks a table in memory and the other asks SQLite.
-- `GoToLine.swift` (~290) — ⌘J pill.
+- `GoToLine.swift` (~285) — ⌘J pill; it leads with the word `Jump`, a label rather than a button.
 - `ExternalChangePill.swift` (~90) — "Changed on disk · Reload / Keep mine".
 - `FormatOfferPill.swift` (~175) — the same corner and the same chrome, for the other thing Nota says without being
   asked: "JSON detected · Preview in JSON / Not now". The format's name is filled into one localized sentence, and

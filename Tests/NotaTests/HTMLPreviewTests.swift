@@ -616,7 +616,7 @@ final class HTMLPreviewTests: AppKitTestCase {
         )
         let pane = controller.previewPanes.html
         let bar = try findBar(of: pane)
-        XCTAssertEqual(bar.field.placeholderString, "Find in page")
+        XCTAssertTrue(bar.field.placeholderString?.isEmpty ?? true)
         XCTAssertFalse(bar.isShown)
         XCTAssertFalse(bar.canReplace, "a preview is not a second place to edit the file")
 

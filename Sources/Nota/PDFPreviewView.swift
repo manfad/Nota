@@ -22,7 +22,7 @@ final class PDFPreviewView: NSView, PreviewContent, PageListSource {
     /// The document's own ⌘F bar, floating in the top-trailing corner of the
     /// column — the same pill the editor and the render use, over PDFKit's
     /// selections instead of a text storage.
-    private let findBar = FindBarView(placeholder: "Find in document")
+    private let findBar = FindBarView()
     private lazy var findSession = PDFFindSession(bar: findBar, pdfView: pdfView)
 
     /// Run when the reader moves to another page, with its 0-based index.

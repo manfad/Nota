@@ -1241,6 +1241,24 @@ class StripButton: NSButton {
         let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
         image = NSImage(systemSymbolName: symbolName, accessibilityDescription: name)?
             .withSymbolConfiguration(config)
+        finishInit(name: name, toolTip: toolTip)
+    }
+
+    /// A button drawing this app's own template art — an `NSImage` built
+    /// from embedded SVG (see `BookmarksButton`'s book) — rather than asking
+    /// AppKit for an SF Symbol by name. There is no symbol name to read the
+    /// picture back from, so the caller hands one down for
+    /// `symbolNameForTesting` to report.
+    init(templateImage: NSImage, testingName: String, name: String, toolTip: String) {
+        super.init(frame: .zero)
+        symbolNameForTesting = testingName
+        image = templateImage
+        finishInit(name: name, toolTip: toolTip)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    private func finishInit(name: String, toolTip: String) {
         isBordered = false
         bezelStyle = .inline
         imagePosition = .imageOnly
@@ -1251,8 +1269,6 @@ class StripButton: NSButton {
         hoverFill.alphaValue = 0
         addSubview(hoverFill)
     }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
 
     /// Swaps the picture without touching anything else about the button —
     /// the template flag stays on, so `contentTintColor` keeps colouring it.
@@ -1355,12 +1371,19 @@ final class BookmarkToggleButton: StripButton {
 }
 
 /// The Bookmark dialog button beside it (SPEC Todo 13): the ⇧⌘J picker,
-/// opened straight into its bookmarks list. A closed book rather than a
-/// second bookmark ribbon — the one next to it is the ribbon, and two of them
-/// in a row said nothing about which was which.
+/// opened straight into its bookmarks list. A closed book with its own
+/// bookmark ribbon rather than a second loose ribbon — the button beside it
+/// is the ribbon, and two of them in a row said nothing about which was
+/// which. This app's own art (`bookSVG` below) rather than the SF Symbol
+/// `book.closed`, so the ribbon reads at strip size; drawn as a template
+/// image exactly like `FileKindIcon`'s badges, so `contentTintColor` still
+/// colours it.
 final class BookmarksButton: StripButton {
     init() {
-        super.init(symbolName: "book.closed", name: "Bookmark dialog", toolTip: "")
+        super.init(
+            templateImage: Self.bookImage,
+            testingName: "nota.book.bookmark", name: "Bookmark dialog", toolTip: ""
+        )
         refreshLabel()
     }
 
@@ -1371,6 +1394,37 @@ final class BookmarksButton: StripButton {
         setAccessibilityLabel(name)
         toolTip = name + "  " + Preferences.shared.combo(for: .showBookmarks).displayName
     }
+
+    /// A 64×64 square badge, so — unlike `FileKindIcon`'s 3:2 badges — its
+    /// image is square too. Measured offscreen (a bounding box of the
+    /// non-transparent pixels, light and dark): `book.closed` and
+    /// `gearshape` at the strip's 11pt medium both draw 12.125pt of ink
+    /// high. This art's own padding sits it lower in its box, so it takes a
+    /// 14.5pt image to stand the same 12pt or so of ink — 16.6pt, this
+    /// badge's height if it stood as tall as an SF Symbol's full em, ran a
+    /// visible notch taller than the gear beside it. The source art's
+    /// 4-unit stroke is thickened to 5: at 4 the lines read noticeably
+    /// thinner than the gear's, 5 sits right beside it in weight, and 6
+    /// starts to look bolder than its neighbours.
+    private static let bookImage: NSImage = {
+        let data = BookmarksButton.bookSVG.data(using: .utf8)!
+        let image = NSImage(data: data)!
+        image.isTemplate = true
+        image.size = NSSize(width: 14.5, height: 14.5)
+        return image
+    }()
+
+    private static let bookSVG = """
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+      <g stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 10H44C47.314 10 50 12.686 50 16V38C50 41.314 47.314 44 44 44H18C14.686 44 12 46.686 12 50V16C12 12.686 14.686 10 18 10Z"/>
+        <path d="M18 44C14.686 44 12 46.686 12 50S14.686 56 18 56H49"/>
+        <path d="M46 44C41 47 41 53 46 56"/>
+        <path d="M20 11V43"/>
+      </g>
+      <path d="M29 10H41V30C41 30.84 40.03 31.31 39.37 30.79L35 27.3L30.63 30.79C29.97 31.31 29 30.84 29 30V10Z" fill="currentColor"/>
+    </svg>
+    """
 }
 
 /// The Settings gear in the strip's top-right corner, past the bookmark: the

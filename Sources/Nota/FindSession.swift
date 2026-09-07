@@ -93,7 +93,7 @@ final class TextFindSession {
         case .previousMatch: step(forward: false)
         case .setSearchString: useSelectionForFind()
         case .showReplaceInterface: showReplace()
-        case .hideReplaceInterface: bar.setExpanded(false)
+        case .hideReplaceInterface: hideReplace()
         case .replace: replace()
         case .replaceAll: replaceAll()
         default: return false
@@ -106,10 +106,15 @@ final class TextFindSession {
     /// ⌘F. A selection comes up in the field ready to be searched for;
     /// anything else keeps the last query, all of it selected, so typing
     /// replaces it.
+    ///
+    /// ⌘F over a bar that is already showing its replace row folds that row
+    /// away and puts the keyboard back in the query field: the one key both
+    /// opens find and comes back to it.
     func show() {
         guard let textView else { return }
+        if bar.isShown, bar.isExpanded { bar.setExpanded(false) }
         // A rendered page, and a tab that cannot be typed in, have nothing to
-        // replace: the glass there is only a glass.
+        // replace: the word there is only a word.
         bar.canReplace = textView.isEditable
         let selection = textView.selectedRange()
         if selection.length > 0 {
@@ -128,6 +133,9 @@ final class TextFindSession {
     func hide() {
         guard bar.isShown else { return }
         bar.setShown(false)
+        // The replace row is asked for, never inherited: the next ⌘F opens
+        // find and no more.
+        bar.setExpanded(false)
         let landing = currentMatch
         clearHighlights()
         guard let textView else { return }
@@ -141,11 +149,28 @@ final class TextFindSession {
     /// ⌘R. The same bar with its replace row out, and the keyboard in
     /// whichever field there is still something to type in. Where nothing can
     /// be edited it is ⌘F and no more.
+    ///
+    /// Pressed again over a row that is already out it folds it away and
+    /// hands the keyboard back to the query field — the same key both ways,
+    /// like ⌘F.
     func showReplace() {
+        if bar.isShown, bar.isExpanded {
+            hideReplace()
+            return
+        }
         show()
         guard textView?.isEditable == true else { return }
         bar.setExpanded(true)
         if !bar.query.isEmpty { bar.focusReplaceField() }
+    }
+
+    /// The replace row folds away — the word `Replace` was clicked, or ⌘R was
+    /// pressed over a row that was already out — and the keyboard goes back to
+    /// the query field, which is the only field left to type in.
+    func hideReplace() {
+        guard bar.isExpanded else { return }
+        bar.setExpanded(false)
+        if bar.isShown { bar.focusField() }
     }
 
     /// The tab in front changed, or the page was rendered again: whatever was

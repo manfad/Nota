@@ -100,6 +100,9 @@ class PillView: NSView {
             alphaValue = shown ? 1 : 0
             isHidden = !shown
         }
+        // Nobody is typing in a pill that has gone: the word goes back to
+        // being quiet, so it does not come up lit next time.
+        if !shown { setFieldFocused(false) }
         onVisibilityChange?(shown)
     }
 
@@ -145,6 +148,78 @@ class PillView: NSView {
         return button
     }
 
+    // MARK: - The word a pill leads with
+
+    /// The word in the pill's leading corner — `Find`, `Replace`, `Jump` —
+    /// where every one of these bars used to lead with a glyph. Whether it is
+    /// a button or a plain label, the colour is decided here: muted while the
+    /// pill's field is not being typed in, `labelColor` while it is.
+    private(set) var leadWord: (any PillWord)?
+
+    /// Whether this pill's own field has the keyboard. The two pills of the
+    /// find stack each answer for their own, so Tab between the fields moves
+    /// the lit word from one to the other.
+    private(set) var fieldHasFocus = false
+
+    /// The size the field's text is set in, so the word and what is typed
+    /// beside it read as one line.
+    static let wordFont = NSFont.systemFont(ofSize: 13)
+
+    /// A word that does something: the find pill's `Find`, which opens and
+    /// folds the replace row, and the replace pill's `Replace`, which folds it
+    /// away again. Borderless and unbezelled — it is a word in a row, not a
+    /// button in a dialogue — and exactly as wide as the word, so it starts
+    /// where a plain label would.
+    func leadWordButton(_ word: String, tooltip: String?, action: Selector) -> PillWordButton {
+        let button = PillWordButton()
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.isBordered = false
+        button.bezelStyle = .shadowlessSquare
+        button.imagePosition = .noImage
+        button.toolTip = tooltip
+        button.target = self
+        button.action = action
+        button.focusRingType = .none
+        button.identifier = NSUserInterfaceItemIdentifier(word)
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        // The word is its own width; the height is a comfortable hit target
+        // around it rather than the height of the letters.
+        button.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        leadWord = button
+        applyLeadWordColour()
+        return button
+    }
+
+    /// A word that only names the pill: ⌘J's `Jump`. There is one place to go
+    /// and nothing to fold, so nothing here is clickable.
+    func leadWordLabel(_ word: String) -> PillWordLabel {
+        let label = PillWordLabel(labelWithString: word)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = Self.wordFont
+        label.identifier = NSUserInterfaceItemIdentifier(word)
+        label.setContentHuggingPriority(.required, for: .horizontal)
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        leadWord = label
+        applyLeadWordColour()
+        return label
+    }
+
+    /// The pill's field took the keyboard, or gave it up. One mechanism for
+    /// all three pills: `PillTextField` says so as the field editor arrives
+    /// and as it leaves.
+    func setFieldFocused(_ focused: Bool) {
+        guard focused != fieldHasFocus else { return }
+        fieldHasFocus = focused
+        applyLeadWordColour()
+    }
+
+    /// Lit while the keyboard is in this pill's field, muted the rest of the
+    /// time: the word is what says where typing goes.
+    func applyLeadWordColour() {
+        leadWord?.applyWordColour(fieldHasFocus ? .labelColor : .secondaryLabelColor)
+    }
+
     /// A word rather than a bezel, so a row reads as one line and not as a
     /// dialogue with buttons in it.
     func wordButton(title: String, tooltip: String, action: Selector) -> NSButton {
@@ -182,8 +257,8 @@ class PillView: NSView {
     /// Dressed rather than built, since a subclass's `let` field has to exist
     /// before `super.init` runs and cannot name `self` until after it.
     static func style(
-        _ field: PillTextField, placeholder: String,
-        owner: AnyObject & PillActionResponder & NSTextFieldDelegate
+        _ field: PillTextField, placeholder: String = "",
+        owner: PillView & PillActionResponder & NSTextFieldDelegate
     ) {
         field.translatesAutoresizingMaskIntoConstraints = false
         field.placeholderString = placeholder
@@ -193,6 +268,7 @@ class PillView: NSView {
         field.focusRingType = .none
         field.delegate = owner
         field.owner = owner
+        field.pill = owner
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
 
@@ -221,38 +297,6 @@ class PillView: NSView {
         )
         quiet?.isTemplate = false
         return quiet
-    }
-
-    /// A symbol with a small chevron after it, drawn as one image so a
-    /// glyph button can wear both: the chevron is what says "this opens
-    /// something". `up` for a control whose something is already out.
-    static func symbolWithChevron(
-        _ name: String, pointSize: CGFloat, label: String,
-        colour: NSColor = .secondaryLabelColor, up: Bool
-    ) -> NSImage? {
-        guard let glyph = symbol(name, pointSize: pointSize, label: label, colour: colour),
-              let chevron = symbol(up ? "chevron.up" : "chevron.down", pointSize: 6,
-                                   label: "", colour: colour)
-        else { return nil }
-        let gap: CGFloat = 1
-        let size = NSSize(
-            width: glyph.size.width + gap + chevron.size.width,
-            height: max(glyph.size.height, chevron.size.height)
-        )
-        let image = NSImage(size: size, flipped: false) { _ in
-            glyph.draw(in: NSRect(
-                x: 0, y: (size.height - glyph.size.height) / 2,
-                width: glyph.size.width, height: glyph.size.height
-            ))
-            chevron.draw(in: NSRect(
-                x: glyph.size.width + gap, y: (size.height - chevron.size.height) / 2,
-                width: chevron.size.width, height: chevron.size.height
-            ))
-            return true
-        }
-        image.accessibilityDescription = label
-        image.isTemplate = false
-        return image
     }
 
     static func glyphView(_ image: NSImage?) -> NSImageView {
@@ -287,7 +331,48 @@ class PillView: NSView {
         super.viewDidChangeEffectiveAppearance()
         applyColors()
         applySymbols()
+        applyLeadWordColour()
     }
+}
+
+// MARK: - The words
+
+/// A pill's leading word. `Find`, `Replace` and `Jump` are not localized —
+/// each is one short word naming the pill, the size the field's own text is
+/// set in, and each is lit or muted by the pill that owns it.
+protocol PillWord: NSView {
+    /// What it says, for the tests and for whoever reads the identifier.
+    var word: String { get }
+    func applyWordColour(_ colour: NSColor)
+}
+
+/// A word that is also a control: the find pill's `Find` and the replace
+/// pill's `Replace`. As wide as the word and no wider, so the letters begin
+/// where a label's would.
+final class PillWordButton: NSButton, PillWord {
+    var word: String { identifier?.rawValue ?? "" }
+
+    func applyWordColour(_ colour: NSColor) {
+        attributedTitle = NSAttributedString(
+            string: word,
+            attributes: [.font: PillView.wordFont, .foregroundColor: colour]
+        )
+    }
+
+    /// The title's own box. A borderless button would otherwise carry
+    /// AppKit's bezel margins about with it and start the word a few points
+    /// in from where the label in ⌘J's pill starts.
+    override var intrinsicContentSize: NSSize {
+        let size = attributedTitle.size()
+        return NSSize(width: ceil(size.width), height: ceil(size.height))
+    }
+}
+
+/// A word that is only a word: ⌘J's `Jump`.
+final class PillWordLabel: NSTextField, PillWord {
+    var word: String { stringValue }
+
+    func applyWordColour(_ colour: NSColor) { textColor = colour }
 }
 
 // MARK: - The fields
@@ -296,6 +381,55 @@ class PillView: NSView {
 /// hand it the right field editor — see `PillFieldEditor`.
 final class PillTextField: NSTextField {
     weak var owner: (AnyObject & PillActionResponder)?
+
+    /// The pill this field is in, so the word it leads with can light up
+    /// while the keyboard is here and go quiet when it leaves.
+    weak var pill: PillView?
+
+    /// Whether the field is putting its own editing session down and picking
+    /// it straight back up, rather than letting the keyboard go. `selectText`
+    /// does that, and so does setting the value under a reader who is typing:
+    /// both end the session and start another a line later, and neither must
+    /// blink the word above.
+    private var isChurning = false
+
+    private func withoutLosingFocus(_ work: () -> Void) {
+        let was = isChurning
+        isChurning = true
+        work()
+        isChurning = was
+    }
+
+    /// The keyboard, with everything in the field selected so the next thing
+    /// typed replaces it. The one call the pills make to take focus.
+    func focusSelectingAll() {
+        window?.makeFirstResponder(self)
+        withoutLosingFocus { selectText(nil) }
+    }
+
+    override var stringValue: String {
+        get { super.stringValue }
+        set { withoutLosingFocus { super.stringValue = newValue } }
+    }
+
+    /// The field editor is on its way in. This is the one place focus is
+    /// noticed arriving — `makeFirstResponder(field)`, a click in the field
+    /// and Tab from the pill above all come through here.
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { pill?.setFieldFocused(true) }
+        return became
+    }
+
+    /// And the one place it is noticed leaving: Escape, Tab to the other
+    /// field, a click back in the text. A window merely going inactive does
+    /// not end editing, so the word stays lit while Nota is in the
+    /// background, exactly as the caret stays where it was.
+    override func textDidEndEditing(_ notification: Notification) {
+        super.textDidEndEditing(notification)
+        guard !isChurning else { return }
+        pill?.setFieldFocused(false)
+    }
 }
 
 /// The field editor Nota hands its pills' fields.

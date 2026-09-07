@@ -53,13 +53,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         super.init()
     }
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        LaunchTiming.mark("will finish launching")
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        LaunchTiming.mark("did finish launching")
         // Before the first window is made, so nothing flashes the other
         // appearance on launch. From then on the setting applies itself.
         Preferences.shared.theme.apply()
+        LaunchTiming.mark("theme applied")
         buildMenu()
+        LaunchTiming.mark("menu built")
         restoreWindows()
         showWindow()
+        LaunchTiming.mark("window shown")
         NSApp.activate(ignoringOtherApps: true)
 
         registerHotKey()
@@ -67,6 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self, selector: #selector(preferencesChanged),
             name: Preferences.didChange, object: nil
         )
+        LaunchTiming.mark("hotkey registered")
+        LaunchTiming.scheduleReport()
     }
 
     /// One window per window in the session file, in the order it holds
@@ -75,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// and the file being read is still the only copy of the rest.
     private func restoreWindows() {
         let state = store.load()
+        LaunchTiming.mark("session file read")
         if let size = state?.fontSize { Preferences.shared.fontSize = CGFloat(size) }
         windows.bookmarks.replace(with: state?.bookmarks ?? [])
         windows.isRestoring = true
@@ -85,8 +96,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if windows.controllers.isEmpty { windows.newWindow() }
         // Only now that every window is open is a cache file with no tab
         // behind it really rubbish.
+        LaunchTiming.mark("windows restored")
         windows.pruneCache()
         windows.saveSession()
+        LaunchTiming.mark("cache pruned, session saved")
     }
 
     @objc private func preferencesChanged() {

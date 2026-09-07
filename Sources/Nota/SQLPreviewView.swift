@@ -53,7 +53,7 @@ final class SQLPreviewView: NSView, PreviewContent {
     private let emptyLabel = NSTextField(labelWithString: "")
     /// The grid's own ⌘F bar, floating in the top-trailing corner of the
     /// column — the same pill the editor, the render and a document use.
-    private let findBar = FindBarView(placeholder: L10n.text("Find in table"))
+    private let findBar = FindBarView()
     private lazy var findSession = GridFindSession(bar: findBar, grid: grid, source: self)
 
     private enum Layout {
