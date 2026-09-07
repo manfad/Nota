@@ -1190,6 +1190,10 @@
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+41. **The cursorline at the end of the document (done 2026-09-07).** With the caret after the last character the
+    band lit every line: `lineBand` had no glyph to ask about at that index and fell back to the whole view. It
+    now takes the extra line fragment when the text ends in a newline or is empty, and the last glyph's line
+    otherwise. Pinned by `NotaTests.testTheCursorlineBandAtTheEndOfTheDocumentIsOneLine`.
 40. **Less air at the top of the tree (done 2026-09-07).** The tree pane started a whole corner-slot band (44pt)
     down; it starts at the editor's padding (14pt) now. The CSV bar was moved up the same way with its pager pulled
     in clear of the capsule, and put back under the band the same evening — the pager belongs at the edge. Refresh

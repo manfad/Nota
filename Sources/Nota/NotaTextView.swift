@@ -442,7 +442,7 @@ final class NotaTextView: NSTextView {
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
         guard showsCursorLine else { return }
-        let band = lineBand(for: NSRange(location: selectedRange().location, length: 0), padding: 0)
+        let band = cursorLineBand
         guard band.intersects(rect) else { return }
         NSColor.labelColor.withAlphaComponent(0.04).setFill()
         band.fill()
@@ -503,6 +503,12 @@ final class NotaTextView: NSTextView {
         }
     }
 
+    /// The band the cursorline paints: the caret's line, edge to edge, and
+    /// only that line — at the end of the document too.
+    var cursorLineBand: NSRect {
+        lineBand(for: NSRange(location: selectedRange().location, length: 0), padding: 0)
+    }
+
     /// The full-width band of the lines a range sits on. Invalidating takes a
     /// couple of points of padding — a highlight spills into the line spacing
     /// below — where drawing takes the band exactly as it is laid out.
@@ -510,13 +516,29 @@ final class NotaTextView: NSTextView {
         guard let layoutManager else { return bounds }
         let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
         let glyphCount = layoutManager.numberOfGlyphs
-        guard glyphCount > 0, glyphRange.location < glyphCount else { return bounds }
 
-        var band = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
-        let last = min(NSMaxRange(glyphRange), glyphCount - 1)
-        band = band.union(layoutManager.lineFragmentRect(forGlyphAt: last, effectiveRange: nil))
-        if NSMaxRange(glyphRange) >= glyphCount {
-            band = band.union(layoutManager.extraLineFragmentRect)
+        var band: NSRect
+        if glyphRange.location < glyphCount {
+            band = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+            let last = min(NSMaxRange(glyphRange), glyphCount - 1)
+            band = band.union(layoutManager.lineFragmentRect(forGlyphAt: last, effectiveRange: nil))
+            if NSMaxRange(glyphRange) >= glyphCount {
+                band = band.union(layoutManager.extraLineFragmentRect)
+            }
+        } else {
+            // The caret past the last glyph — the end of the document. There
+            // is no glyph to ask about, so the line is either the extra
+            // fragment (the text ends in a newline, or is empty) or, when the
+            // last line has no newline, the line the last glyph sits on. This
+            // used to fall back to the whole view, which lit every line.
+            let extra = layoutManager.extraLineFragmentRect
+            if !extra.isEmpty {
+                band = extra
+            } else if glyphCount > 0 {
+                band = layoutManager.lineFragmentRect(forGlyphAt: glyphCount - 1, effectiveRange: nil)
+            } else {
+                return bounds
+            }
         }
         band.origin.x = 0
         band.size.width = bounds.width

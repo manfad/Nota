@@ -2991,6 +2991,52 @@ final class NotaTests: XCTestCase {
     /// other switch: nothing changes until Save, and Save reaches an
     /// already-open window's text view at once.
     @MainActor
+    /// The band is one line, wherever the caret is — including the end of the
+    /// document, where there is no glyph under it and the band used to fall
+    /// back to the whole view, lighting every line at once.
+    func testTheCursorlineBandAtTheEndOfTheDocumentIsOneLine() throws {
+        func makeView(_ text: String) -> NotaTextView {
+            let storage = NSTextStorage()
+            let layoutManager = NSLayoutManager()
+            let container = NSTextContainer(size: NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude))
+            container.widthTracksTextView = true
+            storage.addLayoutManager(layoutManager)
+            layoutManager.addTextContainer(container)
+            let view = NotaTextView(
+                frame: NSRect(x: 0, y: 0, width: 400, height: 400), textContainer: container
+            )
+            view.isRichText = false
+            view.font = NSFont.systemFont(ofSize: 13)
+            view.string = text
+            view.highlightsCurrentLine = true
+            return view
+        }
+
+        // Fifteen short lines, the last without a newline; the caret after "sd".
+        let text = (1...15).map { _ in "asd" }.joined(separator: "\n")
+        let view = makeView(text)
+        view.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        let lastLine = view.cursorLineBand
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        let firstLine = view.cursorLineBand
+
+        XCTAssertEqual(lastLine.height, firstLine.height, accuracy: 0.5,
+                       "the band at the end is as tall as any other line's")
+        XCTAssertGreaterThan(lastLine.minY, firstLine.maxY, "and it sits on the last line, not over them all")
+        XCTAssertLessThan(lastLine.height, view.bounds.height / 2)
+
+        // A trailing newline: the caret is on the empty line after it.
+        let trailing = makeView("asd\nasd\n")
+        trailing.setSelectedRange(NSRange(location: 8, length: 0))
+        let empty = trailing.cursorLineBand
+        XCTAssertEqual(empty.height, firstLine.height, accuracy: 0.5)
+        XCTAssertGreaterThan(empty.minY, firstLine.maxY)
+
+        // An empty document: one band, one line tall.
+        let blank = makeView("")
+        XCTAssertEqual(blank.cursorLineBand.height, firstLine.height, accuracy: 0.5)
+    }
+
     func testSavingHighlightCurrentLineAppliesToTheOpenWindow() throws {
         _ = NSApplication.shared
         let original = Preferences.shared.highlightsCurrentLine
@@ -4019,7 +4065,7 @@ final class NotaTests: XCTestCase {
         view.isRichText = false
         view.isEditable = true
         view.assets = assets
-        view.attributesProvider = { [.font: NSFont.systemFont(ofSize: 13)] }
+        view.font = NSFont.systemFont(ofSize: 13)
         return view
     }
 
