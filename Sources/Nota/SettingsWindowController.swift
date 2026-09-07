@@ -4,12 +4,14 @@ import AppKit
 /// down the left, under the traffic lights, and one page at a time on the
 /// right with its controls in inset rounded groups.
 ///
-/// Seven pages over one shared Save button. The button lives outside the pages
-/// on purpose: the draft is one draft, and Save applies every page's worth of
-/// it together.
+/// Nothing is staged and there is no Save button: every control writes its own
+/// preference the moment it changes, and the app follows at once. A change that
+/// re-words the dialog itself — language, theme — rebuilds it afterwards, so
+/// the new wording is visible without closing the window.
 ///
-/// Controls stage a draft. Save applies that snapshot together, then rebuilds
-/// the dialog so a language change is visible without closing the window.
+/// The one refusal is a shortcut clash: a combination already spoken for is
+/// not written at all. The field snaps back to the stored key and the page says
+/// why, since a key applied live would leave one of two commands unreachable.
 final class SettingsWindowController: NSWindowController, NSFontChanging {
     static let shared = SettingsWindowController()
 
@@ -54,6 +56,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let showTabBarSwitch = NSSwitch()
     private let autoHideTabBarSwitch = NSSwitch()
     private let trafficLightsSwitch = NSSwitch()
+    private let bookmarkToggleButtonSwitch = NSSwitch()
     private let bookmarkButtonSwitch = NSSwitch()
     private let settingsButtonSwitch = NSSwitch()
     private let footerSwitches: [(TextStats.Segment, NSSwitch)] = [
@@ -62,13 +65,13 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         (.images, NSSwitch()),
         (.lines, NSSwitch()),
     ]
+    private let footerFormatSwitch = NSSwitch()
     private let footerEncodingSwitch = NSSwitch()
     private let footerLineEndingsSwitch = NSSwitch()
     private let footerCursorSwitch = NSSwitch()
     private let hotKeyField = ShortcutRecorderField()
     private let hotKeyWarning = WrappingLabel(text: "")
     private let clearHotKeyButton = NSButton()
-    private let saveButton = NSButton()
     private let resetShortcutsButton = NSButton()
     private let shortcutWarning = WrappingLabel(text: "")
     private let versionLabel = WrappingLabel(text: "")
@@ -115,12 +118,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private var localizedLabels: [(field: NSTextField, key: String)] = []
     private var sectionTitles: [(field: NSTextField, key: String)] = []
     private var hasCentered = false
-    private var isDirty = false
+    /// True while a control is writing its own preference, so the change
+    /// notification that comes straight back does not rebuild the dialog
+    /// underneath the control the user is still holding.
     private var isApplying = false
-    private var pendingHotKey: GlobalHotKey.Shortcut?
-    private var pendingShortcuts: [ShortcutAction: KeyCombo] = [:]
-    private var pendingFontFamily: EditorFontFamily = .system
-    private var pendingCustomFontName: String?
 
     /// The sidebar's width, and the height its first row starts at — far
     /// enough down that the traffic lights sitting over it have their own air.
@@ -170,7 +171,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             window.center()
             hasCentered = true
         }
-        isDirty = false
         refresh()
         showWindow(nil)
         window.makeKeyAndOrderFront(nil)
@@ -296,13 +296,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         scroll.documentView = pageHost
         pane.addSubview(scroll)
 
-        let saveSpacer = NSView()
-        let saveRow = NSStackView(views: [saveSpacer, saveButton])
-        saveRow.translatesAutoresizingMaskIntoConstraints = false
-        saveRow.orientation = .horizontal
-        saveRow.spacing = 12
-        pane.addSubview(saveRow)
-
         content.addSubview(sidebar)
         content.addSubview(pane)
 
@@ -333,19 +326,13 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             scroll.topAnchor.constraint(equalTo: pageTitleLabel.bottomAnchor, constant: 12),
             scroll.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: saveRow.topAnchor, constant: -12),
+            // Nothing under the pages any more, so the page area runs to the
+            // bottom edge with the air a group would have had below it.
+            scroll.bottomAnchor.constraint(equalTo: pane.bottomAnchor, constant: -18),
 
             pageHost.topAnchor.constraint(equalTo: clip.topAnchor),
             pageHost.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
             pageHost.widthAnchor.constraint(equalTo: clip.widthAnchor),
-
-            saveRow.leadingAnchor.constraint(
-                equalTo: pane.leadingAnchor, constant: Self.pageInset
-            ),
-            saveRow.trailingAnchor.constraint(
-                equalTo: pane.trailingAnchor, constant: -Self.pageInset
-            ),
-            saveRow.bottomAnchor.constraint(equalTo: pane.bottomAnchor, constant: -18),
         ])
 
         selectPage(at: 0)
@@ -372,30 +359,36 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         sizeStepper.action = #selector(sizeStepperChanged)
 
         for control in [wordWrapSwitch, gutterSeparatorSwitch, highlightCurrentLineSwitch,
-                        vimModeSwitch, previewModeSwitch,
-                        autoHideTabBarSwitch, trafficLightsSwitch, bookmarkButtonSwitch,
+                        vimModeSwitch] {
+            control.target = self
+            control.action = #selector(editorSwitchChanged)
+        }
+        previewModeSwitch.target = self
+        previewModeSwitch.action = #selector(previewSwitchChanged)
+        for control in [autoHideTabBarSwitch, trafficLightsSwitch,
+                        bookmarkToggleButtonSwitch, bookmarkButtonSwitch,
                         settingsButtonSwitch] {
             control.target = self
-            control.action = #selector(draftChanged)
+            control.action = #selector(tabBarSwitchChanged)
         }
         for (_, control) in footerSwitches {
             control.target = self
-            control.action = #selector(draftChanged)
+            control.action = #selector(footerSwitchChanged)
         }
-        for control in [footerEncodingSwitch, footerLineEndingsSwitch, footerCursorSwitch] {
+        for control in [footerFormatSwitch, footerEncodingSwitch,
+                        footerLineEndingsSwitch, footerCursorSwitch] {
             control.target = self
-            control.action = #selector(draftChanged)
+            control.action = #selector(footerSwitchChanged)
         }
         lineNumbersSwitch.target = self
-        lineNumbersSwitch.action = #selector(lineNumbersDraftChanged)
+        lineNumbersSwitch.action = #selector(lineNumbersChanged)
         showTabBarSwitch.target = self
-        showTabBarSwitch.action = #selector(showTabBarDraftChanged)
+        showTabBarSwitch.action = #selector(showTabBarChanged)
         statusBarSwitch.target = self
-        statusBarSwitch.action = #selector(statusBarDraftChanged)
+        statusBarSwitch.action = #selector(statusBarChanged)
 
         hotKeyField.onRecord = { [weak self] shortcut in
-            self?.pendingHotKey = shortcut
-            self?.markDirty()
+            self?.applyHotKey(shortcut)
         }
         clearHotKeyButton.target = self
         clearHotKeyButton.action = #selector(clearHotKey)
@@ -432,11 +425,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         resetShortcutsButton.action = #selector(resetShortcuts)
         resetShortcutsButton.bezelStyle = .rounded
         resetShortcutsButton.controlSize = .small
-
-        saveButton.target = self
-        saveButton.action = #selector(saveChanges)
-        saveButton.bezelStyle = .rounded
-        saveButton.keyEquivalent = "\r"
 
         for popUp in [fontPopUp, spacingPopUp, paddingPopUp, languagePopUp, themePopUp,
                       sidebarSidePopUp] {
@@ -512,7 +500,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         trafficLightsRow = trafficLights
         let parts = [
             trafficLights,
-            row("Bookmark button", control: bookmarkButtonSwitch),
+            row("Bookmark button", control: bookmarkToggleButtonSwitch),
+            row("Bookmark dialog button", control: bookmarkButtonSwitch),
             row("Settings button", control: settingsButtonSwitch),
         ]
 
@@ -531,6 +520,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         // The regions read in the order the actual bar draws them.
         let titles = ["Words", "Characters", "Images", "Lines"]
         var regions = zip(titles, footerSwitches).map { row($0.0, control: $0.1.1) }
+        regions.append(row("Format", control: footerFormatSwitch))
         regions.append(row("Text encoding", control: footerEncodingSwitch))
         regions.append(row("Line endings", control: footerLineEndingsSwitch))
         regions.append(row("Cursor position", control: footerCursorSwitch))
@@ -742,14 +732,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     // MARK: - Syncing controls
 
     @objc private func preferencesChanged() {
-        if !isApplying && !isDirty { refresh() }
+        if !isApplying { refresh() }
     }
 
     private func refresh() {
-        pendingHotKey = preferences.hotKey
-        pendingShortcuts = preferences.shortcuts
-        pendingFontFamily = preferences.fontFamily
-        pendingCustomFontName = preferences.customFontName
         window?.title = L10n.text("Settings")
         for (field, key) in localizedLabels { field.stringValue = L10n.text(key) }
         for (field, key) in sectionTitles { field.stringValue = L10n.text(key) }
@@ -767,7 +753,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
         clearHotKeyButton.title = L10n.text("Clear")
         resetShortcutsButton.title = L10n.text("Reset to Defaults")
-        saveButton.title = L10n.text("Save")
         // A switch has no title of its own, so its row's label is its name —
         // for VoiceOver and for the tests alike.
         for page in pages {
@@ -806,6 +791,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         for (segment, control) in footerSwitches {
             control.state = enabled.contains(segment) ? .on : .off
         }
+        footerFormatSwitch.state = preferences.footerShowsFormat ? .on : .off
         footerEncodingSwitch.state = preferences.footerShowsEncoding ? .on : .off
         footerLineEndingsSwitch.state = preferences.footerShowsLineEndings ? .on : .off
         footerCursorSwitch.state = preferences.footerShowsCursorPosition ? .on : .off
@@ -818,9 +804,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         autoHideTabBarRow?.isEnabled = !preferences.hidesTabBar
         trafficLightsRow?.isEnabled = !preferences.hidesTabBar
         trafficLightsSwitch.state = preferences.hidesTrafficLights ? .off : .on
+        bookmarkToggleButtonSwitch.state = preferences.hidesBookmarkToggleButton ? .off : .on
         bookmarkButtonSwitch.state = preferences.hidesBookmarkButton ? .off : .on
         settingsButtonSwitch.state = preferences.hidesSettingsButton ? .off : .on
-        hotKeyField.shortcut = pendingHotKey
+        hotKeyField.shortcut = preferences.hotKey
 
         let failed = (NSApp.delegate as? AppDelegate)?.hotKeyRegistrationFailed ?? false
         hotKeyWarning.stringValue = failed
@@ -828,9 +815,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             : ""
         hotKeyWarning.isHidden = !failed
         refreshShortcutFields()
-        showShortcutConflict()
-        isDirty = false
-        saveButton.isEnabled = false
+        // What is stored never clashes — a clash is refused rather than
+        // written — so the fields the refresh just filled have nothing to warn
+        // about.
+        clearShortcutWarning()
         window?.contentView?.layoutSubtreeIfNeeded()
         window?.displayIfNeeded()
     }
@@ -844,7 +832,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             item.representedObject = family.rawValue
             menu.addItem(item)
         }
-        if pendingFontFamily == .custom, let name = pendingCustomFontName {
+        if preferences.fontFamily == .custom, let name = preferences.customFontName {
             menu.addItem(.separator())
             let item = NSMenuItem(title: name, action: nil, keyEquivalent: "")
             item.tag = Tag.customFont
@@ -856,10 +844,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         menu.addItem(other)
 
         fontPopUp.menu = menu
-        if pendingFontFamily == .custom {
+        if preferences.fontFamily == .custom {
             fontPopUp.selectItem(withTag: Tag.customFont)
         } else {
-            select(fontPopUp, raw: pendingFontFamily.rawValue)
+            select(fontPopUp, raw: preferences.fontFamily.rawValue)
         }
     }
 
@@ -870,64 +858,161 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     // MARK: - Actions
 
+    /// Writes preferences without the change notification turning round and
+    /// rebuilding the dialog under the control that is still being held.
+    private func apply(_ changes: () -> Void) {
+        isApplying = true
+        changes()
+        isApplying = false
+    }
+
     @objc private func fontFamilyChanged(_ sender: NSPopUpButton) {
         guard let item = sender.selectedItem else { return }
         switch item.tag {
         case Tag.otherFont:
             presentFontPanel()
         case Tag.customFont:
-            break
+            apply { preferences.fontFamily = .custom }
         default:
             if let raw = item.representedObject as? String,
                let family = EditorFontFamily(rawValue: raw) {
-                pendingFontFamily = family
-                markDirty()
+                apply { preferences.fontFamily = family }
             }
         }
     }
 
+    /// Return in the field, or the focus leaving it, is the size the user
+    /// meant — clamped to what the editor will take.
     @objc private func sizeFieldChanged(_ sender: NSTextField) {
         let size = Preferences.clampFontSize(CGFloat(sender.doubleValue))
         sender.stringValue = "\(Int(size))"
         sizeStepper.doubleValue = Double(size)
-        markDirty()
+        apply { preferences.fontSize = size }
     }
 
     @objc private func sizeStepperChanged(_ sender: NSStepper) {
-        sizeField.stringValue = "\(Int(sender.doubleValue))"
-        markDirty()
+        let size = Preferences.clampFontSize(CGFloat(sender.doubleValue))
+        sizeField.stringValue = "\(Int(size))"
+        apply { preferences.fontSize = size }
     }
 
-    @objc private func lineSpacingChanged(_ sender: NSPopUpButton) { markDirty() }
-    @objc private func paddingChanged(_ sender: NSPopUpButton) { markDirty() }
-    @objc private func languageChanged(_ sender: NSPopUpButton) { markDirty() }
-    @objc private func themeChanged(_ sender: NSPopUpButton) { markDirty() }
-    @objc private func sidebarSideChanged(_ sender: NSPopUpButton) { markDirty() }
-    @objc private func draftChanged(_ sender: Any?) { markDirty() }
+    @objc private func lineSpacingChanged(_ sender: NSPopUpButton) {
+        guard let spacing = rawValue(of: sender, as: LineSpacingOption.self) else { return }
+        apply { preferences.lineSpacing = spacing }
+    }
+
+    @objc private func paddingChanged(_ sender: NSPopUpButton) {
+        guard let padding = rawValue(of: sender, as: EditorPaddingOption.self) else { return }
+        apply { preferences.padding = padding }
+    }
+
+    /// Language and theme are the two that re-word the dialog itself, so both
+    /// rebuild it once the preference is written.
+    @objc private func languageChanged(_ sender: NSPopUpButton) {
+        guard let language = rawValue(of: sender, as: AppLanguage.self) else { return }
+        apply { preferences.language = language }
+        refresh()
+    }
+
+    @objc private func themeChanged(_ sender: NSPopUpButton) {
+        guard let theme = rawValue(of: sender, as: AppTheme.self) else { return }
+        apply { preferences.theme = theme }
+        refresh()
+    }
+
+    @objc private func sidebarSideChanged(_ sender: NSPopUpButton) {
+        guard let side = rawValue(of: sender, as: SidebarSide.self) else { return }
+        apply { preferences.sidebarSide = side }
+    }
+
+    @objc private func editorSwitchChanged(_ sender: Any?) {
+        apply {
+            preferences.wrapsLines = wordWrapSwitch.state == .on
+            preferences.showsLineNumbers = lineNumbersSwitch.state == .on
+            preferences.showsGutterSeparator = gutterSeparatorSwitch.state == .on
+            preferences.highlightsCurrentLine = highlightCurrentLineSwitch.state == .on
+            preferences.vimMode = vimModeSwitch.state == .on
+        }
+    }
+
+    @objc private func previewSwitchChanged(_ sender: Any?) {
+        apply { preferences.opensMarkdownInReadingMode = previewModeSwitch.state == .on }
+    }
+
+    /// The four positive labels: off is what hides the piece of chrome each
+    /// one names.
+    @objc private func tabBarSwitchChanged(_ sender: Any?) {
+        apply {
+            preferences.hidesTabBar = showTabBarSwitch.state == .off
+            preferences.autoHidesTabBar = autoHideTabBarSwitch.state == .on
+            preferences.hidesTrafficLights = trafficLightsSwitch.state == .off
+            preferences.hidesBookmarkToggleButton = bookmarkToggleButtonSwitch.state == .off
+            preferences.hidesBookmarkButton = bookmarkButtonSwitch.state == .off
+            preferences.hidesSettingsButton = settingsButtonSwitch.state == .off
+        }
+    }
+
+    /// The status bar's regions go together: which counts it shows, and the
+    /// three readings at its trailing edge.
+    @objc private func footerSwitchChanged(_ sender: Any?) {
+        apply {
+            let states = Dictionary(uniqueKeysWithValues: footerSwitches.map {
+                ($0.0, $0.1.state == .on)
+            })
+            preferences.showsStatusBar = statusBarSwitch.state == .on
+            preferences.footerShowsWords = states[.words] ?? false
+            preferences.footerShowsCharacters = states[.characters] ?? false
+            preferences.footerShowsImages = states[.images] ?? false
+            preferences.footerShowsLines = states[.lines] ?? false
+            preferences.footerShowsFormat = footerFormatSwitch.state == .on
+            preferences.footerShowsEncoding = footerEncodingSwitch.state == .on
+            preferences.footerShowsLineEndings = footerLineEndingsSwitch.state == .on
+            preferences.footerShowsCursorPosition = footerCursorSwitch.state == .on
+        }
+    }
+
+    /// Recorded and registered at once; the rebuild afterwards is what puts up
+    /// the warning if the Mac would not give Nota the combination.
+    private func applyHotKey(_ shortcut: GlobalHotKey.Shortcut?) {
+        apply { preferences.hotKey = shortcut }
+        refresh()
+    }
 
     @objc private func clearHotKey() {
-        pendingHotKey = nil
         hotKeyField.shortcut = nil
-        markDirty()
+        applyHotKey(nil)
     }
 
-    /// A row that has been put back to the key it ships with is not an
-    /// override at all, so it comes out of the draft rather than going in.
+    /// A row put back to the key it ships with is not an override at all, so
+    /// it comes out of the table rather than going into it.
+    ///
+    /// A combination already spoken for is refused: nothing is written, the
+    /// field goes back to the key that is stored, and the page says which two
+    /// commands would have shared it. Live apply is why — a clash written
+    /// through would leave one of the two unreachable in the menu.
     private func record(_ combo: KeyCombo, for action: ShortcutAction) {
-        pendingShortcuts[action] = combo == action.defaultCombo ? nil : combo
-        markDirty()
+        var table = preferences.shortcuts
+        table[action] = combo == action.defaultCombo ? nil : combo
+        if let clash = shortcutConflict(in: table) {
+            shortcutWarning.stringValue = clash
+            shortcutWarning.isHidden = false
+            shortcutFields[action]?.combo = preferences.combo(for: action)
+            return
+        }
+        apply { preferences.shortcuts = table }
+        clearShortcutWarning()
     }
 
     @objc private func resetShortcuts() {
-        pendingShortcuts = [:]
+        apply { preferences.shortcuts = [:] }
         refreshShortcutFields()
-        markDirty()
+        clearShortcutWarning()
     }
 
     // MARK: - Check for Updates
 
-    /// The About page's one button. Nothing here is a draft — the check is
-    /// not a setting, so it neither dirties the window nor waits for Save.
+    /// The About page's one button. The check is not a setting, so nothing
+    /// here is written and nothing on the page is rebuilt but its own lines.
     @objc func checkForUpdates() {
         if case .checking = updateState { return }
         updateState = .checking
@@ -997,24 +1082,20 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         homebrewOverrideForTesting ?? UpdateCheck.installedWithHomebrew
     }
 
-    private func draftCombo(for action: ShortcutAction) -> KeyCombo {
-        pendingShortcuts[action] ?? action.defaultCombo
-    }
-
     private func refreshShortcutFields() {
         for (action, field) in shortcutFields {
             field.setAccessibilityLabel(action.title)
-            field.combo = draftCombo(for: action)
+            field.combo = preferences.combo(for: action)
         }
     }
 
-    /// The first clash in the draft: two commands on one combination, or one
-    /// sitting on a key the Mac has already spoken for. Nil when the draft is
-    /// fit to save.
-    private func shortcutConflict() -> String? {
+    /// The first clash in a table: two commands on one combination, or one
+    /// sitting on a key the Mac has already spoken for. Nil when the table is
+    /// fit to write.
+    private func shortcutConflict(in table: [ShortcutAction: KeyCombo]) -> String? {
         var owners: [KeyCombo: ShortcutAction] = [:]
         for action in ShortcutAction.allCases {
-            let combo = draftCombo(for: action)
+            let combo = table[action] ?? action.defaultCombo
             if let reserved = ShortcutAction.reservedCombos.first(where: { $0.combo == combo }) {
                 return String(
                     format: L10n.text("%1$@ is reserved for %2$@."),
@@ -1032,101 +1113,40 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         return nil
     }
 
-    /// Shows the clash, if there is one, and says whether Save has to wait.
-    @discardableResult
-    private func showShortcutConflict() -> Bool {
-        let message = shortcutConflict()
-        shortcutWarning.stringValue = message ?? ""
-        shortcutWarning.isHidden = message == nil
-        return message != nil
+    /// Takes the clash line away: the next key that lands somewhere free ends
+    /// the refusal, whichever row recorded it.
+    private func clearShortcutWarning() {
+        shortcutWarning.stringValue = ""
+        shortcutWarning.isHidden = true
     }
 
-    @objc private func lineNumbersDraftChanged(_ sender: NSSwitch) {
+    @objc private func lineNumbersChanged(_ sender: NSSwitch) {
         gutterSeparatorRow?.isEnabled = sender.state == .on
-        markDirty()
+        editorSwitchChanged(sender)
     }
 
     /// Turning the strip off outright takes auto-hide, and the traffic
     /// lights, with it: there is nothing left for the top edge to slide in,
     /// and the lights are already gone the way zen takes them.
-    @objc private func showTabBarDraftChanged(_ sender: NSSwitch) {
+    @objc private func showTabBarChanged(_ sender: NSSwitch) {
         autoHideTabBarRow?.isEnabled = sender.state == .on
         trafficLightsRow?.isEnabled = sender.state == .on
-        markDirty()
+        tabBarSwitchChanged(sender)
     }
 
-    @objc private func statusBarDraftChanged(_ sender: NSSwitch) {
+    @objc private func statusBarChanged(_ sender: NSSwitch) {
         setStatusDetailsEnabled(sender.state == .on)
-        markDirty()
+        footerSwitchChanged(sender)
     }
 
     private func setStatusDetailsEnabled(_ enabled: Bool) {
         for row in statusDetailRows { row.isEnabled = enabled }
     }
 
-    private func markDirty() {
-        isDirty = true
-        // Two commands on one key would leave one of them unreachable, so the
-        // draft cannot be saved until the user picks a side.
-        saveButton.isEnabled = !showShortcutConflict()
-    }
-
     private func rawValue<T: RawRepresentable>(of popUp: NSPopUpButton, as type: T.Type) -> T?
     where T.RawValue == String {
         guard let raw = popUp.selectedItem?.representedObject as? String else { return nil }
         return T(rawValue: raw)
-    }
-
-    @objc private func saveChanges() {
-        guard let spacing = rawValue(of: spacingPopUp, as: LineSpacingOption.self),
-              let padding = rawValue(of: paddingPopUp, as: EditorPaddingOption.self),
-              let language = rawValue(of: languagePopUp, as: AppLanguage.self),
-              let theme = rawValue(of: themePopUp, as: AppTheme.self),
-              let sidebarSide = rawValue(of: sidebarSidePopUp, as: SidebarSide.self)
-        else { return }
-
-        let fontFamily = pendingFontFamily
-        let customFontName = pendingCustomFontName
-        let fontSize = Preferences.clampFontSize(CGFloat(sizeField.doubleValue))
-        guard shortcutConflict() == nil else { return }
-        let hotKey = pendingHotKey
-        let segmentStates = Dictionary(uniqueKeysWithValues: footerSwitches.map {
-            ($0.0, $0.1.state == .on)
-        })
-
-        isApplying = true
-        preferences.customFontName = customFontName
-        preferences.fontFamily = fontFamily
-        preferences.fontSize = fontSize
-        preferences.lineSpacing = spacing
-        preferences.padding = padding
-        preferences.wrapsLines = wordWrapSwitch.state == .on
-        preferences.showsLineNumbers = lineNumbersSwitch.state == .on
-        preferences.showsGutterSeparator = gutterSeparatorSwitch.state == .on
-        preferences.highlightsCurrentLine = highlightCurrentLineSwitch.state == .on
-        preferences.opensMarkdownInReadingMode = previewModeSwitch.state == .on
-        preferences.showsStatusBar = statusBarSwitch.state == .on
-        preferences.footerShowsWords = segmentStates[.words] ?? false
-        preferences.footerShowsCharacters = segmentStates[.characters] ?? false
-        preferences.footerShowsImages = segmentStates[.images] ?? false
-        preferences.footerShowsLines = segmentStates[.lines] ?? false
-        preferences.footerShowsEncoding = footerEncodingSwitch.state == .on
-        preferences.footerShowsLineEndings = footerLineEndingsSwitch.state == .on
-        preferences.footerShowsCursorPosition = footerCursorSwitch.state == .on
-        preferences.vimMode = vimModeSwitch.state == .on
-        preferences.hidesTabBar = showTabBarSwitch.state == .off
-        preferences.autoHidesTabBar = autoHideTabBarSwitch.state == .on
-        preferences.hidesTrafficLights = trafficLightsSwitch.state == .off
-        preferences.hidesBookmarkButton = bookmarkButtonSwitch.state == .off
-        preferences.hidesSettingsButton = settingsButtonSwitch.state == .off
-        preferences.hotKey = hotKey
-        preferences.shortcuts = pendingShortcuts
-        preferences.language = language
-        preferences.theme = theme
-        preferences.sidebarSide = sidebarSide
-        isApplying = false
-        isDirty = false
-        refresh()
     }
 
     // MARK: - Font panel
@@ -1142,10 +1162,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         guard let sender else { return }
         let chosen = sender.convert(preferences.font())
         guard let family = chosen.familyName else { return }
-        pendingFontFamily = .custom
-        pendingCustomFontName = family
+        // Family and name are one edit, so the panel's pick lands as one
+        // change; the popup then names the font it just took.
+        apply { preferences.selectCustomFont(familyName: family) }
         rebuildFontMenu()
-        markDirty()
     }
 
     /// Size lives in the Settings window, so the panel only offers the family.

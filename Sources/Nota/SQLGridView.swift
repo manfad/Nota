@@ -31,11 +31,34 @@ final class SQLGridView: NSTableView {
     /// The selection as text, from whoever is holding the page.
     var copyText: ((Selection) -> String)?
 
+    /// The pane's ⌘F over this grid. Two jobs in one reference: the cells ask
+    /// it which of them wear a find band, and the Find menu's nil-targeted
+    /// `performTextFinderAction:` items land here whenever the grid has the
+    /// keyboard and are handed on to it.
+    weak var findSession: GridFindSession?
+
     /// A cell picked out with the mouse, in grid coordinates. Whoever holds
     /// the page answers it — here it is only a click; what a row *means* is
     /// the pane's business, which is the only thing that knows the rowid
     /// under it and the file it came out of.
     var onCellClick: ((_ row: Int, _ column: Int) -> Void)?
+
+    /// Everything *else* the reader does that means "show me this": a click in
+    /// the `#` gutter, a ⇧-click, a drag growing the rectangle or the run of
+    /// rows, Space standing a row up, a ⇧-arrow. `onCellClick` above already
+    /// says the plain click on one cell, so the two never both fire for the
+    /// same gesture — and a drag says it again on every mouse event that
+    /// actually moves an edge, which is the coalescing.
+    ///
+    /// What a selection *means* is the pane's business: this hands over the
+    /// shape and nothing else.
+    var onSelectionReveal: ((Selection) -> Void)?
+
+    /// Whether the pane this grid is in owns the keyboard, which is reading
+    /// mode. A click puts the first responder here in split too, and that must
+    /// not take ⌘F off the editor beside it — so the Find menu is answered by
+    /// this rather than by where the first responder happens to be.
+    var takesKeyboard = false
 
     /// Where the rectangle was started from, and where its moving end is. The
     /// two are the same cell for a selection of one, which is what a click
@@ -55,6 +78,20 @@ final class SQLGridView: NSTableView {
             return .cells(rows: cellSelection.rows, columns: cellSelection.columns)
         }
         return selectedRowIndexes.isEmpty ? .none : .rows(selectedRowIndexes)
+    }
+
+    /// One range over the lot, the way a selection over three paragraphs of
+    /// text is one range: from the earliest start to the latest end, whatever
+    /// lies between them included. `nil` for nothing to span.
+    static func span(of ranges: [NSRange]) -> NSRange? {
+        guard let first = ranges.first else { return nil }
+        var start = first.location
+        var end = NSMaxRange(first)
+        for range in ranges.dropFirst() {
+            start = min(start, range.location)
+            end = max(end, NSMaxRange(range))
+        }
+        return NSRange(location: start, length: end - start)
     }
 
     // MARK: - Keeping the cursor honest
@@ -104,11 +141,29 @@ final class SQLGridView: NSTableView {
          columns: min(start.column, end.column)...max(start.column, end.column))
     }
 
-    /// How one cell of the grid is drawn, given what is picked out. The
-    /// rectangle's outer edges carry the hairline; the cursor carries a
-    /// border of its own, so a selection of many still says which one the
-    /// arrows will move from.
+    /// How one cell of the grid is drawn, given what is picked out and what
+    /// ⌘F has found. The rectangle's outer edges carry the hairline; the
+    /// cursor carries a border of its own, so a selection of many still says
+    /// which one the arrows will move from.
+    ///
+    /// The find band goes under all of it: a cell can be a match *and* be
+    /// picked out — the current match is the cell cursor — and the accent over
+    /// the band is what says so.
     func highlight(row: Int, column: Int) -> SQLCellView.Highlight {
+        var band = selectionHighlight(row: row, column: column)
+        // The gutter is not a value and never a match; `column - 1` is the
+        // data column the session counts in.
+        if column > 0, let findSession {
+            switch findSession.band(pageRow: row, dataColumn: column - 1) {
+            case .none: break
+            case .match: band.isMatch = true
+            case .current: band.isCurrentMatch = true
+            }
+        }
+        return band
+    }
+
+    private func selectionHighlight(row: Int, column: Int) -> SQLCellView.Highlight {
         guard let selection = cellSelection else {
             guard column == 0, selectedRowIndexes.contains(row) else { return .none }
             return SQLCellView.Highlight(isGutter: true, isSelected: true)
@@ -171,6 +226,9 @@ final class SQLGridView: NSTableView {
         window?.makeFirstResponder(self)
         guard !event.modifierFlags.contains(.shift), column > 0 else {
             selectRows(to: row, extend: event.modifierFlags.contains(.shift))
+            // A run of whole rows is a reader pointing at rows, and the editor
+            // beside the grid goes to them the way it goes to a clicked value.
+            onSelectionReveal?(selection)
             return
         }
         setCursor(row: row, column: column)
@@ -188,13 +246,22 @@ final class SQLGridView: NSTableView {
         let row = min(max(self.row(at: point), 0), max(0, numberOfRows - 1))
         if let anchor = cellAnchor {
             let column = min(max(self.column(at: point), 1), max(1, tableColumns.count - 1))
-            cellSelection = SQLGridView.rectangle(from: anchor, to: (row, column))
+            let grown = SQLGridView.rectangle(from: anchor, to: (row, column))
+            // Only when an edge actually moved. A drag is a great many events
+            // over the same cell, and the editor is not told the same thing
+            // forty times.
+            let moved = cellSelection?.rows != grown.rows
+                || cellSelection?.columns != grown.columns
+            cellSelection = grown
             cellCursor = (row, column)
             updateCellRendering()
+            if moved { onSelectionReveal?(selection) }
             return
         }
         guard rowAnchor != nil else { return super.mouseDragged(with: event) }
+        let before = selectedRowIndexes
         selectRows(to: row, extend: true)
+        if selectedRowIndexes != before { onSelectionReveal?(selection) }
     }
 
     /// A run of whole rows, from wherever the run was started to here. The
@@ -258,10 +325,12 @@ final class SQLGridView: NSTableView {
             // to is written after it rather than before.
             selectRows(to: cursor.row, extend: false)
             cellBeforeRowSelection = cursor
+            onSelectionReveal?(selection)
             return
         }
         guard let cell = cellBeforeRowSelection, !selectedRowIndexes.isEmpty else { return }
         setCursor(row: cell.row, column: cell.column)
+        onSelectionReveal?(selection)
     }
 
     /// The arrows drive the cell cursor rather than the row selection. The
@@ -285,8 +354,12 @@ final class SQLGridView: NSTableView {
         case 124: target.column = min(lastColumn, target.column + 1) // →
         default: break
         }
-        setCursor(row: target.row, column: target.column,
-                  extend: extend && cellAnchor != nil)
+        let grows = extend && cellAnchor != nil
+        setCursor(row: target.row, column: target.column, extend: grows)
+        // A ⇧-arrow is the rectangle being grown, which is the same gesture as
+        // a drag and says the same thing. A plain arrow only walks the cursor
+        // and has never moved the caret beside it.
+        if grows { onSelectionReveal?(selection) }
     }
 
     /// Where ⌘C writes: the Mac's clipboard, unless a test lends the grid a
@@ -301,8 +374,41 @@ final class SQLGridView: NSTableView {
         pasteboard.setString(text, forType: .string)
     }
 
+    // MARK: - The Find menu
+
+    /// Find…, Find Next, Find Previous and Use Selection for Find are
+    /// nil-targeted `performTextFinderAction:` items, so they land here
+    /// whenever this grid is the first responder — and a click puts it there
+    /// in split as well as in reading. `takesKeyboard` is what decides, not
+    /// where the first responder is: in split the editor beside the grid owns
+    /// ⌘F, so the action is handed straight back up the chain, where the
+    /// window gives it to the editor's own session.
+    ///
+    /// Taking the selector at all is what makes the pass-up necessary: a view
+    /// that implements it *is* the target, and doing nothing here would grey
+    /// ⌘F out over a whole mode.
+    override func performTextFinderAction(_ sender: Any?) {
+        guard takesKeyboard, findSession != nil else {
+            nextResponder?.tryToPerform(#selector(performTextFinderAction(_:)), with: sender)
+            return
+        }
+        guard let item = sender as? NSValidatedUserInterfaceItem,
+              let action = NSTextFinder.Action(rawValue: item.tag)
+        else { return }
+        findSession?.perform(action)
+    }
+
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         if item.action == #selector(copy(_:)) { return selection != .none }
+        if item.action == #selector(performTextFinderAction(_:)) {
+            guard let action = NSTextFinder.Action(rawValue: item.tag) else { return false }
+            // In split the item stays enabled for the editor's sake — it is
+            // the editor's ⌘F that the key is about to run.
+            guard takesKeyboard, findSession != nil else {
+                return TextFindSession.handles(action)
+            }
+            return GridFindSession.handles(action)
+        }
         return super.validateUserInterfaceItem(item)
     }
 
@@ -338,6 +444,12 @@ final class SQLCellView: NSTableCellView {
         var leading = false
         var bottom = false
         var trailing = false
+        /// The cell holds ⌘F's query. Quiet, the way the editor's other
+        /// matches are.
+        var isMatch = false
+        /// And the one of them the reader is standing on, which is also the
+        /// cell cursor.
+        var isCurrentMatch = false
 
         static let none = Highlight()
     }
@@ -345,8 +457,32 @@ final class SQLCellView: NSTableCellView {
     var highlight: Highlight = .none {
         didSet {
             guard highlight != oldValue else { return }
+            applyText()
             needsDisplay = true
         }
+    }
+
+    /// What the cell says. Held here rather than pushed straight at the text
+    /// field, because the current find match has to be re-coloured every time
+    /// ⌘G moves — and ⌘G moves the band without the table reloading a row.
+    var text: NSAttributedString? {
+        didSet { applyText() }
+    }
+
+    /// `findHighlightColor` is AppKit's own find yellow, and it is the same
+    /// light colour in both appearances — so the text on it is spelled out
+    /// black rather than left as `labelColor`, which turns white in dark mode
+    /// and disappears into the band. The same swap the editor's bands make.
+    private func applyText() {
+        guard let textField, let text else { return }
+        guard highlight.isCurrentMatch else {
+            textField.attributedStringValue = text
+            return
+        }
+        let onYellow = NSMutableAttributedString(attributedString: text)
+        onYellow.addAttribute(.foregroundColor, value: NSColor.black,
+                              range: NSRange(location: 0, length: onYellow.length))
+        textField.attributedStringValue = onYellow
     }
 
     private enum Wash {
@@ -354,12 +490,26 @@ final class SQLCellView: NSTableCellView {
         static let gutter: CGFloat = 0.10
         static let edge: CGFloat = 1
         static let cursor: CGFloat = 1.5
+        /// The same alpha the editor's quiet band is laid on at.
+        static let findBand: CGFloat = 0.12
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard highlight.isSelected || highlight.isCursor else { return }
+        guard highlight.isSelected || highlight.isCursor
+            || highlight.isMatch || highlight.isCurrentMatch else { return }
         effectiveAppearance.performAsCurrentDrawingAppearance {
+            // The find band goes down first, under the selection wash: the
+            // current match is the cell cursor, so the two are on the same
+            // cell whenever ⌘F has landed.
+            if highlight.isCurrentMatch {
+                NSColor.findHighlightColor.setFill()
+                bounds.fill()
+            } else if highlight.isMatch {
+                NSTextView.quietFindBand(alpha: Wash.findBand).setFill()
+                bounds.fill()
+            }
+            guard highlight.isSelected || highlight.isCursor else { return }
             let accent = NSColor.controlAccentColor
             if highlight.isSelected {
                 accent.withAlphaComponent(highlight.isGutter ? Wash.gutter : Wash.cells).setFill()

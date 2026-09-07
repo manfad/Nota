@@ -288,8 +288,9 @@ struct CSVTable: Equatable {
     }
 
     /// The row indices in the order the sort asks for, and in the file's own
-    /// order when there is none.
-    private func ordering(_ sort: Sort?) -> [Int] {
+    /// order when there is none. ⌘F over the grid walks it too: a match is
+    /// where the row sits on screen, which is this order and not the file's.
+    func ordering(_ sort: Sort?) -> [Int] {
         let indices = Array(rows.indices)
         guard let sort, sort.column >= 0, sort.column < columns.count else { return indices }
         let values = rows.map { row -> String in

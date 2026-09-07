@@ -7,7 +7,7 @@ import XCTest
 /// note from one window to another, and where a closing window's tabs go.
 /// Nothing here uses the mouse — the tear-off gesture is built on top of this
 /// and has to be able to ask for the same moves outright.
-final class MultiWindowTests: XCTestCase {
+final class MultiWindowTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
     private var chrome: (tabBar: Bool, autoTabBar: Bool, lights: Bool)!
 
@@ -275,6 +275,40 @@ final class MultiWindowTests: XCTestCase {
 
         XCTAssertEqual(registry.controllers.count, 1, "a second window really closes")
         XCTAssertTrue(registry.controllers.first === lone, "the one before it took its tab")
+    }
+
+    /// Closing the only tab when it holds something leaves a blank Untitled
+    /// tab and keeps the window; it is closing *that* blank tab that closes
+    /// the window. So ⌘W twice over a lone file is a blank window, and a
+    /// third stroke takes it away.
+    @MainActor
+    func testClosingTheOnlyTabWithSomethingInItLeavesABlankOneAndTheWindow() throws {
+        _ = NSApplication.shared
+        let directory = try makeTemporaryDirectory()
+        let store = SessionStore(directory: directory)
+        let registry = WindowRegistry(store: store)
+        let lone = MainWindowController(store: store)
+        registry.add(lone)
+        lone.window?.makeKeyAndOrderFrontOffscreen()
+        lone.confirmDiscardOverrideForTesting = { .alertSecondButtonReturn }
+        type("alpha", into: lone)
+        lone.addTab()
+        type("beta", into: lone)
+        XCTAssertEqual(lone.openNotes.count, 2)
+
+        lone.closeTab(at: 1)
+        XCTAssertEqual(lone.openNotes.map(\.text), ["alpha"])
+        XCTAssertEqual(lone.window?.isVisible, true)
+
+        lone.closeTab(at: 0)
+        XCTAssertEqual(lone.openNotes.map(\.text), [""], "a blank tab stands in for the closed one")
+        XCTAssertEqual(lone.openNotes.map(\.title), ["Untitled"])
+        XCTAssertEqual(lone.window?.isVisible, true, "the window stays for one more ⌘W")
+        XCTAssertEqual(registry.controllers.count, 1)
+
+        lone.closeTab(at: 0)
+        XCTAssertEqual(lone.window?.isVisible, false, "the blank tab's close is the window's")
+        XCTAssertEqual(registry.controllers.count, 1, "the last window only hides")
     }
 
     /// Closing one of two tabs is an ordinary tab close: the window stays

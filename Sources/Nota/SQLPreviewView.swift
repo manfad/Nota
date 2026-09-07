@@ -51,6 +51,10 @@ final class SQLPreviewView: NSView, PreviewContent {
     /// show yet: a big file waiting to be run, a database with no tables, a
     /// query that matched nothing.
     private let emptyLabel = NSTextField(labelWithString: "")
+    /// The grid's own ⌘F bar, floating in the top-trailing corner of the
+    /// column — the same pill the editor, the render and a document use.
+    private let findBar = FindBarView(placeholder: L10n.text("Find in table"))
+    private lazy var findSession = GridFindSession(bar: findBar, grid: grid, source: self)
 
     private enum Layout {
         static let blankColumnWidth: CGFloat = 160
@@ -126,6 +130,15 @@ final class SQLPreviewView: NSView, PreviewContent {
     /// How many times the file has been run into a database. The one number
     /// that says a big file is not being re-run on every keystroke.
     private(set) var runCount = 0
+    /// Run when the ⌘F pill opens or closes, so the column's mode control
+    /// drops out of the corner the two share.
+    var onFindBarVisibilityChange: ((Bool) -> Void)?
+    var isFindBarVisible: Bool { findSession.isVisible }
+    var findBarHeight: CGFloat { findBar.stackHeight }
+    /// What to do once the page a ⌘F match lives on has come back off the
+    /// queue. A page is asked for here and answered later, so landing on a
+    /// match is two halves.
+    private var pendingFindLanding: (() -> Void)?
 
     /// Stands in for the alert, so a test can drive a failing query without
     /// putting a modal on screen — the same hook the window's own
@@ -144,7 +157,29 @@ final class SQLPreviewView: NSView, PreviewContent {
         buildBar()
         buildGrid()
         activateConstraints()
+        buildFindBar()
         updateChrome()
+    }
+
+    /// The pill goes in the corner the mode control keeps, added after the
+    /// grid so it floats over it. The query box already starts a whole band
+    /// down, so nothing here has to move for it.
+    private func buildFindBar() {
+        grid.findSession = findSession
+        // ⌘F with the caret in the query box searches the rows rather than the
+        // five lines of the question.
+        queryBox.findSession = findSession
+        findSession.onVisibilityChange = { [weak self] visible in
+            self?.onFindBarVisibilityChange?(visible)
+        }
+        findBar.onHeightChange = { [weak self] in
+            guard let self else { return }
+            onFindBarVisibilityChange?(isFindBarVisible)
+        }
+        findBar.floatStack(
+            in: self, under: topAnchor, gap: ModeControlOverlay.controlTopInset,
+            trailingInset: ModeControlOverlay.controlInset
+        )
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -267,6 +302,9 @@ final class SQLPreviewView: NSView, PreviewContent {
         grid.copyText = { [weak self] selection in self?.text(of: selection) ?? "" }
         grid.onCellClick = { [weak self] row, column in
             self?.revealSource(ofRow: row, column: column)
+        }
+        grid.onSelectionReveal = { [weak self] selection in
+            self?.revealSource(of: selection)
         }
         grid.setAccessibilityIdentifier("sql-grid")
 
@@ -411,6 +449,8 @@ final class SQLPreviewView: NSView, PreviewContent {
         sort = nil
         pickedTable = note.sqlTable
         queryBox.string = note.sqlQuery ?? ""
+        pendingFindLanding = nil
+        findSession.close()
         grid.clearCellSelection()
         grid.deselectAll(nil)
         rebuildColumns()
@@ -485,6 +525,7 @@ final class SQLPreviewView: NSView, PreviewContent {
             rebuildColumns()
             grid.reloadData()
             updateChrome()
+            findSession.refresh()
             onDidFinish?()
             return
         }
@@ -535,6 +576,13 @@ final class SQLPreviewView: NSView, PreviewContent {
             scrollsToTop = false
             if grid.numberOfRows > 0 { grid.scrollRowToVisible(0) }
         }
+        // The page under ⌘F has moved: the rows it holds may not be the rows
+        // it held. Then whatever was waiting for this page — a match on it,
+        // which is why the page was asked for at all.
+        findSession.refresh()
+        let landing = pendingFindLanding
+        pendingFindLanding = nil
+        landing?()
         onDidFinish?()
     }
 
@@ -922,27 +970,78 @@ final class SQLPreviewView: NSView, PreviewContent {
     /// Nothing here takes the keyboard: the grid keeps it, so the arrows go on
     /// walking the cells.
     private func revealSource(ofRow row: Int, column: Int) {
-        guard sendsBlockClicks, let onSourceReveal, let dump, let page,
-              let rowids = page.rowids, let table = page.rowidTable,
-              row >= 0, row < rowids.count
-        else { return }
-        let rowid = rowids[row]
-        // A column of the grid is one past its column of the page: the `#`
-        // gutter is the first of them.
-        let index = column - 1
-        let name = index >= 0 && index < page.columns.count ? page.columns[index].name : nil
-        let value = name.flatMap {
-            dump.sourceMap.range(ofRowid: rowid, inTable: table, column: $0,
-                                 tableColumns: dump.declaredTypes(ofTable: table).map(\.name))
-        }
-        guard let range = value ?? dump.sourceMap.range(ofRowid: rowid, inTable: table)
+        revealSource(of: .cells(rows: row...row, columns: column...column))
+    }
+
+    /// And whatever is picked out, whatever shape it is: a run of whole rows
+    /// from the `#` gutter or from Space, a rectangle a drag or a ⇧-arrow grew.
+    /// One range over the lot — from the earliest thing selected to the latest
+    /// — the way a selection over three paragraphs of text is one range. A run
+    /// of whole rows is the tuples they were written as, and not the values
+    /// inside them.
+    private func revealSource(of selection: SQLGridView.Selection) {
+        guard sendsBlockClicks, let onSourceReveal,
+              let range = sourceRange(of: selection)
         else { return }
         onSourceReveal(range)
     }
 
+    private func sourceRange(of selection: SQLGridView.Selection) -> NSRange? {
+        guard let dump, let page, let rowids = page.rowids, let table = page.rowidTable
+        else { return nil }
+        switch selection {
+        case .none:
+            return nil
+        case .rows(let rows):
+            return SQLGridView.span(of: rows.compactMap { row -> NSRange? in
+                guard row >= 0, row < rowids.count else { return nil }
+                return dump.sourceMap.range(ofRowid: rowids[row], inTable: table)
+            })
+        case .cells(let rows, let columns):
+            // Asked of the schema once rather than once per cell: a drag over
+            // a rectangle would otherwise put `PRAGMA table_info` to SQLite
+            // for every cell it crossed.
+            let tableColumns = dump.declaredTypes(ofTable: table).map(\.name)
+            var spans: [NSRange] = []
+            for row in rows where row >= 0 && row < rowids.count {
+                let rowid = rowids[row]
+                var placed = false
+                for column in columns {
+                    // A column of the grid is one past its column of the page:
+                    // the `#` gutter is the first of them.
+                    let index = column - 1
+                    guard index >= 0, index < page.columns.count,
+                          let range = dump.sourceMap.range(
+                              ofRowid: rowid, inTable: table,
+                              column: page.columns[index].name, tableColumns: tableColumns
+                          )
+                    else { continue }
+                    spans.append(range)
+                    placed = true
+                }
+                // A cell that cannot be placed — a computed column, a name in
+                // neither list — falls back to the whole tuple and never to
+                // nothing.
+                if !placed, let tuple = dump.sourceMap.range(ofRowid: rowid, inTable: table) {
+                    spans.append(tuple)
+                }
+            }
+            return SQLGridView.span(of: spans)
+        }
+    }
+
     // MARK: - The keyboard
 
-    var takesKeyboard = false
+    /// Reading mode. It is handed down to the grid and the query box, which is
+    /// what decides whether ⌘F is this grid's or the editor's — a click puts
+    /// the first responder in one of them in split too, and that must not take
+    /// the key off the text beside it.
+    var takesKeyboard = false {
+        didSet {
+            grid.takesKeyboard = takesKeyboard
+            queryBox.takesKeyboard = takesKeyboard
+        }
+    }
 
     @discardableResult
     func focus(in window: NSWindow?) -> Bool {
@@ -1024,6 +1123,8 @@ final class SQLPreviewView: NSView, PreviewContent {
     var queryText: String { queryBox.string }
     var gridForTesting: SQLGridView { grid }
     var queryBoxForTesting: SQLQueryBox { queryBox }
+    var findBarForTesting: FindBarView { findBar }
+    var findSessionForTesting: GridFindSession { findSession }
 
     func setQueryForTesting(_ query: String) {
         queryBox.string = query
@@ -1053,6 +1154,91 @@ final class SQLPreviewView: NSView, PreviewContent {
     }
 }
 
+// MARK: - ⌘F over the grid
+
+/// The whole table is searched and not the page on screen, which is what makes
+/// a count and a wrap mean anything — and a table of four hundred thousand
+/// rows is not a thing to walk a hundred at a time. So the search is one
+/// statement put to SQLite (`SQLDump.hits`), and only the rows it hands back
+/// are looked at here, where each value's *display* text says which columns of
+/// them are the match.
+extension SQLPreviewView: GridFindSource {
+
+    var findPageOffset: Int { page?.offset ?? 0 }
+
+    var findColumnCount: Int { page?.columns.count ?? 0 }
+
+    func matches(for query: String, limit: Int) -> [GridMatch] {
+        guard let dump, let page, !query.isEmpty, limit > 0 else { return [] }
+        let typed = queryBox.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        let table = pickedTable
+        let sort = self.sort
+        // A database handle belongs to one queue, and this is the one question
+        // this pane ever asks from the main thread — so it is asked *on* that
+        // queue and waited for, rather than beside whatever it is doing.
+        let hits = queue.sync { () -> [SQLDump.Hit] in
+            guard typed.isEmpty else {
+                return dump.hits(for: query, inQuery: typed, sort: sort, limit: limit)
+            }
+            guard let table else { return [] }
+            return dump.hits(for: query, inTable: table, sort: sort, limit: limit)
+        }
+        var found: [GridMatch] = []
+        for hit in hits {
+            for (column, value) in hit.values.enumerated() where column < page.columns.count {
+                // What the reader sees is what is matched: `NULL` is the word
+                // on screen, a real is `12` rather than `12.0`, and a blob is
+                // its size.
+                guard value.displayText.range(of: query, options: GridFindSession.matchOptions)
+                    != nil
+                else { continue }
+                found.append(GridMatch(row: hit.row, column: column))
+                if found.count >= limit { return found }
+            }
+        }
+        return found
+    }
+
+    func findCellText(pageRow: Int, column: Int) -> String? {
+        guard let page, pageRow >= 0, pageRow < page.rows.count,
+              column >= 0, column < page.rows[pageRow].count
+        else { return nil }
+        return page.rows[pageRow][column].displayText
+    }
+
+    /// The page the row is on, then the cell on it. Never a scroll to the top:
+    /// the reader asked for one row and that is the one to be looking at.
+    func revealFindMatch(row: Int, column: Int) {
+        guard let page else { return }
+        let wanted = SQLDump.clamp(offset: (row / SQLDump.pageSize) * SQLDump.pageSize,
+                                   total: page.total)
+        let landing: () -> Void = { [weak self] in
+            self?.landOnFindMatch(row: row, column: column)
+        }
+        guard wanted != offset else {
+            landing()
+            return
+        }
+        offset = wanted
+        pendingFindLanding = landing
+        reload()
+    }
+
+    private func landOnFindMatch(row: Int, column: Int) {
+        guard let page else { return }
+        let local = row - page.offset
+        let gridColumn = column + 1
+        guard local >= 0, local < page.rows.count,
+              gridColumn > 0, gridColumn < grid.tableColumns.count
+        else { return }
+        // The cursor is the match, and `setCursor` scrolls it into view. The
+        // editor's caret follows it the same way a click on the cell would
+        // take it.
+        grid.setCursor(row: local, column: gridColumn)
+        revealSource(ofRow: local, column: gridColumn)
+    }
+}
+
 // MARK: - The grid's data
 
 extension SQLPreviewView: NSTableViewDataSource, NSTableViewDelegate {
@@ -1075,6 +1261,7 @@ extension SQLPreviewView: NSTableViewDataSource, NSTableViewDelegate {
             field.font = .monospacedDigitSystemFont(ofSize: max(9, cellFont.pointSize - 2),
                                                     weight: .regular)
             field.textColor = .tertiaryLabelColor
+            cell.text = nil
             field.stringValue = "\(page.offset + row + 1)"
             cell.toolTip = nil
             return cell
@@ -1083,6 +1270,7 @@ extension SQLPreviewView: NSTableViewDataSource, NSTableViewDelegate {
         guard let index = page.columns.firstIndex(where: { $0.name == tableColumn.identifier.rawValue }),
               index < page.rows[row].count
         else {
+            cell.text = nil
             field.stringValue = ""
             return cell
         }
@@ -1092,7 +1280,7 @@ extension SQLPreviewView: NSTableViewDataSource, NSTableViewDelegate {
         // digit; text is read from its first letter.
         field.alignment = value.isNumber ? .right : .left
         field.textColor = .labelColor
-        field.attributedStringValue = attributed(value)
+        cell.text = attributed(value)
         // What the column is too narrow to show is one hover away, rather
         // than gone.
         let text = value.displayText

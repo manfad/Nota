@@ -8,7 +8,7 @@ import XCTest
 /// note. The tab strip and the band across the top of the window are tab
 /// targets: everything let go on them opens as a tab, pictures included, the
 /// same as ⌘O and the Dock icon do it.
-final class DropOnStripTests: XCTestCase {
+final class DropOnStripTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func setUp() {

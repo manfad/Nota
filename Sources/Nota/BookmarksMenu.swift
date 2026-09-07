@@ -110,8 +110,11 @@ final class BookmarksMenu: NSObject, NSMenuDelegate {
         item.target = self
         item.representedObject = path
         item.toolTip = path
+        // Filled, like every other place a bookmark's icon is drawn — that
+        // is the whole mark now. 10 puts the badge 14 high and 21 wide, which
+        // is a menu row's height without crowding it.
         item.image = FileKindIcon.image(
-            named: FileKindIcon.symbolName(forTitle: name), pointSize: 12
+            named: FileKindIcon.symbolName(forTitle: name), pointSize: 10, filled: true
         )
         // A bookmark whose file has gone stays in the list, greyed out, until
         // it is removed — the volume it lives on may simply not be mounted.

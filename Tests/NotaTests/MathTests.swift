@@ -10,7 +10,7 @@ import XCTest
 /// that — what the parser makes of a formula, and what the layout measures —
 /// plus the promise that matters most for a live preview: nothing anyone can
 /// type makes it crash, hang or come back blank.
-final class MathTests: XCTestCase {
+final class MathTests: AppKitTestCase {
 
     private let font = NSFont.systemFont(ofSize: 13)
 

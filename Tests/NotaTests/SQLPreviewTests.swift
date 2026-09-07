@@ -7,7 +7,7 @@ import XCTest
 /// `.md` one — the same three modes, the same control, the same session — and
 /// what stands beside the source is the database the file builds, read a
 /// hundred rows at a time.
-final class SQLPreviewTests: XCTestCase {
+final class SQLPreviewTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
     private var windows: [NSWindow] = []
     /// Every alert the pane raised, in order — the red line under the box is
@@ -122,6 +122,284 @@ final class SQLPreviewTests: XCTestCase {
         XCTAssertNil(dump.failure)
         let page = try page(of: dump, table: "t")
         XCTAssertEqual(page.rows.first?.first, .text("one; two"))
+    }
+
+    // MARK: - A MySQL dump
+
+    /// A `mysqldump` / phpMyAdmin export in the wild: the session state the
+    /// MySQL client sends and SQLite has no equivalent for, the conditional
+    /// comments phpMyAdmin wraps its own `SET`s in, and a `CREATE TABLE`
+    /// carrying every MySQL-only decoration `SQLDumpDialect` knows to take
+    /// off. None of it should stop the run, and the `INSERT` under it all is
+    /// untouched by any of this.
+    func testAMySQLDumpsSessionStateAndTableDecorationAreSteppedOver() throws {
+        let dump = SQLDump(sql: mySQLDump())
+        XCTAssertNil(dump.failure, dump.failure?.message ?? "")
+        XCTAssertEqual(dump.tables, ["orders"], "SET, LOCK/UNLOCK and the rest wrote no table")
+
+        let page = try page(of: dump, table: "orders")
+        XCTAssertEqual(page.total, 3)
+        XCTAssertEqual(page.rows.map { $0[1] }, [.text("Alice"), .text("Bob"), .text("Carol")])
+
+        // The insert itself was never rewritten, so the source map lands on
+        // the row's own tuple exactly as it always has.
+        let source = mySQLDump() as NSString
+        XCTAssertEqual(dump.sourceMap.range(ofRowid: 2, inTable: "orders"),
+                       source.range(of: "(2, 'Bob', 45.00, '2026-01-02 11:30:00')"))
+    }
+
+    /// Nothing about reading MySQL's own spellings should paper over an
+    /// actual mistake: a statement gone wrong still stops the run and still
+    /// says which one it was.
+    func testAGenuineMistakeInAMySQLDumpStillStopsTheRunAndSaysWhichStatement() throws {
+        let broken = mySQLDump().replacingOccurrences(
+            of: "INSERT INTO `orders`", with: "INSRT INTO `orders`"
+        )
+        let dump = SQLDump(sql: broken)
+        let failure = try XCTUnwrap(dump.failure)
+        XCTAssertTrue(failure.message.contains("syntax error"), failure.message)
+        XCTAssertTrue(failure.statement.hasPrefix("INSRT INTO `orders`"), failure.statement)
+        XCTAssertEqual(dump.tables, ["orders"], "the table itself still went in before the slip")
+    }
+
+    private func mySQLDump() -> String {
+        """
+        -- phpMyAdmin SQL Dump
+        -- version 5.2.1
+        SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
+        START TRANSACTION;
+        SET time_zone = "+00:00";
+
+        /*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+        /*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+        /*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+        /*!40101 SET NAMES utf8mb4 */;
+
+        CREATE TABLE `orders` (
+          `id` int(11) UNSIGNED NOT NULL AUTO_INCREMENT,
+          `customer` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+          `total` decimal(10,2) NOT NULL DEFAULT 0.00,
+          `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (`id`),
+          KEY `idx_customer` (`customer`)
+        ) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+        LOCK TABLES `orders` WRITE;
+        INSERT INTO `orders` (`id`, `customer`, `total`, `created_at`) VALUES
+        (1, 'Alice', 19.99, '2026-01-01 10:00:00'),
+        (2, 'Bob', 45.00, '2026-01-02 11:30:00'),
+        (3, 'Carol', 12.50, '2026-01-03 09:15:00');
+        UNLOCK TABLES;
+        COMMIT;
+
+        /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+        /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+        /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+        """
+    }
+
+    // MARK: - A PostgreSQL dump
+
+    /// A `pg_dump` (plain SQL) export in the wild: the session `SET`s and
+    /// `pg_catalog.set_config`/`.setval` calls, a sequence built for a
+    /// column and handed to it, a `CREATE TABLE` in PostgreSQL's own type
+    /// spellings, the owner and constraint statements pg_dump adds after
+    /// the fact, an index with its own `USING btree`, and the table's rows
+    /// written as a `COPY … FROM stdin` block rather than as `INSERT`s.
+    /// None of it should stop the run, and a row the block wrote still
+    /// traces back to its own line in the file.
+    func testAPostgresDumpsSessionStateCopyBlockAndTableDecorationAreSteppedOver() throws {
+        let dump = SQLDump(sql: postgresDump())
+        XCTAssertNil(dump.failure, dump.failure?.message ?? "")
+        XCTAssertEqual(dump.tables, ["orders"],
+                       "the sequence and the index wrote no table of their own")
+
+        let page = try page(of: dump, table: "orders")
+        XCTAssertEqual(page.total, 3)
+        XCTAssertEqual(page.rows.map { $0[0] }, [.integer(1), .integer(2), .integer(3)])
+        // The `\N` pg_dump wrote for the second row's `placed_at` is a NULL
+        // cell, not the two characters `\N`.
+        XCTAssertEqual(page.rows[1][2], .null)
+        // The tab pg_dump escaped inside the second row's `customer` field
+        // is a real tab in the cell, not the two characters `\t`.
+        XCTAssertEqual(page.rows[1][1], .text("Bo\tb"))
+
+        // COPY's own rows are batched INSERTs under the hood, but the
+        // source map still lands on the row's own line in the file, one
+        // row at a time.
+        let row2Line = postgresRows()[1].joined(separator: "\t")
+        XCTAssertEqual(dump.sourceMap.range(ofRowid: 2, inTable: "orders"),
+                       (postgresDump() as NSString).range(of: row2Line))
+    }
+
+    private func postgresRows() -> [[String]] {
+        [
+            ["1", "Alice", "2026-01-01 10:00:00", "t"],
+            ["2", "Bo\\tb", "\\N", "f"],
+            ["3", "Carol", "2026-01-03 09:15:00", "t"],
+        ]
+    }
+
+    private func postgresDump() -> String {
+        let header = """
+        --
+        -- PostgreSQL database dump
+        --
+
+        SET statement_timeout = 0;
+        SET lock_timeout = 0;
+        SET idle_in_transaction_session_timeout = 0;
+        SET client_encoding = 'UTF8';
+        SET standard_conforming_strings = on;
+        SELECT pg_catalog.set_config('search_path', '', false);
+        SET check_function_bodies = false;
+        SET row_security = off;
+
+        --
+        -- Name: orders_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+        --
+
+        CREATE SEQUENCE public.orders_id_seq
+            AS integer
+            START WITH 1
+            INCREMENT BY 1
+            NO MINVALUE
+            NO MAXVALUE
+            CACHE 1;
+
+        ALTER TABLE public.orders_id_seq OWNER TO postgres;
+
+        --
+        -- Name: orders; Type: TABLE; Schema: public; Owner: postgres
+        --
+
+        CREATE TABLE public.orders (
+            id integer DEFAULT nextval('public.orders_id_seq'::regclass) NOT NULL,
+            customer character varying(100) NOT NULL,
+            placed_at timestamp without time zone,
+            is_paid boolean DEFAULT false NOT NULL
+        );
+
+        ALTER TABLE public.orders OWNER TO postgres;
+
+        ALTER SEQUENCE public.orders_id_seq OWNED BY public.orders.id;
+
+        --
+        -- Data for Name: orders; Type: TABLE DATA; Schema: public; Owner: postgres
+        --
+
+        """
+        let copy = "COPY public.orders (id, customer, placed_at, is_paid) FROM stdin;\n"
+            + postgresRows().map { $0.joined(separator: "\t") }.joined(separator: "\n")
+            + "\n\\.\n"
+        let footer = """
+
+        SELECT pg_catalog.setval('public.orders_id_seq', 3, true);
+
+        --
+        -- Name: orders orders_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+        --
+
+        ALTER TABLE ONLY public.orders
+            ADD CONSTRAINT orders_pkey PRIMARY KEY (id);
+
+        --
+        -- Name: orders_customer_idx; Type: INDEX; Schema: public; Owner: postgres
+        --
+
+        CREATE INDEX orders_customer_idx ON public.orders USING btree (customer);
+
+        GRANT ALL ON TABLE public.orders TO someone;
+        """
+        return header + copy + footer
+    }
+
+    /// `key` is a legal unquoted column name in SQLite — a
+    /// `settings (key TEXT, value TEXT)` table is an ordinary one — and
+    /// must not be mistaken for the start of an index line just because it
+    /// spells the same word an index's own keyword does. A genuine index
+    /// line naming itself `idx_name` is still dropped.
+    func testAnUnquotedKeyColumnSurvivesAndAGenuineIndexLineIsStillDropped() throws {
+        let settings = SQLDump(sql: """
+        CREATE TABLE settings (key TEXT, value TEXT);
+        INSERT INTO settings VALUES ('currency', 'MYR');
+        """)
+        XCTAssertNil(settings.failure)
+        XCTAssertEqual(settings.declaredTypes(ofTable: "settings").map(\.name), ["key", "value"])
+        let settingsPage = try page(of: settings, table: "settings")
+        XCTAssertEqual(settingsPage.rows.first, [.text("currency"), .text("MYR")])
+
+        let indexed = SQLDump(sql: """
+        CREATE TABLE t (name TEXT, KEY idx_name (name));
+        INSERT INTO t VALUES ('x');
+        """)
+        XCTAssertNil(indexed.failure)
+        XCTAssertEqual(indexed.declaredTypes(ofTable: "t").map(\.name), ["name"],
+                       "the index line itself, not a column named after it")
+    }
+
+    /// A real phpMyAdmin export of a small shop, read from `Examples/sql`:
+    /// five tables, a dozen-odd rows apiece, and `Daniel O\'Brien`'s
+    /// backslash-escaped quote among them — the reason a MySQL dump's own
+    /// string literals have to be decoded before SQLite ever sees them.
+    func testTheMySQLExampleLoadsWhole() throws {
+        let dump = SQLDump(sql: try exampleText("sql/MySQL.sql"))
+        XCTAssertNil(dump.failure, dump.failure?.message ?? "")
+        XCTAssertEqual(dump.tables, ["customers", "order_items", "orders", "products", "settings"])
+        XCTAssertEqual(dump.rowCount(ofTable: "customers"), 12)
+        XCTAssertEqual(dump.rowCount(ofTable: "products"), 10)
+        XCTAssertEqual(dump.rowCount(ofTable: "orders"), 14)
+        XCTAssertEqual(dump.rowCount(ofTable: "order_items"), 17)
+        XCTAssertEqual(dump.rowCount(ofTable: "settings"), 3)
+        XCTAssertEqual(dump.declaredTypes(ofTable: "settings").map(\.name), ["key", "value"])
+
+        let customers = try page(of: dump, table: "customers")
+        XCTAssertEqual(customers.rows[2][1], .text("Daniel O'Brien"),
+                       "the escaped quote decoded rather than breaking the statement")
+
+        let products = try page(of: dump, table: "products")
+        XCTAssertEqual(products.rows[0][6], .text("Folds flat.\nShips in a tube."),
+                       "\\n decoded to a real newline")
+        XCTAssertEqual(products.rows[8][6], .text("C:\\shop\\art\\tote.svg"),
+                       "a doubled backslash decoded to one")
+        guard case .text(let ironGallNotes) = products.rows[6][6] else {
+            return XCTFail("row 7's notes should be text")
+        }
+        XCTAssertTrue(ironGallNotes.contains("\"blue-black\""), ironGallNotes)
+    }
+
+    /// The same shop as a real `pg_dump` (plain SQL) export, read from
+    /// `Examples/sql`: the same five tables and row counts, its rows
+    /// written as `COPY … FROM stdin` blocks rather than `INSERT`s, a
+    /// `boolean` column's `t`/`f` read back as `1`/`0`, and an array or
+    /// jsonb value left exactly as the text it was dumped as.
+    func testThePostgreSQLExampleLoadsWhole() throws {
+        let dump = SQLDump(sql: try exampleText("sql/PostgreSQL.sql"))
+        XCTAssertNil(dump.failure, dump.failure?.message ?? "")
+        XCTAssertEqual(dump.tables, ["customers", "order_items", "orders", "products", "settings"])
+        XCTAssertEqual(dump.rowCount(ofTable: "customers"), 12)
+        XCTAssertEqual(dump.rowCount(ofTable: "products"), 10)
+        XCTAssertEqual(dump.rowCount(ofTable: "orders"), 14)
+        XCTAssertEqual(dump.rowCount(ofTable: "order_items"), 17)
+        XCTAssertEqual(dump.rowCount(ofTable: "settings"), 3)
+
+        let customers = try page(of: dump, table: "customers")
+        XCTAssertEqual(customers.rows[2][1], .text("Daniel O'Brien"),
+                       "a literal quote in COPY's own text format, doubled for SQLite")
+        XCTAssertEqual(customers.rows[4][3], .null, "row 5's email, written as \\N")
+        XCTAssertEqual(customers.rows[5][1], .text("Hans \"Hansi\" Müller"))
+        XCTAssertEqual(customers.rows[0][5], .integer(1), "newsletter's t decoded to 1")
+        XCTAssertEqual(customers.rows[1][5], .integer(0), "newsletter's f decoded to 0")
+
+        let products = try page(of: dump, table: "products")
+        guard case .text(let penRollNotes) = products.rows[9][6] else {
+            return XCTFail("row 10's notes should be text")
+        }
+        XCTAssertTrue(penRollNotes.contains("\t"), "the escaped tab decoded to a real one")
+
+        let orders = try page(of: dump, table: "orders")
+        XCTAssertEqual(orders.rows[0][5], .text("{gift}"), "an array literal, left as text")
+        XCTAssertEqual(orders.rows[0][6], .text("{\"courier\": \"poslaju\"}"), "jsonb, left as text")
     }
 
     // MARK: - Paging

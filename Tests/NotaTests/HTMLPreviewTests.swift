@@ -8,7 +8,7 @@ import XCTest
 /// `.md` one — the same three modes, the same control, the same setting — and
 /// unlike it the page beside the source is the author's own, drawn by WebKit
 /// with its own stylesheets, colours and scripts.
-final class HTMLPreviewTests: XCTestCase {
+final class HTMLPreviewTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
     private var windows: [NSWindow] = []
 
@@ -964,6 +964,99 @@ final class HTMLPreviewTests: XCTestCase {
                        "the page is showing bands on \(Set(painted))")
     }
 
+    // MARK: - A field in the page
+
+    @MainActor
+    func testAFieldInThePageTakesTheKeyboardInSplitAndGivesItUpQuietly() throws {
+        let (pane, window) = try makePane()
+        try show(makeNote(named: "form.html",
+                          text: "<p>Beside the editor</p><input id=\"who\">"), in: pane)
+        let page = try page(of: pane)
+
+        // Split: the caret is the editor's, and a click on the paragraph
+        // leaves it there.
+        XCTAssertFalse(pane.takesKeyboard)
+        XCTAssertFalse(page.acceptsFirstResponder)
+
+        try focus(in: pane, byRunning: "document.getElementById('who').focus();",
+                  expecting: true)
+        XCTAssertTrue(page.acceptsFirstResponder,
+                      "a page being typed into has to have the keys")
+        XCTAssertTrue(window.firstResponder === page,
+                      "and WebKit only gets key events as first responder")
+
+        try focus(in: pane, byRunning: "document.getElementById('who').blur();",
+                  expecting: false)
+        XCTAssertFalse(page.acceptsFirstResponder, "the exception ends with the field")
+        XCTAssertTrue(window.firstResponder === page,
+                      "and the keyboard is left where it is — the next click decides")
+    }
+
+    @MainActor
+    func testTheFieldsExceptionEndsWhenTheKeyboardGoesBackToTheEditor() throws {
+        let (pane, window) = try makePane()
+        let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        pane.addSubview(editor)
+        try show(makeNote(named: "form.html", text: "<input id=\"who\">"), in: pane)
+        let page = try page(of: pane)
+
+        try focus(in: pane, byRunning: "document.getElementById('who').focus();",
+                  expecting: true)
+        XCTAssertTrue(window.firstResponder === page)
+
+        let dropped = expectation(description: "the field's exception came down")
+        dropped.assertForOverFulfill = false
+        pane.onEditableFocusChange = { if !$0 { dropped.fulfill() } }
+        window.makeFirstResponder(editor)
+        wait(for: [dropped], timeout: 5)
+        pane.onEditableFocusChange = nil
+
+        XCTAssertTrue(window.firstResponder === editor)
+        XCTAssertFalse(page.acceptsFirstResponder,
+                       "so the next click in the page is an ordinary click again")
+    }
+
+    // MARK: - A press in the page reveals its tag
+
+    @MainActor
+    func testPressingAnElementRevealsItsTagInTheEditor() throws {
+        let (pane, _) = try makePane()
+        let source = """
+        <!doctype html>
+        <html>
+        <head><title>Page</title></head>
+        <body>
+        <h1>Heading</h1>
+        <div><p>One</p><p>Two</p></div>
+        </body>
+        </html>
+        """
+        try show(makeNote(named: "page.html", text: source), in: pane)
+
+        XCTAssertEqual(try press("h1", in: pane),
+                       (source as NSString).range(of: "<h1>Heading</h1>"),
+                       "a heading holds nothing but text, so the whole of it is revealed")
+        XCTAssertEqual(try press("div", in: pane),
+                       (source as NSString).range(of: "<div>"),
+                       "a container is revealed by its start tag and no more")
+        XCTAssertEqual(try press("p:last-of-type", in: pane),
+                       (source as NSString).range(of: "<p>Two</p>"),
+                       "the second paragraph, not the first — the DOM's own order")
+        XCTAssertEqual(pane.webView?.acceptsFirstResponder, false,
+                       "the reveal moves the caret; the page never asked for the keyboard")
+    }
+
+    @MainActor
+    func testAPageTheTokeniserWillNotReadHasNoMap() throws {
+        let (pane, _) = try makePane()
+        try show(makeNote(named: "page.html", text: "<p>hi</p><!-- never closed"), in: pane)
+        XCTAssertNil(pane.sourceMapForTesting,
+                     "the same page the Beautify button refuses")
+
+        try show(makeNote(named: "page.html", text: "<p>hi</p>"), in: pane)
+        XCTAssertNotNil(pane.sourceMapForTesting, "and the next load builds one again")
+    }
+
     // MARK: - Helpers
 
     /// A file in the folder of examples checked in beside the app — a real
@@ -1090,6 +1183,44 @@ final class HTMLPreviewTests: XCTestCase {
         )
         wait(for: [answered], timeout: 5)
         pane.onFindAnswered = nil
+    }
+
+    /// Runs a script that moves the focus in the page and waits for the pane
+    /// to hear about it. Every answer crosses a process boundary, so nothing
+    /// is true the instant the call returns.
+    @MainActor
+    private func focus(
+        in pane: HTMLPreviewView, byRunning javaScript: String, expecting focused: Bool
+    ) throws {
+        let reported = expectation(description: "the page reported its focus")
+        reported.assertForOverFulfill = false
+        pane.onEditableFocusChange = { if $0 == focused { reported.fulfill() } }
+        try evaluate(javaScript, in: pane)
+        wait(for: [reported], timeout: 5)
+        pane.onEditableFocusChange = nil
+    }
+
+    /// The reader pressing an element in the page, and the range the pane
+    /// reveals for it. The press is dispatched in the page and answered
+    /// across a process boundary, so nothing about it is true the instant
+    /// the call returns.
+    @MainActor
+    private func press(_ selector: String, in pane: HTMLPreviewView) throws -> NSRange? {
+        let revealed = expectation(description: "the page reported the element pressed")
+        revealed.assertForOverFulfill = false
+        var range: NSRange?
+        pane.onSourceReveal = { source in
+            range = source
+            revealed.fulfill()
+        }
+        try evaluate("""
+        document.querySelector("\(selector)").dispatchEvent(
+            new MouseEvent('mousedown', { bubbles: true })
+        );
+        """, in: pane)
+        wait(for: [revealed], timeout: 5)
+        pane.onSourceReveal = nil
+        return range
     }
 
     private func makeNote(named name: String, text: String) -> Note {
@@ -1247,6 +1378,25 @@ final class HTMLPreviewTests: XCTestCase {
         return nil
     }
 
+    // MARK: - A drawing that will not parse
+
+    /// WebKit's own XML error page is black type in a pink box, unreadable
+    /// over a dark column, with the find bar's stylesheet printed under it
+    /// as text. A drawing is checked first, and a broken one gets Nota's
+    /// page in the column's colours.
+    func testABrokenDrawingIsNamedBeforeWebKitSeesIt() {
+        XCTAssertNil(SVGCheck.problem(in: "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"1\" height=\"1\"/></svg>"))
+        XCTAssertEqual(SVGCheck.problem(in: ""), "The document is empty.")
+        XCTAssertEqual(SVGCheck.problem(in: "  \n\t"), "The document is empty.")
+        let broken = try? XCTUnwrap(SVGCheck.problem(in: "<svg><rect></svg>"))
+        XCTAssertTrue(broken?.hasPrefix("Line ") == true, "\(broken ?? "nil") says where")
+
+        let page = HTMLPreviewView.svgProblemPage("Line 1, column 1: <bad> & worse")
+        XCTAssertTrue(page.contains("color-scheme: light dark"), "readable in the dark")
+        XCTAssertTrue(page.contains("This drawing cannot be shown"))
+        XCTAssertTrue(page.contains("Line 1, column 1: &lt;bad&gt; &amp; worse"), "the message is text, not markup")
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("NotaHTMLTests-\(UUID().uuidString)", isDirectory: true)
@@ -1255,4 +1405,3 @@ final class HTMLPreviewTests: XCTestCase {
         return directory
     }
 }
-

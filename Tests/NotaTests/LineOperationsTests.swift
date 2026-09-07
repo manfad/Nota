@@ -7,7 +7,7 @@ import XCTest
 /// what a keypress does: the edit, the selection it leaves, and the single
 /// undo step behind it.
 @MainActor
-final class LineOperationsTests: XCTestCase {
+final class LineOperationsTests: AppKitTestCase {
 
     // MARK: - Harness
 

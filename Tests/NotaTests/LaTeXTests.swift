@@ -6,7 +6,7 @@ import XCTest
 /// The LaTeX render: the parser that reads a `.tex` file into blocks, the
 /// renderer that gives them the pane's look, and the tab they are read in —
 /// which is the Markdown tab's arrangement with another grammar inside it.
-final class LaTeXTests: XCTestCase {
+final class LaTeXTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {
@@ -581,7 +581,7 @@ final class LaTeXTests: XCTestCase {
     }
 
     @MainActor
-    func testShiftCommandPCyclesATexTabThroughSplitAndReading() throws {
+    func testCommandPWalksATexTabToReadingAndBackThroughSplit() throws {
         _ = NSApplication.shared
         let controller = try makeLaTeXController()
         controller.toggleMarkdownPreview()
@@ -592,7 +592,9 @@ final class LaTeXTests: XCTestCase {
         controller.toggleMarkdownPreview()
         XCTAssertEqual(controller.previewMode, .reading)
         controller.toggleMarkdownPreview()
-        XCTAssertEqual(controller.previewMode, .off)
+        XCTAssertEqual(controller.previewMode, .split, "from reading, ⌘P comes back through split")
+        controller.toggleMarkdownPreview()
+        XCTAssertEqual(controller.previewMode, .off, "and from that split, on to the editor")
 
         controller.toggleReadingMode()
         XCTAssertEqual(controller.previewMode, .reading, "⇧⌘P jumps straight there")
@@ -740,13 +742,24 @@ final class LaTeXTests: XCTestCase {
         rect.origin.y += textView.textContainerOrigin.y
 
         let location = textView.convert(NSPoint(x: rect.minX + 2, y: rect.midY), to: nil)
-        let event = try XCTUnwrap(NSEvent.mouseEvent(
-            with: .leftMouseDown, location: location,
-            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-            windowNumber: window.windowNumber, context: nil,
-            eventNumber: 0, clickCount: 1, pressure: 1
-        ))
-        textView.mouseDown(with: event)
+        func event(_ type: NSEvent.EventType) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: location,
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 1
+            ))
+        }
+
+        // A press in the render runs `NSTextView`'s own tracking loop to the
+        // mouse up, since a drag there selects text (2026-09-07). So the
+        // release is queued before the press, the way a reader's already is,
+        // and anything the loop left behind is taken back out.
+        window.postEvent(try event(.leftMouseUp), atStart: false)
+        textView.mouseDown(with: try event(.leftMouseDown))
+        while NSApp.nextEvent(
+            matching: .leftMouseUp, until: nil, inMode: .default, dequeue: true
+        ) != nil {}
     }
 
     /// Long enough for the 150 ms render to have fired.

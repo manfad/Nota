@@ -11,7 +11,7 @@ import XCTest
 /// The one thing a picture is not is an asset. Dropped into the text of a
 /// note it is still a picture in that note; opened as a file it is a tab of
 /// its own. Which of the two happens is settled by where it was dropped.
-final class ImageTests: XCTestCase {
+final class ImageTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {

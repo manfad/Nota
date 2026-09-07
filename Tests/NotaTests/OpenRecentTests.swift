@@ -13,7 +13,7 @@ import XCTest
 /// call away rather than a plain array in this process, so a note or a clear
 /// is not guaranteed to be visible the instant the call returns — every read
 /// here waits for the state it expects rather than asserting on the spot.
-final class OpenRecentTests: XCTestCase {
+final class OpenRecentTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func setUpWithError() throws {

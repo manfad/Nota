@@ -11,7 +11,7 @@ import XCTest
 /// content's own actual size, and it is only there when it is wanted — for a
 /// second and a half after a zoom, and while the pointer is in the band along
 /// the bottom of the column. A tab with no zoom to report has no pill at all.
-final class ZoomPillTests: XCTestCase {
+final class ZoomPillTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {

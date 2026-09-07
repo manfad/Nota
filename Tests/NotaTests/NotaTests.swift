@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 @testable import Nota
 
-final class NotaTests: XCTestCase {
+final class NotaTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {
@@ -194,9 +194,11 @@ final class NotaTests: XCTestCase {
                                        "Highlight current line", "Vim mode"])
         XCTAssertEqual(titles(on: 3), ["Start supported files in preview mode"])
         XCTAssertEqual(titles(on: 4), ["Show tab bar", "Auto-hide tab bar", "Traffic lights",
-                                       "Bookmark button", "Settings button"])
+                                       "Bookmark button", "Bookmark dialog button",
+                                       "Settings button"])
         XCTAssertEqual(titles(on: 5), ["Show status bar", "Words", "Characters", "Images", "Lines",
-                                       "Text encoding", "Line endings", "Cursor position"])
+                                       "Format", "Text encoding", "Line endings",
+                                       "Cursor position"])
         for page in [2, 3, 4, 5] {
             for row in controller.rows(on: page) {
                 XCTAssertTrue(row.control is NSSwitch, "\(row.title) is not a switch")
@@ -227,11 +229,6 @@ final class NotaTests: XCTestCase {
         )
 
         controller.selectPage(at: 0)
-        XCTAssertTrue(
-            views().compactMap { ($0 as? NSButton)?.title }.contains("Save"),
-            "Save is outside the pages, shared by all of them"
-        )
-
         let language = views().compactMap { $0 as? NSPopUpButton }.first {
             $0.itemTitles.contains("简体中文")
         }
@@ -243,48 +240,64 @@ final class NotaTests: XCTestCase {
         XCTAssertEqual(theme?.itemTitles, ["System Default", "Light", "Dark"])
     }
 
-    /// The five window-chrome switches are draft like everything else: nothing
-    /// is written until Save, and then all five go together.
+    /// There is no Save button on any page: a control writes its own
+    /// preference the moment it changes, so nothing waits to be applied.
     @MainActor
-    func testSavingAWindowChromeDraftWritesEveryToggle() throws {
+    func testSettingsHasNoSaveButtonOnAnyPage() throws {
+        _ = NSApplication.shared
+        let controller = SettingsWindowController.shared
+        defer { controller.selectPage(at: 0) }
+        let root = try XCTUnwrap(controller.window?.contentView)
+        func allViews(in view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(allViews)
+        }
+        // Buttons only: the Shortcuts page lists the File menu's own Save
+        // command, and that row is a label beside a recorder, not a button.
+        for page in 0..<controller.pageTitles.count {
+            controller.selectPage(at: page)
+            let buttons = allViews(in: root).compactMap { ($0 as? NSButton)?.title }
+            XCTAssertFalse(buttons.contains("Save"),
+                           "page \(controller.pageTitles[page]) still has a Save button")
+        }
+    }
+
+    /// The five window-chrome switches apply as they are flipped: no Save
+    /// button stands between the switch and the window.
+    @MainActor
+    func testWindowChromeSwitchesWriteAsTheyAreFlipped() throws {
         _ = NSApplication.shared
         let preferences = Preferences.shared
         let original = (preferences.hidesTabBar, preferences.hidesTrafficLights,
                         preferences.hidesBookmarkButton, preferences.hidesSettingsButton,
-                        preferences.autoHidesTabBar)
+                        preferences.autoHidesTabBar, preferences.hidesBookmarkToggleButton)
         defer {
             preferences.hidesTabBar = original.0
             preferences.hidesTrafficLights = original.1
             preferences.hidesBookmarkButton = original.2
             preferences.hidesSettingsButton = original.3
             preferences.autoHidesTabBar = original.4
+            preferences.hidesBookmarkToggleButton = original.5
         }
         preferences.hidesTabBar = false
         preferences.hidesTrafficLights = false
         preferences.hidesBookmarkButton = false
         preferences.hidesSettingsButton = false
         preferences.autoHidesTabBar = false
+        preferences.hidesBookmarkToggleButton = false
 
         let controller = SettingsWindowController.shared
         defer { controller.selectPage(at: 0) }
         XCTAssertTrue(controller.selectPage(titled: "Tab bar"))
-        let root = try XCTUnwrap(controller.window?.contentView)
-        func allViews(in view: NSView) -> [NSView] {
-            [view] + view.subviews.flatMap(allViews)
-        }
-        let save = try XCTUnwrap(allViews(in: root).compactMap { $0 as? NSButton }
-            .first { $0.title == "Save" })
-        XCTAssertFalse(save.isEnabled, "a fresh draft has nothing to save")
-
         // Auto-hide first: switching "Show tab bar" off greys its row, and a
         // row that is greyed is one the reader cannot reach either. The other
-        // three switches wear positive labels now, so turning them off is
+        // four switches wear positive labels now, so turning them off is
         // what hides the piece of chrome they name.
         let chrome: [(title: String, state: NSControl.StateValue)] = [
             ("Auto-hide tab bar", .on),
             ("Show tab bar", .off),
             ("Traffic lights", .off),
             ("Bookmark button", .off),
+            ("Bookmark dialog button", .off),
             ("Settings button", .off),
         ]
         for (title, state) in chrome {
@@ -294,24 +307,20 @@ final class NotaTests: XCTestCase {
             control.state = state
             _ = NSApp.sendAction(try XCTUnwrap(control.action), to: control.target, from: control)
         }
-        XCTAssertTrue(save.isEnabled)
-        XCTAssertFalse(preferences.hidesTabBar, "nothing is written until Save")
-
-        save.performClick(nil)
+        XCTAssertTrue(preferences.autoHidesTabBar, "written as the first switch was flipped")
         XCTAssertTrue(preferences.hidesTabBar)
-        XCTAssertTrue(preferences.autoHidesTabBar)
         XCTAssertTrue(preferences.hidesTrafficLights)
+        XCTAssertTrue(preferences.hidesBookmarkToggleButton)
         XCTAssertTrue(preferences.hidesBookmarkButton)
         XCTAssertTrue(preferences.hidesSettingsButton)
-        XCTAssertFalse(save.isEnabled, "the draft is spent")
     }
 
     /// The Tab bar page's rows, in the order the strip itself reads them:
-    /// "Show tab bar" and "Auto-hide tab bar" first, then the three parts the
-    /// strip can carry. Turning "Show tab bar" off greys "Auto-hide tab bar"
-    /// and "Traffic lights" — a strip that is gone for good has nothing to
-    /// slide back in, and the lights are already gone the way zen takes them
-    /// — but leaves "Bookmark button" and "Settings button" reachable.
+    /// "Show tab bar" and "Auto-hide tab bar" first, then the four parts the
+    /// strip can carry, in the order they sit in it. Turning "Show tab bar"
+    /// off greys "Auto-hide tab bar" and "Traffic lights" — a strip that is
+    /// gone for good has nothing to slide back in, and the lights are already
+    /// gone the way zen takes them — but leaves the three buttons reachable.
     @MainActor
     func testTabBarPageRowsAndShowTabBarGreying() throws {
         _ = NSApplication.shared
@@ -327,7 +336,7 @@ final class NotaTests: XCTestCase {
         let rows = controller.rows(on: 4)
         XCTAssertEqual(rows.map(\.title), [
             "Show tab bar", "Auto-hide tab bar", "Traffic lights",
-            "Bookmark button", "Settings button",
+            "Bookmark button", "Bookmark dialog button", "Settings button",
         ])
 
         func isEnabled(_ title: String) -> Bool {
@@ -345,6 +354,7 @@ final class NotaTests: XCTestCase {
         XCTAssertFalse(isEnabled("Auto-hide tab bar"))
         XCTAssertFalse(isEnabled("Traffic lights"))
         XCTAssertTrue(isEnabled("Bookmark button"), "only auto-hide and traffic lights grey")
+        XCTAssertTrue(isEnabled("Bookmark dialog button"))
         XCTAssertTrue(isEnabled("Settings button"))
     }
 
@@ -367,10 +377,10 @@ final class NotaTests: XCTestCase {
                       "no version line, only \(strings)")
     }
 
-    /// Theme is General's second row: Save puts it on the app as a whole,
-    /// and System Default hands the choice back to the Mac.
+    /// Theme is General's second row: picking one puts it on the app as a
+    /// whole at once, and System Default hands the choice back to the Mac.
     @MainActor
-    func testSavingAThemeDraftSetsTheAppsAppearance() throws {
+    func testPickingAThemeSetsTheAppsAppearanceAtOnce() throws {
         _ = NSApplication.shared
         let original = Preferences.shared.theme
         defer {
@@ -390,24 +400,20 @@ final class NotaTests: XCTestCase {
         let theme = try XCTUnwrap(views.compactMap { $0 as? NSPopUpButton }.first {
             $0.itemTitles.contains("Dark")
         })
-        let save = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Save" })
 
         theme.selectItem(at: 2)
         _ = NSApp.sendAction(try XCTUnwrap(theme.action), to: theme.target, from: theme)
-        XCTAssertTrue(save.isEnabled)
-        save.performClick(nil)
         XCTAssertEqual(Preferences.shared.theme, .dark)
         XCTAssertEqual(NSApp.appearance?.name, .darkAqua)
 
         theme.selectItem(at: 0)
         _ = NSApp.sendAction(try XCTUnwrap(theme.action), to: theme.target, from: theme)
-        save.performClick(nil)
         XCTAssertEqual(Preferences.shared.theme, .system)
         XCTAssertNil(NSApp.appearance, "System Default lets the Mac decide")
     }
 
     @MainActor
-    func testSavingAChineseLanguageDraftRerendersSettings() throws {
+    func testPickingChineseRerendersSettingsAtOnce() throws {
         _ = NSApplication.shared
         let original = Preferences.shared.language
         defer { Preferences.shared.language = original }
@@ -423,15 +429,12 @@ final class NotaTests: XCTestCase {
         let language = try XCTUnwrap(views.compactMap { $0 as? NSPopUpButton }.first {
             $0.itemTitles.contains("简体中文")
         })
-        let save = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Save" })
 
         language.selectItem(at: 2)
         _ = NSApp.sendAction(try XCTUnwrap(language.action), to: language.target, from: language)
-        XCTAssertTrue(save.isEnabled)
-        save.performClick(nil)
 
+        XCTAssertEqual(Preferences.shared.language, .simplifiedChinese)
         XCTAssertEqual(controller.window?.title, "设置")
-        XCTAssertEqual(save.title, "保存")
         // The sidebar and the rows are relabelled in place, not rebuilt.
         XCTAssertEqual(controller.pageTitles.first, "通用")
         XCTAssertEqual(controller.rows(on: 0).map(\.title), ["语言", "主题"])
@@ -444,10 +447,10 @@ final class NotaTests: XCTestCase {
     }
 
     /// Sidebar side is Appearance's last row: the popup shows the side that
-    /// is live, and Save moves the column at once — a fresh window's split
-    /// item comes up on the side just picked.
+    /// is live, and picking the other one moves the column at once — an open
+    /// window's split item swaps without a relaunch.
     @MainActor
-    func testSavingASidebarSideDraftMovesTheColumnAtOnce() throws {
+    func testPickingASidebarSideMovesTheColumnAtOnce() throws {
         _ = NSApplication.shared
         let original = Preferences.shared.sidebarSide
         defer { Preferences.shared.sidebarSide = original }
@@ -463,7 +466,6 @@ final class NotaTests: XCTestCase {
         let sidebarSide = try XCTUnwrap(views.compactMap { $0 as? NSPopUpButton }.first {
             $0.itemTitles == ["Left", "Right"]
         })
-        let save = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Save" })
         XCTAssertEqual(sidebarSide.selectedItem?.representedObject as? String, "right",
                        "the popup shows the side that is live")
 
@@ -485,8 +487,6 @@ final class NotaTests: XCTestCase {
         _ = NSApp.sendAction(
             try XCTUnwrap(sidebarSide.action), to: sidebarSide.target, from: sidebarSide
         )
-        XCTAssertTrue(save.isEnabled)
-        save.performClick(nil)
         XCTAssertEqual(Preferences.shared.sidebarSide, .left)
         XCTAssertEqual(roles(), ["sidebar", "workspace"],
                        "the open window's sidebar is now first, on the left — no relaunch")
@@ -496,7 +496,6 @@ final class NotaTests: XCTestCase {
         _ = NSApp.sendAction(
             try XCTUnwrap(sidebarSide.action), to: sidebarSide.target, from: sidebarSide
         )
-        save.performClick(nil)
         XCTAssertEqual(roles(), ["workspace", "sidebar"])
     }
 
@@ -2360,12 +2359,13 @@ final class NotaTests: XCTestCase {
 
     // MARK: - The picker keeps the keyboard
 
-    /// The picker hides with Nota and comes back with it, but key used to go
-    /// to the main window on the way back: no caret in the field, and Esc
-    /// closing nothing until the field was clicked. Now the field takes the
-    /// keyboard again whenever Nota is active with the picker showing.
+    /// The picker is a child of the window that opened it.  It restores its
+    /// field on a later turn only while that owner is visible and Nota is
+    /// active; it must not make itself key simply because an activation
+    /// notification arrived.  Escape still dismisses it after key has moved
+    /// back to the owner.
     @MainActor
-    func testThePickerTakesTheKeyboardBackWhenNotaReturns() throws {
+    func testThePickerRefocusesOnlyForItsVisibleActiveOwnerAndEscapeDismissesIt() throws {
         _ = NSApplication.shared
         let controller = MainWindowController(store: SessionStore(directory: try makeTemporaryDirectory()))
         let window = try XCTUnwrap(controller.window)
@@ -2375,6 +2375,7 @@ final class NotaTests: XCTestCase {
 
         controller.showTabPicker()
         XCTAssertTrue(picker.isVisible)
+        XCTAssertTrue(picker.isAttachedToOwner)
         XCTAssertTrue(picker.fieldHasFocus, "the field has the caret as soon as the picker opens")
 
         // Key wanders off to the main window, as it does after a trip to
@@ -2382,12 +2383,19 @@ final class NotaTests: XCTestCase {
         controller.window?.makeKey()
         XCTAssertFalse(picker.fieldHasFocus)
 
-        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
-        XCTAssertTrue(picker.fieldHasFocus, "Nota is back, and so is the caret")
+        picker.scheduleRefocusIfShowing()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        if NSApp.isActive && window.occlusionState.contains(.visible) {
+            XCTAssertTrue(picker.fieldHasFocus, "the visible active owner's field gets the caret back")
+        } else {
+            XCTAssertFalse(picker.fieldHasFocus,
+                           "an inactive or hidden owner is never promoted by a refocus check")
+        }
 
-        picker.hide()
-        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
-        XCTAssertFalse(picker.isVisible, "a hidden picker is left hidden")
+        window.makeKey()
+        picker.cancelFromPanel()
+        XCTAssertFalse(picker.isVisible, "Escape dismisses the panel even after key returned to its owner")
+        XCTAssertFalse(picker.isAttachedToOwner)
     }
 
     // MARK: - The find bar: replacing
@@ -2987,13 +2995,10 @@ final class NotaTests: XCTestCase {
         XCTAssertFalse(Preferences(defaults: defaults).highlightsCurrentLine)
     }
 
-    /// The Editor page's "Highlight current line" row is a draft like every
-    /// other switch: nothing changes until Save, and Save reaches an
-    /// already-open window's text view at once.
-    @MainActor
     /// The band is one line, wherever the caret is — including the end of the
     /// document, where there is no glyph under it and the band used to fall
     /// back to the whole view, lighting every line at once.
+    @MainActor
     func testTheCursorlineBandAtTheEndOfTheDocumentIsOneLine() throws {
         func makeView(_ text: String) -> NotaTextView {
             let storage = NSTextStorage()
@@ -3037,7 +3042,11 @@ final class NotaTests: XCTestCase {
         XCTAssertEqual(blank.cursorLineBand.height, firstLine.height, accuracy: 0.5)
     }
 
-    func testSavingHighlightCurrentLineAppliesToTheOpenWindow() throws {
+    /// A switch is the plainest case of live apply: flipping "Highlight
+    /// current line" writes the preference and lights the band in the open
+    /// window, with nothing to press afterwards.
+    @MainActor
+    func testFlippingHighlightCurrentLineAppliesWithNoSave() throws {
         _ = NSApplication.shared
         let original = Preferences.shared.highlightsCurrentLine
         defer { Preferences.shared.highlightsCurrentLine = original }
@@ -3056,22 +3065,16 @@ final class NotaTests: XCTestCase {
             controller.rows(on: 2).first { $0.title == "Highlight current line" }?.control
                 as? NSSwitch
         )
-        let root = try XCTUnwrap(controller.window?.contentView)
-        func allViews(in view: NSView) -> [NSView] {
-            [view] + view.subviews.flatMap(allViews)
-        }
-        let save = try XCTUnwrap(
-            allViews(in: root).compactMap { $0 as? NSButton }.first { $0.title == "Save" }
-        )
-
         toggle.state = .on
         _ = NSApp.sendAction(try XCTUnwrap(toggle.action), to: toggle.target, from: toggle)
-        XCTAssertTrue(save.isEnabled)
-        XCTAssertFalse(editor.showsCursorLine, "nothing is written until Save")
-
-        save.performClick(nil)
-        XCTAssertTrue(Preferences.shared.highlightsCurrentLine)
+        XCTAssertTrue(Preferences.shared.highlightsCurrentLine, "written on the flip itself")
         XCTAssertTrue(editor.showsCursorLine, "vim is off, so this is the preference alone")
+
+        // And off again the same way.
+        toggle.state = .off
+        _ = NSApp.sendAction(try XCTUnwrap(toggle.action), to: toggle.target, from: toggle)
+        XCTAssertFalse(Preferences.shared.highlightsCurrentLine)
+        XCTAssertFalse(editor.showsCursorLine)
     }
 
     @MainActor
@@ -3237,11 +3240,17 @@ final class NotaTests: XCTestCase {
         XCTAssertLessThan(bar.newTabButtonFrameForTesting.maxX, bar.bounds.maxX,
                           "a half-empty strip does not park the + at the edge")
 
-        // Twelve tabs at their floors (one at 60, eleven at 40, eleven gaps)
-        // plus the +, its gap, and the trailing controls — the bookmark
-        // button, the gear, their gaps and the reserve past them: exactly full.
-        let tabsAtTheirFloors: CGFloat = 60 + 11 * 40 + 11 * 4
-        let plusAndGap: CGFloat = 24 + 4
+        // Twelve tabs at their floors (the selected one at `minActiveWidth`,
+        // eleven at `minInactiveWidth`, eleven gaps) plus the +, its gap, and
+        // the trailing controls — the bookmark button, the gear, their gaps
+        // and the reserve past them: exactly full. Asked of the layout rather
+        // than written out, since the floors move with the icon: the badge
+        // art is 24pt wide where a square 16 used to be, which took the
+        // inactive floor from 40 to 44 (2026-09-07).
+        let tabsAtTheirFloors = TabStripLayout.minActiveWidth
+            + 11 * TabStripLayout.minInactiveWidth
+            + 11 * TabStripLayout.spacing
+        let plusAndGap = TabStripLayout.plusSize + TabStripLayout.plusGap
         bar.frame.size.width = tabsAtTheirFloors + plusAndGap + TabStripLayout.trailingControls
         bar.setItems(
             (0..<12).map { TabBarItem(title: "Note \($0)", isDirty: false) },

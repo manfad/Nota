@@ -56,7 +56,8 @@ can query; nothing is written back.
 ```sh
 ./build.sh      # assembles and ad-hoc signs Nota.app
 open Nota.app
-swift test
+swift test             # safe, non-desktop test coverage
+NOTA_RUN_APPKIT_TESTS=1 swift test  # opt-in window/panel/WebKit coverage
 ```
 
 `NOTA_SUPPORT_DIR=/tmp/nota-test ./Nota.app/Contents/MacOS/Nota` runs against a

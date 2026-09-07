@@ -7,7 +7,7 @@ import AppKit
 /// There is a single `NSTextView`; switching tabs swaps that note's
 /// `NSTextStorage` and `UndoManager` into it, which is what keeps undo from
 /// bleeding between tabs.
-final class MainWindowController: NSWindowController {
+final class MainWindowController: NSWindowController, NSUserInterfaceValidations {
 
     private enum Layout {
         static let trafficLightInset: CGFloat = 82
@@ -131,6 +131,12 @@ final class MainWindowController: NSWindowController {
     /// Keep mine. It stands in the editor column's bottom-trailing corner, so
     /// it never has to argue with ⌘F and ⌘J for the other one.
     private let externalChangePill = ExternalChangePill()
+    /// "Looks like JSON" — the offer a tab with no preview makes when its
+    /// text turns out to read as something. The same corner as the reload
+    /// offer, and never up at the same time as it.
+    private let formatOfferPill = FormatOfferPill()
+    /// The look that is waiting for the typing to stop, if one is.
+    private var formatOfferWorkItem: DispatchWorkItem?
     /// Fired once a watched file's change has been dealt with — reloaded, or
     /// marked and offered. The tests wait on it; nothing in the app sets it.
     var onExternalChangeForTesting: (() -> Void)?
@@ -273,8 +279,14 @@ final class MainWindowController: NSWindowController {
     /// which has no encoding or line endings to speak of.
     private let formatEncodingLabel = FooterMenuLabel()
     private let formatLineEndingLabel = FooterMenuLabel()
+    /// What the tab is read as — `MD`, `JSON`, `Plain` — ahead of
+    /// the encoding, so the row reads format · encoding · line ending ·
+    /// cursor: what the text *is*, then how it is written down, then where
+    /// the caret is in it. Its menu is the one place an untitled note or a
+    /// `.txt` ever gets a preview.
+    private let formatKindLabel = FooterMenuLabel()
     private lazy var footerTrailingStack = NSStackView(
-        views: [formatEncodingLabel, formatLineEndingLabel, cursorLabel]
+        views: [formatKindLabel, formatEncodingLabel, formatLineEndingLabel, cursorLabel]
     )
     private var countsLeadingToVim: NSLayoutConstraint?
     private var countsLeadingToEdge: NSLayoutConstraint?
@@ -559,11 +571,21 @@ final class MainWindowController: NSWindowController {
         cursorLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         cursorLabel.textColor = .secondaryLabelColor
 
-        for label in [formatEncodingLabel, formatLineEndingLabel] {
+        for label in [formatKindLabel, formatEncodingLabel, formatLineEndingLabel] {
             label.translatesAutoresizingMaskIntoConstraints = false
             label.font = .systemFont(ofSize: 11, weight: .medium)
             label.textColor = .secondaryLabelColor
         }
+        // The footer's regions are what a narrow window is measured against:
+        // four badges at their full width would put a floor under the window
+        // itself, and the window's floor is the columns' business, not the
+        // status bar's. So this one — the newest of the four, and the one
+        // whose word can be guessed from the tab's own name — is the one that
+        // gives way, clipped by a narrow window rather than widening it.
+        formatKindLabel.setContentCompressionResistancePriority(
+            .defaultLow, for: .horizontal
+        )
+        formatKindLabel.onClick = { [weak self] in self?.showFormatKindMenu() }
         formatEncodingLabel.onClick = { [weak self] in self?.showEncodingMenu() }
         formatLineEndingLabel.onClick = { [weak self] in self?.showLineEndingMenu() }
         footerTrailingStack.translatesAutoresizingMaskIntoConstraints = false
@@ -706,6 +728,7 @@ final class MainWindowController: NSWindowController {
         installModeOverlay(editorModeOverlay, over: content)
         installFindBar(over: content)
         installExternalChangePill(over: content)
+        installFormatOfferPill(over: content)
         applyEditorInsets()
     }
 
@@ -753,6 +776,37 @@ final class MainWindowController: NSWindowController {
         )
     }
 
+    // MARK: - The find the window falls back on
+
+    /// ⌘F when nothing in the column being read wants it.
+    ///
+    /// Find…, Find Next, Find Previous and Use Selection for Find are
+    /// nil-targeted `performTextFinderAction:` items, so they walk the
+    /// responder chain from whatever has the keyboard. In split that may be a
+    /// preview column's own view — a tree's outline, a dump's grid — which
+    /// answers for the selector because it has to answer for it in reading
+    /// mode, and there the find is the *editor's*: the column is a way into
+    /// the text beside it, not a second place to search.
+    ///
+    /// Those views hand the item on rather than swallow it, and this is where
+    /// it lands: the window controller sits in the chain after the window, so
+    /// one fallback here serves every column. Without it the item is enabled
+    /// by nobody and ⌘F is greyed out the moment a reader clicks a row.
+    override func performTextFinderAction(_ sender: Any?) {
+        guard let item = sender as? NSValidatedUserInterfaceItem,
+              let action = NSTextFinder.Action(rawValue: item.tag)
+        else { return }
+        findSession.perform(action)
+    }
+
+    /// And the same for whether the item is enabled at all. Everything but
+    /// the Find menu's own items is left to whoever else answers for it.
+    func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard item.action == #selector(performTextFinderAction(_:)) else { return true }
+        guard let action = NSTextFinder.Action(rawValue: item.tag) else { return false }
+        return TextFindSession.handles(action)
+    }
+
     /// The reload offer, in the editor column's other corner. Its bottom is
     /// measured from the scroll view rather than the column, so it rides with
     /// the text the way the find bar does.
@@ -770,6 +824,169 @@ final class MainWindowController: NSWindowController {
             gap: ModeControlOverlay.controlInset,
             trailingInset: ModeControlOverlay.controlInset
         )
+    }
+
+    /// The format offer, in the same corner as the reload offer — the two are
+    /// both Nota speaking up rather than a tool the reader opened, and only
+    /// one of them ever speaks at a time: the file having changed under the
+    /// tab is the louder news, so the offer stands down while it is up.
+    private func installFormatOfferPill(over container: NSView) {
+        formatOfferPill.onAccept = { [weak self] in
+            guard let self, let kind = formatOfferPill.offeredKind else { return }
+            setFormat(.preview(kind))
+            focusEditor()
+        }
+        formatOfferPill.onDismiss = { [weak self] in
+            guard let self else { return }
+            // Remembered against the reading it declined: the same guess is
+            // never put twice, and only text that reads as something else
+            // brings the pill back.
+            currentNote?.declinedFormatKind = formatOfferPill.offeredKind
+            cancelFormatOffer()
+            focusEditor()
+        }
+        formatOfferPill.floatBottom(
+            in: container, above: scrollView.bottomAnchor,
+            gap: ModeControlOverlay.controlInset,
+            trailingInset: ModeControlOverlay.controlInset
+        )
+    }
+
+    // MARK: - The format offer
+
+    /// How long after the last keystroke the text is looked at. Typing is not
+    /// a moment to be interrupted, and a paste — which is the case this is
+    /// really for — does not wait at all.
+    var formatOfferDelay: TimeInterval = 1.5
+
+    /// The offer, for the tests to read and press.
+    var formatOffer: FormatOfferPill { formatOfferPill }
+
+    /// What puts the paste's question to the reader. `nil` — which is every
+    /// running window — builds the real sheet; the tests set it and answer
+    /// by hand, since a sheet in a test is a run that never comes back.
+    var formatAlertPresenter: ((RenderedPreviewKind, @escaping (Bool) -> Void) -> Void)?
+
+    /// Whether a question is standing on this window. One at a time: while
+    /// it is up neither a second paste nor a pause in the typing asks again.
+    private var formatAlertIsUp = false
+
+    /// Takes the offer down and forgets any look that was on its way. Called
+    /// wherever the answer would be stale: a tab switch, a format picked in
+    /// the footer, a file changed on disk.
+    func cancelFormatOffer() {
+        formatOfferWorkItem?.cancel()
+        formatOfferWorkItem = nil
+        formatOfferPill.setShown(false)
+    }
+
+    /// A keystroke. The look costs a walk over the text, so it waits for the
+    /// pause after the typing the way the cache write and the render do.
+    private func scheduleFormatOffer() {
+        formatOfferWorkItem?.cancel()
+        formatOfferWorkItem = nil
+        guard tabCanBeOfferedAFormat else { return }
+        let item = DispatchWorkItem { [weak self] in self?.runFormatDetection() }
+        formatOfferWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + formatOfferDelay, execute: item)
+    }
+
+    /// The look itself, without the wait — the pill's half of the offer, and
+    /// what the tests drive it through.
+    func runFormatDetection() {
+        formatOfferWorkItem?.cancel()
+        formatOfferWorkItem = nil
+        // A question is already standing on this tab; the sheet will answer
+        // for it, and a pill under a sheet would be asking twice.
+        guard !formatAlertIsUp, let kind = detectedFormatToOffer() else {
+            return formatOfferPill.setShown(false)
+        }
+        formatOfferPill.offer(kind)
+        formatOfferPill.setShown(true)
+    }
+
+    /// A note that arrived whole — pasted, or let go in the text. Nothing
+    /// waits, and nothing is interrupted either: the typing this would have
+    /// stopped is not happening, so this half of the offer is a real sheet
+    /// with a default button rather than a pill in the corner.
+    func offerFormatAfterBulkInsert() {
+        // One question at a time. A second paste while the sheet is up is
+        // the same tab asking again, and the sheet already answers for it.
+        guard !formatAlertIsUp, let kind = detectedFormatToOffer() else { return }
+        // The corner is not asked twice either: a pill that was up for this
+        // tab goes as the sheet comes down over it.
+        cancelFormatOffer()
+        presentFormatOffer(kind)
+    }
+
+    /// What the text reads as, or `nil` for every reason there is not to ask
+    /// — the tab is not one that gets offered anything, the note is too big
+    /// to walk, it is too short to be anything, or its reading is the one
+    /// this tab has already turned down.
+    private func detectedFormatToOffer() -> RenderedPreviewKind? {
+        guard tabCanBeOfferedAFormat, let note = currentNote else { return nil }
+        // A big note is not read at all: the detector parses the whole text,
+        // and a megabyte of it on every pause in the typing is the kind of
+        // work the rest of the editor already declines past this line.
+        guard !BigFile.isBig(length: note.storage.length) else { return nil }
+        let text = note.storage.string
+        // Cheap first: most notes are too short to be anything, and that is
+        // answered without looking at a single character of them.
+        guard text.count >= FormatDetector.minimumCharacters
+                || text.split(whereSeparator: \.isNewline).count >= FormatDetector.minimumLines
+        else { return nil }
+        guard let kind = FormatDetector.detect(text), kind != note.declinedFormatKind else {
+            return nil
+        }
+        return kind
+    }
+
+    /// Puts the question up and holds the tab it was asked about, so the
+    /// answer lands where it was asked even though a window-modal sheet
+    /// means nothing else can have moved meanwhile.
+    private func presentFormatOffer(_ kind: RenderedPreviewKind) {
+        guard let note = currentNote, let window else { return }
+        formatAlertIsUp = true
+        let answer: (Bool) -> Void = { [weak self, weak note] accepted in
+            guard let self else { return }
+            formatAlertIsUp = false
+            if accepted {
+                guard currentNote === note else { return }
+                setFormat(.preview(kind))
+            } else {
+                // Remembered against the reading it declined, exactly as the
+                // pill's "Not now" is: neither half of the offer puts the
+                // same guess to this tab twice.
+                note?.declinedFormatKind = kind
+            }
+            focusEditor()
+        }
+        if let formatAlertPresenter {
+            formatAlertPresenter(kind, answer)
+            return
+        }
+        FormatOfferAlert.make(for: kind).beginSheetModal(for: window) { response in
+            answer(response == .alertFirstButtonReturn)
+        }
+    }
+
+    /// Whether there is anything to offer this tab at all: an untitled text
+    /// note, with no preview of its own and no word from the reader about
+    /// what it is.
+    ///
+    /// A file is never offered anything, not even a `.txt`. A file has a
+    /// name, and a name is its author saying what it is — a `.txt` full of
+    /// JSON is somebody's `.txt`, and Nota has no business second-guessing it
+    /// every time they type. The badge in the footer is still there for them,
+    /// and one click does it. What the offer is for is the case with nobody's
+    /// word on it at all: a fresh tab with something pasted into it.
+    ///
+    /// Nor while the file itself is speaking — the reload offer has that
+    /// corner, and a tab that has no file cannot be in that case anyway.
+    private var tabCanBeOfferedAFormat: Bool {
+        guard let note = currentNote, note.kind == .text, note.fileURL == nil else { return false }
+        guard note.formatOverride == nil, note.previewKind == nil else { return false }
+        return !externalChangePill.isShown
     }
 
     /// ⌘J. Only where there is an editor on screen to jump about in, and only
@@ -1090,6 +1307,10 @@ final class MainWindowController: NSWindowController {
         textView.onOpenFiles = { [weak self] urls in
             for url in urls { self?.open(url: url) }
         }
+        // A note that arrived whole — pasted, or let go in the text — is not
+        // typing that might carry on, so its reading is put to the reader on
+        // the spot, and as a sheet rather than the corner's pill.
+        textView.onBulkInsert = { [weak self] in self?.offerFormatAfterBulkInsert() }
         // The line keys read the front note's own line table, comment by the
         // front note's extension, and stand aside wherever vim has the keys.
         textView.lineIndexProvider = { [weak self] in self?.currentNote?.lineIndex }
@@ -1329,12 +1550,13 @@ final class MainWindowController: NSWindowController {
         scheduleSave()
     }
 
-    /// Settings › Appearance › Window: the tab strip, the traffic lights and
-    /// the strip's two trailing buttons can each be switched off. The strip
-    /// and the lights share their mechanism with zen mode, which takes both
-    /// for as long as it is on; the buttons are the layout's business.
+    /// Settings › Tab bar: the tab strip, the traffic lights and the strip's
+    /// three trailing buttons can each be switched off. The strip and the
+    /// lights share their mechanism with zen mode, which takes both for as
+    /// long as it is on; the buttons are the layout's business.
     private func applyWindowChrome() {
         let controls = TabStripLayout.TrailingControls(
+            bookmarkToggle: !preferences.hidesBookmarkToggleButton,
             bookmark: !preferences.hidesBookmarkButton,
             settings: !preferences.hidesSettingsButton
         )
@@ -1621,6 +1843,14 @@ final class MainWindowController: NSWindowController {
         // here: the pane asks the file whether the table is still there.
         note.sqlTable = tab.sqlTable
         note.sqlQuery = tab.sqlQuery
+        // What the reader told the footer this tab is. A spelling this
+        // version does not know is simply not an override, and the tab comes
+        // back going by its name.
+        note.formatOverride = tab.formatOverride.flatMap(NoteFormat.init(canonicalExtension:))
+        // And whether it came back owing a name. Only where the override
+        // itself came back: a spelling this version does not know is not an
+        // override, and a tab going by its name owes nothing.
+        note.needsSaveAs = tab.needsSaveAs == true && note.formatOverride != nil
         return note
     }
 
@@ -1699,8 +1929,12 @@ final class MainWindowController: NSWindowController {
         // line number belonged to that note's table just as much.
         findSession.close()
         goToLineSession.hide(restoring: false)
-        // The offer belongs to the tab being left, not to the corner.
+        // The offer belongs to the tab being left, not to the corner. Both
+        // offers: the file's news, and Nota's reading of the text.
         externalChangePill.setShown(false, animated: false)
+        formatOfferWorkItem?.cancel()
+        formatOfferWorkItem = nil
+        formatOfferPill.setShown(false, animated: false)
         textView.breakUndoCoalescing()
         // Whatever is selected belongs to the tab being left — a ⌘F match,
         // say — and it is a range into storage that is about to be swapped
@@ -1750,6 +1984,10 @@ final class MainWindowController: NSWindowController {
         // A tab coming to the front is a tab getting focus: if it was marked
         // while it was behind, this is when it says so.
         showExternalChangeOfferIfOwed()
+        // And the reading of the tab you have landed on, asked afresh — the
+        // offer is per tab, so the one that was up belonged to the tab you
+        // left and this one gets its own answer.
+        runFormatDetection()
     }
 
     /// Also re-asks whether the tab in front is Markdown: ⌘S is where an
@@ -1759,11 +1997,20 @@ final class MainWindowController: NSWindowController {
             notes.map {
                 TabBarItem(title: $0.title, isDirty: $0.isDirty,
                            hasExternalChange: $0.isDirty && $0.hasExternalChange,
-                           symbolName: FileKindIcon.symbolName(for: $0.fileURL),
+                           symbolName: $0.iconSymbolName,
                            isBookmarked: $0.fileURL.map(bookmarks.contains) ?? false,
                            hasFile: $0.fileURL != nil)
             },
             selectedIndex: selectedIndex
+        )
+        // The strip's own Bookmark button is about the tab in front, not
+        // about any one row, so it is told separately — and told here, which
+        // is the one place a tab switch, a save, a rename and another
+        // window's bookmark all come through.
+        // Any tab, an untitled note included: the button is ⌘D by another
+        // door, and ⌘D on a note with no file asks for a name first.
+        tabBar.setFrontTabBookmark(
+            canBookmark: canBookmarkCurrentTab, isBookmarked: currentTabIsBookmarked
         )
         updateModeControlOverlays()
     }
@@ -1817,12 +2064,97 @@ final class MainWindowController: NSWindowController {
     /// write. Empty for a PDF or a picture, which has no such thing.
     private func updateFormatLabel() {
         guard let note = currentNote, note.kind == .text else {
+            formatKindLabel.stringValue = ""
             formatEncodingLabel.stringValue = ""
             formatLineEndingLabel.stringValue = ""
             return
         }
+        formatKindLabel.stringValue = L10n.text(note.effectiveFormat.displayName)
         formatEncodingLabel.stringValue = TextFileFormat.displayName(for: note.format.encoding)
         formatLineEndingLabel.stringValue = note.format.lineEnding.displayName
+    }
+
+    // MARK: - The format badge
+
+    private func showFormatKindMenu() {
+        guard let menu = formatKindMenu() else { return }
+        popUpFooterMenu(menu, over: formatKindLabel)
+    }
+
+    /// What clicking the format half offers: every format Nota can put in the
+    /// preview column, in `NoteFormat.all`'s order, the tab's own ticked.
+    /// `nil` off a PDF, a picture, or no note at all — a viewer is not read
+    /// as anything, it *is* something. Exposed (not private) so tests can
+    /// inspect it without going through a real click.
+    func formatKindMenu() -> NSMenu? {
+        guard let note = currentNote, note.kind == .text else { return nil }
+        let menu = NSMenu()
+        let current = note.effectiveFormat
+        for format in NoteFormat.all {
+            let item = NSMenuItem(
+                title: L10n.text(format.displayName),
+                action: #selector(chooseFormatKind(_:)), keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = format.canonicalExtension
+            item.state = format == current ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func chooseFormatKind(_ sender: NSMenuItem) {
+        guard let spelling = sender.representedObject as? String,
+              let format = NoteFormat(canonicalExtension: spelling)
+        else { return }
+        setFormat(format)
+    }
+
+    /// The one way the format a tab is read as ever changes: the badge's
+    /// menu, and the offer pill, both come through here.
+    ///
+    /// Picking what the file name already says puts the override *down*
+    /// rather than writing it: the name is saying it, so there is nothing for
+    /// the tab to remember, and a later Save As is free to change what the
+    /// tab is again.
+    func setFormat(_ format: NoteFormat) {
+        guard let note = currentNote, note.kind == .text else { return }
+        let previousOverride = note.formatOverride
+        note.formatOverride = format == NoteFormat.ofFile(note.fileURL) ? nil : format
+        // A file the reader has said is something its name does not say is a
+        // file that wants a new name. The tab goes dirty the way an edit
+        // makes it dirty — the strip's dot, the close confirmation and the
+        // session record all follow from the one flag — and the next ⌘S
+        // opens the panel with this format already picked in the combo.
+        //
+        // Picking the name's own format again puts that need down. It does
+        // not put the dirty mark down: dirty is one flag for the whole tab,
+        // and there may be an edit under it that this had nothing to do with.
+        if note.fileURL != nil, note.formatOverride != previousOverride {
+            note.needsSaveAs = note.formatOverride != nil
+            if note.needsSaveAs { note.isDirty = true }
+        }
+        // The reader has said what this is. Whatever the detector was about
+        // to say, or has just said, is answered.
+        note.declinedFormatKind = nil
+        cancelFormatOffer()
+        applyFormatChange(for: note)
+    }
+
+    /// Everything that follows from a tab being a different format than it
+    /// was a moment ago — the same path a Save As under a new name takes,
+    /// since that is the other way a tab changes what it renders as.
+    private func applyFormatChange(for note: Note) {
+        // A tab that no longer has a preview cannot be in one of the two
+        // modes that show one.
+        if !note.supportsRenderedPreview { note.previewMode = .off }
+        refreshTabs()
+        applyPreviewMode()
+        updateModeControlOverlays()
+        refreshPreviewContent()
+        updatePreviewModeControl()
+        updateStatus()
+        flushAll()
     }
 
     // MARK: - Encoding and line endings
@@ -2159,9 +2491,10 @@ final class MainWindowController: NSWindowController {
     /// over a PDF or a picture.
     var footerRegions: (badge: NSView, pendingKeys: NSTextField,
                         counts: NSTextField, cursor: NSTextField,
-                        encoding: NSTextField, lineEnding: NSTextField) {
+                        encoding: NSTextField, lineEnding: NSTextField,
+                        format: NSTextField) {
         (modeBadge, pendingKeysLabel, statusLabel, cursorLabel,
-         formatEncodingLabel, formatLineEndingLabel)
+         formatEncodingLabel, formatLineEndingLabel, formatKindLabel)
     }
 
     /// The badge and pending keys belong to vim mode. Every other region can
@@ -2181,10 +2514,12 @@ final class MainWindowController: NSWindowController {
         pendingKeysLabel.isHidden =
             hidesStatusBar || !isVim || footerStandIn != nil || pendingKeysLabel.stringValue.isEmpty
         cursorLabel.isHidden = hidesStatusBar || !preferences.footerShowsCursorPosition
+        formatKindLabel.isHidden = hidesStatusBar || !preferences.footerShowsFormat
         formatEncodingLabel.isHidden = hidesStatusBar || !preferences.footerShowsEncoding
         formatLineEndingLabel.isHidden = hidesStatusBar || !preferences.footerShowsLineEndings
         footerTrailingStack.isHidden = hidesStatusBar || (
             !preferences.footerShowsCursorPosition
+                && !preferences.footerShowsFormat
                 && !preferences.footerShowsEncoding
                 && !preferences.footerShowsLineEndings
         )
@@ -2380,6 +2715,13 @@ final class MainWindowController: NSWindowController {
         }
 
         let wasSelected = index == selectedIndex
+        // A blank untitled tab — no file, nothing typed — is what a window
+        // holds when it holds nothing. Closing one that is the only tab is
+        // the reader closing the window; closing anything else that is the
+        // only tab leaves a blank one behind, so ⌘W held down walks the
+        // tabs out one at a time and stops at an empty window, and one more
+        // ⌘W is what closes that (decided 2026-09-07).
+        let wasBlank = note.fileURL == nil && note.storage.length == 0
         note.stopWatching()
         store.deleteText(for: note.id)
         notes.remove(at: index)
@@ -2406,11 +2748,12 @@ final class MainWindowController: NSWindowController {
         refreshImages(force: true)
         flush()
 
-        // The only tab just closed: the window goes the way closing the
-        // window goes — the title-bar close button's own path, so the
-        // registry's decision (hide the last window, close any other for
-        // real) and the session write happen exactly as they do there.
-        if closedTheOnlyTab {
+        // The only tab just closed, and it was already blank: the window
+        // goes the way closing the window goes — the title-bar close
+        // button's own path, so the registry's decision (hide the last
+        // window, close any other for real) and the session write happen
+        // exactly as they do there.
+        if closedTheOnlyTab && wasBlank {
             window?.performClose(nil)
         }
     }
@@ -2450,7 +2793,10 @@ final class MainWindowController: NSWindowController {
     func save(note: Note, forcePanel: Bool) -> Bool {
         guard note.kind == .text else { return false }
         var destination = note.fileURL
-        if destination == nil || forcePanel {
+        // A tab owing a name asks for one: ⌘S on a `.txt` the reader has
+        // called Markdown is the Save As flow, with `md` offered in the
+        // combo and every other extension still there to pick instead.
+        if destination == nil || forcePanel || note.needsSaveAs {
             guard let chosen = runSavePanel(for: note) else { return false }
             destination = chosen
         }
@@ -2491,6 +2837,16 @@ final class MainWindowController: NSWindowController {
         note.sidecarBaseDirectory = destination.deletingLastPathComponent()
         note.format = encoded.format
         note.fileURL = destination
+        // The name says it now. A note the footer was reading as JSON, saved
+        // as `.json`, has nothing left to override — the extension is the
+        // authority again, and a later Save As is free to change what the tab
+        // is. One saved as `.txt` while the reader asked for JSON keeps its
+        // word: they said what it is, and a file name did not unsay it.
+        if note.formatOverride == NoteFormat.ofFile(destination) { note.formatOverride = nil }
+        // The name has been asked about and answered, whichever way it went:
+        // saved as `.txt` on purpose, the override stands and the next ⌘S
+        // writes over this file rather than asking again.
+        note.needsSaveAs = false
         note.isDirty = false
         // The file is now exactly what the tab holds, whoever else had
         // written it: the offer and its ring go, and the stamp Nota has just
@@ -2508,6 +2864,9 @@ final class MainWindowController: NSWindowController {
         if note === currentNote {
             applyPreviewMode()
             updateModeControlOverlays()
+            // And the badge saying what the tab is read as: the name it has
+            // just been given may be the whole answer now.
+            updateStatus()
             textView.isContinuousSpellCheckingEnabled =
                 SpellCheckPolicy.shouldCheck(url: note.fileURL, length: note.storage.length)
         }
@@ -2518,6 +2877,21 @@ final class MainWindowController: NSWindowController {
     private func runSavePanel(for note: Note) -> URL? {
         if let savePanelProvider { return savePanelProvider(note) }
         return presentSavePanel(for: note)
+    }
+
+    /// What the panel's Format combo opens on.
+    ///
+    /// The badge goes first: a tab the footer is showing as JSON opens on
+    /// `json`, whether it is a new note or a `.txt` the reader has just said
+    /// that about — the choice is made and there is no second decision, and
+    /// every other extension is still one click away in the same combo.
+    /// Failing that a named file keeps its own extension, and a note with no
+    /// format of its own offers whatever was chosen last.
+    private func suggestedSaveExtension(for note: Note) -> String {
+        if let chosen = note.formatOverride?.canonicalExtension { return chosen }
+        let suggested = SuggestedName.panelName(for: note.fileURL, text: note.countableText)
+        return SaveNameComposer.split(name: suggested).extension
+            ?? preferences.lastSaveExtension
     }
 
     private func presentSavePanel(for note: Note) -> URL? {
@@ -2533,15 +2907,13 @@ final class MainWindowController: NSWindowController {
         panel.isExtensionHidden = false
 
         let suggested = SuggestedName.panelName(for: note.fileURL, text: note.countableText)
-        let (base, ownExtension) = SaveNameComposer.split(name: suggested)
+        let (base, _) = SaveNameComposer.split(name: suggested)
         panel.nameFieldStringValue = base
 
         let extensionCombo = NSComboBox()
         extensionCombo.addItems(withObjectValues: SaveNameComposer.knownExtensions())
         extensionCombo.completes = false
-        // A named file keeps its own extension preselected; a new note
-        // offers whatever was chosen last.
-        extensionCombo.stringValue = ownExtension ?? preferences.lastSaveExtension
+        extensionCombo.stringValue = suggestedSaveExtension(for: note)
         panel.accessoryView = Self.saveFormatAccessory(combo: extensionCombo)
 
         // The panel would otherwise check its own name field — the bare
@@ -2919,6 +3291,9 @@ final class MainWindowController: NSWindowController {
         guard let note = currentNote, note.kind == .text,
               note.isDirty, note.externalChangeOffer
         else { return }
+        // The file speaking up is the louder news, and both offers stand in
+        // the same corner: Nota's reading of the text can wait.
+        cancelFormatOffer()
         externalChangePill.setShown(true)
     }
 
@@ -3702,6 +4077,11 @@ extension MainWindowController {
 
     /// The ⇧⌘J panel itself, for the tests to type at.
     var tabPickerPanel: TabPickerPanel { tabPicker }
+    /// The strip's Bookmark button as it stands: its symbol, whether it can
+    /// be pressed, and its tip.
+    var stripBookmarkButtonForTesting: (symbol: String?, isEnabled: Bool, toolTip: String?) {
+        tabBar.bookmarkToggleStateForTesting
+    }
 
     /// ⇧⌘J.
     func showTabPicker() {
@@ -3709,7 +4089,8 @@ extension MainWindowController {
         showWindow(nil)
         tabPicker.show(
             titles: notes.map(\.title),
-            symbolNames: notes.map { FileKindIcon.symbolName(for: $0.fileURL) },
+            symbolNames: notes.map { $0.iconSymbolName },
+            bookmarkedTabs: bookmarkedTabs,
             selectedIndex: selectedIndex,
             bookmarks: unopenedBookmarks,
             missingBookmarks: Set(bookmarks.missingPaths),
@@ -3733,6 +4114,16 @@ extension MainWindowController {
             ),
             over: window
         )
+    }
+
+    /// Which open tabs are bookmarked, in tab order: what the picker draws
+    /// each row's kind icon filled by. An untitled tab has no file and so is
+    /// never one.
+    var bookmarkedTabs: [Bool] {
+        notes.map { note in
+            guard let url = note.fileURL else { return false }
+            return bookmarks.contains(url)
+        }
     }
 
     /// What ⇧⌘J offers under the open tabs: the bookmarks this window does
@@ -3787,6 +4178,18 @@ extension MainWindowController: TabPickerPanelDelegate {
     /// The bookmarks panel's top row: exactly what ⌘D does, Save As for an
     /// untitled note included.
     func tabPickerDidRequestBookmarkCurrentTab(_ picker: TabPickerPanel) {
+        // A note with no file is asked for a name first, and that is a modal
+        // panel. Run from inside the picker's own click — a table's action,
+        // sent while its mouse tracking is still going, in a non-activating
+        // panel that has just ordered itself out — the panel never came up
+        // and the row stayed lit as if nothing had been pressed. The next
+        // turn of the run loop is after all of that has settled. (Scheduled
+        // on the run loop rather than the main queue: a nested run — a
+        // test's, a modal's — turns run-loop blocks and leaves queued ones.)
+        guard currentTabHasFile else {
+            RunLoop.main.perform { [weak self] in self?.toggleBookmarkForCurrentTab() }
+            return
+        }
         toggleBookmarkForCurrentTab()
     }
 
@@ -3846,11 +4249,19 @@ extension MainWindowController {
     /// Whether the render is one of the two modes that show it.
     var showsMarkdownPreview: Bool { previewMode != .off }
 
-    /// ⌘P. Editor → split → reading → editor. The mode belongs to the tab,
-    /// not to the app: a Markdown note keeps it — across relaunches, through
-    /// the session — while the next ⌘T opens in the editor.
+    /// ⌘P. Editor → split → reading → split → editor: split is the middle,
+    /// and from it the key moves on from wherever the tab came, so one press
+    /// undoes the last and the render never jumps from full to gone. The
+    /// mode belongs to the tab, not to the app: a Markdown note keeps it —
+    /// across relaunches, through the session — while the next ⌘T opens in
+    /// the editor.
     func toggleMarkdownPreview() {
-        setPreviewMode(previewMode.next)
+        switch previewMode {
+        case .off, .reading:
+            setPreviewMode(.split)
+        case .split:
+            setPreviewMode(currentNote?.modeBeforeSplit == .reading ? .off : .reading)
+        }
     }
 
     /// ⇧⌘P. Straight to the render, and straight back out of it.
@@ -3863,6 +4274,7 @@ extension MainWindowController {
     /// through here.
     func setPreviewMode(_ mode: PreviewMode) {
         guard let note = currentNote, note.supportsRenderedPreview else { return }
+        if mode == .split, note.previewMode != .split { note.modeBeforeSplit = note.previewMode }
         note.previewMode = mode
         applyPreviewMode(animated: true)
         refreshPreviewContent()
@@ -4174,6 +4586,20 @@ extension MainWindowController {
     /// `currentTabScroll` is: a session field a test has no other way to see.
     var currentTabDatabase: (table: String?, query: String?) {
         (currentNote?.sqlTable, currentNote?.sqlQuery)
+    }
+
+    /// What the front tab is read as, and whether that is the reader's own
+    /// word or the file name's — the two halves of the footer's format badge,
+    /// for the tests.
+    var currentTabFormat: (effective: NoteFormat, override: NoteFormat?, needsSaveAs: Bool) {
+        (currentNote?.effectiveFormat ?? .plainText, currentNote?.formatOverride,
+         currentNote?.needsSaveAs ?? false)
+    }
+
+    /// What the panel's Format combo would open on for the front tab — for
+    /// the tests, which never put a real panel up.
+    var currentSaveExtension: String {
+        currentNote.map(suggestedSaveExtension(for:)) ?? preferences.lastSaveExtension
     }
 
     var currentTabState: (kind: NoteKind, isDirty: Bool, selection: Int) {
@@ -4866,7 +5292,8 @@ extension MainWindowController {
         showWindow(nil)
         tabPicker.showSearch(
             notes: notes.map(\.searchSource),
-            symbolNames: notes.map { FileKindIcon.symbolName(for: $0.fileURL) },
+            symbolNames: notes.map { $0.iconSymbolName },
+            bookmarkedTabs: bookmarkedTabs,
             over: window
         )
     }
@@ -5034,6 +5461,10 @@ extension MainWindowController: TabBarViewDelegate {
         moveTab(from: index, to: newIndex)
     }
 
+    func tabBarDidToggleFrontTabBookmark(_ bar: TabBarView) {
+        toggleBookmarkForCurrentTab()
+    }
+
     func tabBarDidRequestBookmarks(_ bar: TabBarView) {
         showBookmarksPicker()
     }
@@ -5173,6 +5604,8 @@ extension MainWindowController: NSTextViewDelegate {
             vimEngine.refreshSearchHighlights()
         }
         scheduleImageRefresh()
+        // And what the text now reads as, once the typing stops.
+        scheduleFormatOffer()
         // The blocks have moved under the pane; nothing is lit again until it
         // has been rendered afresh.
         previewColumn.content(for: note).invalidateBlocks()

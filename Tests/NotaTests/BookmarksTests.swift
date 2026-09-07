@@ -6,7 +6,7 @@ import XCTest
 /// Bookmarks (SPEC Todo 13): the list itself, the session key that carries it
 /// between launches, the badge on the tab, and the two picker lists that offer
 /// them back.
-final class BookmarksTests: XCTestCase {
+final class BookmarksTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {
@@ -112,7 +112,7 @@ final class BookmarksTests: XCTestCase {
     // MARK: - Bookmarking a tab
 
     @MainActor
-    func testBookmarkingTheFrontTabBadgesItInTheStripAndWritesTheSession() throws {
+    func testBookmarkingTheFrontTabFillsItsIconInTheStripAndWritesTheSession() throws {
         let directory = try makeTemporaryDirectory()
         let bench = try makeController(support: directory)
         let file = try makeFile(named: "notes.md", in: try makeTemporaryDirectory())
@@ -124,14 +124,14 @@ final class BookmarksTests: XCTestCase {
         bench.controller.toggleBookmarkForCurrentTab()
 
         XCTAssertTrue(bench.controller.currentTabIsBookmarked)
-        XCTAssertEqual(bench.controller.tabStrip.bookmarkBadgesForTesting, [false, true],
-                       "only the bookmarked tab wears the badge")
+        XCTAssertEqual(bench.controller.tabStrip.filledIconsForTesting, [false, true],
+                       "only the bookmarked tab draws its kind filled")
         XCTAssertEqual(bench.store.load()?.bookmarks.map(Bookmarks.name(of:)), ["notes.md"],
                        "the session file learned about it straight away")
 
         bench.controller.toggleBookmarkForCurrentTab()
         XCTAssertFalse(bench.controller.currentTabIsBookmarked)
-        XCTAssertEqual(bench.controller.tabStrip.bookmarkBadgesForTesting, [false, false])
+        XCTAssertEqual(bench.controller.tabStrip.filledIconsForTesting, [false, false])
         XCTAssertEqual(bench.store.load()?.bookmarks, [])
     }
 
@@ -152,7 +152,7 @@ final class BookmarksTests: XCTestCase {
         XCTAssertEqual(panelsShown, 1, "it did ask for a name")
         XCTAssertFalse(bench.controller.currentTabIsBookmarked)
         XCTAssertEqual(bench.controller.bookmarks.paths, [])
-        XCTAssertEqual(bench.controller.tabStrip.bookmarkBadgesForTesting, [false])
+        XCTAssertEqual(bench.controller.tabStrip.filledIconsForTesting, [false])
     }
 
     @MainActor
@@ -473,6 +473,38 @@ final class BookmarksTests: XCTestCase {
     // MARK: - Helpers
 
     @MainActor
+    // MARK: - An untitled note is asked for a name, from either door
+
+    /// The strip's Bookmark button and the dialog's top row are ⌘D by other
+    /// doors, and ⌘D on a note with no file opens the save panel first — so
+    /// neither is greyed on an untitled note, and both put the panel up.
+    func testTheStripButtonAndTheDialogRowAskAnUntitledNoteForANameLikeCommandD() throws {
+        let bench = try makeController(support: try makeTemporaryDirectory())
+        var panelsShown = 0
+        bench.controller.savePanelProvider = { _ in
+            panelsShown += 1
+            return nil
+        }
+        XCTAssertFalse(bench.controller.currentTabHasFile)
+        XCTAssertTrue(bench.controller.stripBookmarkButtonForTesting.isEnabled,
+                      "the strip's button is not greyed on an untitled note")
+
+        bench.controller.showBookmarksPicker()
+        let picker = bench.controller.tabPickerPanel
+        defer { picker.hide() }
+        XCTAssertTrue(picker.topRowIsEnabled, "and the dialog's row is live too")
+        picker.moveSelectionUp()
+        XCTAssertTrue(picker.isTopRowSelected)
+        picker.chooseSelection()
+        XCTAssertFalse(picker.isVisible, "the dialog goes before the panel comes")
+        // The panel is asked for on the next turn of the run loop, clear of
+        // the click that chose the row.
+        XCTAssertEqual(panelsShown, 0)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(panelsShown, 1, "the save panel is what ⌘D would have put up")
+        XCTAssertFalse(bench.controller.currentTabIsBookmarked, "cancelled, so nothing is bookmarked")
+    }
+
     private func makeController(support: URL) throws
         -> (store: SessionStore, controller: MainWindowController, window: NSWindow) {
         _ = NSApplication.shared

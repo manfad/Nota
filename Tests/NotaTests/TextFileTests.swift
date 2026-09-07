@@ -5,7 +5,7 @@ import XCTest
 
 /// Opening and saving text of any kind: the encoding and line endings a file
 /// arrives in, the shape it goes back in, and what counts as text at all.
-final class TextFileTests: XCTestCase {
+final class TextFileTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {

@@ -5,7 +5,7 @@ import XCTest
 /// `- [ ]` and `- [x]` in the Markdown render: drawn as boxes rather than
 /// bullets, ticked with one press that rewrites one character of the note,
 /// and counted `3 / 7 done` in the footer.
-final class TaskListTests: XCTestCase {
+final class TaskListTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {

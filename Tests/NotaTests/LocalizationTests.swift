@@ -4,7 +4,7 @@ import XCTest
 
 /// The interface vocabulary: the tables are complete against each other, the
 /// Mac's own language picks the right one, and switching takes effect at once.
-final class LocalizationTests: XCTestCase {
+final class LocalizationTests: AppKitTestCase {
     /// Every table is keyed by the same English strings, so a call site that
     /// reads in one language reads in all of them.
     func testEveryTableCoversTheSameKeys() {
@@ -102,6 +102,34 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(AppLanguage.malay.rawValue, "malay")
     }
 
+    /// The footer's counts and a new tab's name speak the language: one
+    /// word for one and for many where the language has no plural, and
+    /// Malay keeps "Untitled" as its own word.
+    func testCountsAndUntitledSpeakTheLanguage() {
+        let original = Preferences.shared.language
+        defer { Preferences.shared.language = original }
+
+        Preferences.shared.language = .english
+        XCTAssertEqual(TextStats.counts("one two"), "2 words · 7 characters")
+        XCTAssertEqual(UntitledNaming.nextName(existing: ["Untitled"]), "Untitled 2")
+
+        Preferences.shared.language = .simplifiedChinese
+        XCTAssertEqual(TextStats.counts("one two"), "2 字 · 7 字符")
+        XCTAssertEqual(TextStats.counts("a"), "1 字 · 1 字符")
+        XCTAssertEqual(TextStats.phrase(.lines, 40), "40 行")
+        XCTAssertEqual(UntitledNaming.base, "无标题")
+        XCTAssertEqual(UntitledNaming.nextName(existing: ["无标题"]), "无标题 2")
+
+        Preferences.shared.language = .traditionalChinese
+        XCTAssertEqual(TextStats.counts("one two"), "2 字 · 7 字元")
+        XCTAssertEqual(TextStats.phrase(.images, 3), "3 圖片")
+        XCTAssertEqual(UntitledNaming.base, "未命名")
+
+        Preferences.shared.language = .malay
+        XCTAssertEqual(TextStats.counts("one two"), "2 perkataan · 7 aksara")
+        XCTAssertEqual(UntitledNaming.base, "Untitled")
+    }
+
     func testTextSwitchesTableWithTheSetting() {
         let original = Preferences.shared.language
         defer { Preferences.shared.language = original }
@@ -150,19 +178,14 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(popUp.itemTitles,
                        ["System Default", "English", "简体中文", "繁體中文", "Bahasa Melayu"])
 
-        let save = try XCTUnwrap(
-            allViews(in: root).compactMap { $0 as? NSButton }.first { $0.title == "Save" }
-        )
         popUp.selectItem(at: 3)
         _ = NSApp.sendAction(try XCTUnwrap(popUp.action), to: popUp.target, from: popUp)
-        save.performClick(nil)
         XCTAssertEqual(Preferences.shared.language, .traditionalChinese)
         XCTAssertEqual(controller.window?.title, "設定")
         XCTAssertEqual(controller.rows(on: 0).map(\.title), ["語言", "主題"])
 
         popUp.selectItem(at: 4)
         _ = NSApp.sendAction(try XCTUnwrap(popUp.action), to: popUp.target, from: popUp)
-        save.performClick(nil)
         XCTAssertEqual(Preferences.shared.language, .malay)
         XCTAssertEqual(controller.window?.title, "Tetapan")
         XCTAssertEqual(controller.rows(on: 0).map(\.title), ["Bahasa", "Tema"])

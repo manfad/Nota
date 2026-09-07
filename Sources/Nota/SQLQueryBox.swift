@@ -21,6 +21,22 @@ final class SQLQueryBox: NSView {
     /// Esc.
     var onCancel: (() -> Void)?
 
+    /// The grid's ⌘F. The box is an `NSTextView` and would answer the Find
+    /// menu itself, with a find bar of AppKit's own over five rows of query —
+    /// which is not what a reader who pressed ⌘F beside a table is looking
+    /// for. The items go to the grid's session instead, so ⌘F with the caret
+    /// in the box searches the rows.
+    weak var findSession: GridFindSession? {
+        didSet { textView.findSession = findSession }
+    }
+
+    /// Whether the pane owns the keyboard, which is reading mode. In split the
+    /// editor beside it owns ⌘F, and the box hands the Find menu back up the
+    /// chain rather than answering for a grid the reader is not in.
+    var takesKeyboard = false {
+        didSet { textView.takesKeyboard = takesKeyboard }
+    }
+
     private enum Metrics {
         /// The bezel's own radius. The text inset inside it is `textInset`,
         /// so the corner the text turns is concentric with the one the box
@@ -167,6 +183,32 @@ private final class SQLQueryTextView: NSTextView {
     var onRun: (() -> Void)?
     var onCancel: (() -> Void)?
     var onFocusChange: ((Bool) -> Void)?
+    weak var findSession: GridFindSession?
+    var takesKeyboard = false
+
+    /// The Find menu, handed to the grid beside the box rather than answered
+    /// here — but only in reading mode. In split the editor owns ⌘F, so the
+    /// action goes back up the chain to the window, which hands it to the
+    /// editor's own session.
+    override func performTextFinderAction(_ sender: Any?) {
+        guard takesKeyboard, let findSession else {
+            nextResponder?.tryToPerform(#selector(performTextFinderAction(_:)), with: sender)
+            return
+        }
+        guard let item = sender as? NSValidatedUserInterfaceItem,
+              let action = NSTextFinder.Action(rawValue: item.tag),
+              GridFindSession.handles(action)
+        else { return }
+        findSession.perform(action)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard item.action == #selector(performTextFinderAction(_:)),
+              let action = NSTextFinder.Action(rawValue: item.tag)
+        else { return super.validateUserInterfaceItem(item) }
+        guard takesKeyboard, findSession != nil else { return TextFindSession.handles(action) }
+        return GridFindSession.handles(action)
+    }
 
     var placeholder = "" {
         didSet { needsDisplay = true }

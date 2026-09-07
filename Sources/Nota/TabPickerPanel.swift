@@ -20,6 +20,27 @@ protocol TabPickerPanelDelegate: AnyObject {
     )
 }
 
+/// The picker owns Escape independently of whichever control happens to be
+/// first responder.  AppKit normally turns Escape in a text field into
+/// `cancelOperation(_:)`, but after a window or Space switch there can be a
+/// short interval with no field editor.  Keeping the dismissal at the panel
+/// boundary makes that interval harmless.
+private final class TabPickerWindow: NSPanel {
+    var dismiss: (() -> Void)?
+
+    override func cancelOperation(_ sender: Any?) {
+        dismiss?()
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown && event.keyCode == 53 {
+            dismiss?()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 /// ⌘P: a small centred panel in the shape of Xcode's Open Quickly — a search
 /// field over a list, fuzzy-matched on tab title.
 ///
@@ -41,6 +62,11 @@ protocol TabPickerPanelDelegate: AnyObject {
 /// sits on, with the matched characters in bold. That mode has no fixed row
 /// above the field; there is nothing it would mean.
 final class TabPickerPanel: NSObject {
+    /// There can be several Nota windows, but only one command-style picker
+    /// may own the keyboard.  A new one dismisses the old one before it is
+    /// attached to its window, preventing two panels from promoting each
+    /// other after an app/Space switch.
+    private static weak var activePicker: TabPickerPanel?
     private static let panelWidth: CGFloat = 420
     private static let rowHeight: CGFloat = 26
     /// A search hit needs two lines — the tab it is in over the line itself.
@@ -74,7 +100,16 @@ final class TabPickerPanel: NSObject {
 
     weak var delegate: TabPickerPanelDelegate?
 
-    private let panel: NSPanel
+    private let panel: TabPickerWindow
+    private weak var ownerWindow: NSWindow?
+    /// Invalidates deferred focus work when the picker is hidden or shown for
+    /// another owner before the next turn of the run loop.
+    private var presentationGeneration = 0
+    private var scheduledFocusGeneration: Int?
+    /// Covers the brief return-from-another-app interval before the child
+    /// panel has become key again. It is installed only while the one active
+    /// picker is visible and only accepts Escape from that picker or owner.
+    private var escapeMonitor: Any?
     private let searchField = NSTextField()
     /// The fixed row above the field: a table one row deep, never scrolled.
     private let topRowTable = HoverTrackingTableView()
@@ -85,6 +120,10 @@ final class TabPickerPanel: NSObject {
     /// One per title, in the same order — the file-kind symbol each tab's
     /// row draws (`FileKindIcon`).
     private var symbolNames: [String] = []
+    /// One per title again: whether that tab is bookmarked, which is the one
+    /// thing the row draws differently — the same icon filled in. Empty when
+    /// the caller had nothing to say, and every tab then reads as unmarked.
+    private var bookmarkedTabs: [Bool] = []
     /// In `.tabs`, the bookmarks this window does not already have open —
     /// the ones worth offering. In `.bookmarks`, all of them.
     private var bookmarkPaths: [String] = []
@@ -137,6 +176,16 @@ final class TabPickerPanel: NSObject {
         case .headings: return []
         case .search: return searchMatches.map { symbolName(at: $0.tabIndex) }
         case .tabs, .bookmarks: return rows.map { symbolName(of: $0.row) ?? "" }
+        }
+    }
+
+    /// Which rows draw their icon filled — the mark a bookmark wears — top
+    /// to bottom, for the tests.
+    var visibleRowFilledIcons: [Bool] {
+        switch mode {
+        case .headings: return []
+        case .search: return searchMatches.map { isTabBookmarked($0.tabIndex) }
+        case .tabs, .bookmarks: return rows.map { isFilled($0.row) }
         }
     }
 
@@ -222,20 +271,21 @@ final class TabPickerPanel: NSObject {
     }
 
     override init() {
-        panel = NSPanel(
+        panel = TabPickerWindow(
             contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 200),
-            styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel],
+            styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         super.init()
+
+        panel.dismiss = { [weak self] in self?.hide() }
 
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isMovableByWindowBackground = true
         panel.hidesOnDeactivate = true
         panel.isReleasedWhenClosed = false
-        panel.level = .floating
 
         let background = NSVisualEffectView()
         background.material = .menu
@@ -243,18 +293,26 @@ final class TabPickerPanel: NSObject {
         background.state = .active
         panel.contentView = background
 
-        // The panel hides with the app and comes back with it, but key goes to
-        // the main window on the way back, so the field had no caret and Esc
-        // went to the wrong window. Whenever the app is active again with the
-        // panel showing — or the panel itself becomes key — the caret is put
-        // back where it was.
+        // AppKit can restore key to the owner before it has finished changing
+        // apps or Spaces.  Wait a turn, then restore only this owner's child;
+        // never order a panel from an activation notification.
         NotificationCenter.default.addObserver(
-            self, selector: #selector(refocusIfShowing),
+            self, selector: #selector(scheduleRefocusIfShowing),
             name: NSApplication.didBecomeActiveNotification, object: nil
         )
         NotificationCenter.default.addObserver(
-            self, selector: #selector(refocusIfShowing),
-            name: NSWindow.didBecomeKeyNotification, object: panel
+            self, selector: #selector(ownerDidBecomeMain(_:)),
+            name: NSWindow.didBecomeMainNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(ownerWentAway(_:)),
+            // AppKit has no public "ordered off" notification; the window
+            // leaving the screen while the panel is up is a miniaturize.
+            name: NSWindow.didMiniaturizeNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(ownerWentAway(_:)),
+            name: NSWindow.willCloseNotification, object: nil
         )
 
         searchField.translatesAutoresizingMaskIntoConstraints = false
@@ -346,13 +404,15 @@ final class TabPickerPanel: NSObject {
     /// ⌘P. `bookmarks` is the bookmarks this window does not already have
     /// open — SPEC's "⌘P's switcher offers them under the open tabs".
     func show(
-        titles: [String], symbolNames: [String] = [], selectedIndex: Int,
+        titles: [String], symbolNames: [String] = [], bookmarkedTabs: [Bool] = [],
+        selectedIndex: Int,
         bookmarks: [String] = [], missingBookmarks: Set<String> = [],
         loadHeadings: @escaping (@escaping ([MarkdownHeadings.Heading]) -> Void) -> Void,
         over window: NSWindow
     ) {
         self.titles = titles
         self.symbolNames = symbolNames
+        self.bookmarkedTabs = bookmarkedTabs
         self.bookmarkPaths = bookmarks
         self.missingBookmarks = missingBookmarks
         self.loadHeadings = loadHeadings
@@ -374,11 +434,12 @@ final class TabPickerPanel: NSObject {
     /// book's chapters — so a hit's range lines up with whatever it will be
     /// revealed in; `symbolNames` is the kind icon per tab, in the same order.
     func showSearch(
-        notes: [NoteSearchSource], symbolNames: [String] = [],
+        notes: [NoteSearchSource], symbolNames: [String] = [], bookmarkedTabs: [Bool] = [],
         over window: NSWindow
     ) {
         titles = notes.map(\.title)
         self.symbolNames = symbolNames
+        self.bookmarkedTabs = bookmarkedTabs
         searchNotes = notes
         searchMatches = []
         bookmarkPaths = []
@@ -403,6 +464,7 @@ final class TabPickerPanel: NSObject {
     ) {
         titles = []
         symbolNames = []
+        bookmarkedTabs = []
         bookmarkPaths = bookmarks
         self.missingBookmarks = missingBookmarks
         self.frontTab = frontTab
@@ -420,6 +482,20 @@ final class TabPickerPanel: NSObject {
     }
 
     private func present(over window: NSWindow) {
+        if let active = Self.activePicker, active !== self { active.hide() }
+        Self.activePicker = self
+        presentationGeneration += 1
+        scheduledFocusGeneration = nil
+
+        if let oldOwner = ownerWindow, oldOwner !== window {
+            oldOwner.removeChildWindow(panel)
+        }
+        ownerWindow = window
+        if panel.parent !== window {
+            window.addChildWindow(panel, ordered: .above)
+        }
+        installEscapeMonitor()
+
         // The list resolves `.automatic` to whichever style AppKit thinks it
         // should have; the fixed row above the field takes that same style
         // as its own, so the two indent and highlight alike.
@@ -446,16 +522,102 @@ final class TabPickerPanel: NSObject {
     var listedBookmarks: [String] { bookmarkPaths }
 
     func hide() {
+        presentationGeneration += 1
+        scheduledFocusGeneration = nil
+        removeEscapeMonitor()
+        panel.orderOut(nil)
+        if let ownerWindow, panel.parent === ownerWindow {
+            ownerWindow.removeChildWindow(panel)
+        }
+        ownerWindow = nil
+        if Self.activePicker === self { Self.activePicker = nil }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        removeEscapeMonitor()
+        if let ownerWindow, panel.parent === ownerWindow {
+            ownerWindow.removeChildWindow(panel)
+        }
         panel.orderOut(nil)
     }
 
-    /// The caret back in the field, and the panel key, if the panel is on
-    /// screen and lost either — after a trip to another app or space.
-    @objc func refocusIfShowing() {
-        guard panel.isVisible else { return }
-        if !panel.isKeyWindow { panel.makeKeyAndOrderFront(nil) }
+    @objc private func ownerWentAway(_ notification: Notification) {
+        guard notification.object as? NSWindow === ownerWindow else { return }
+        hide()
+    }
+
+    @objc private func ownerDidBecomeMain(_ notification: Notification) {
+        guard notification.object as? NSWindow === ownerWindow else { return }
+        scheduleRefocusIfShowing()
+    }
+
+    /// App/window activation is still in flight when its notification is
+    /// delivered.  Deferring also coalesces both notifications into harmless
+    /// checks guarded by this presentation's generation.
+    @objc func scheduleRefocusIfShowing() {
+        let generation = presentationGeneration
+        guard scheduledFocusGeneration != generation else { return }
+        scheduledFocusGeneration = generation
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.scheduledFocusGeneration == generation else { return }
+            self.scheduledFocusGeneration = nil
+            guard self.presentationGeneration == generation else { return }
+            self.refocusIfShowing()
+        }
+    }
+
+    /// Restore the caret without changing window order.  Only the picker
+    /// attached to Nota's active, visible owner is eligible.
+    func refocusIfShowing() {
+        guard Self.activePicker === self,
+              NSApp.isActive,
+              panel.isVisible,
+              let ownerWindow,
+              panel.parent === ownerWindow,
+              ownerWindow.isOnActiveSpace,
+              ownerWindow.isMainWindow || ownerWindow.isKeyWindow || panel.isKeyWindow,
+              ownerWindow.occlusionState.contains(.visible),
+              ownerWindow.attachedSheet == nil,
+              NSApp.keyWindow == nil || NSApp.keyWindow === ownerWindow || NSApp.keyWindow === panel
+        else { return }
+        if !panel.isKeyWindow { panel.makeKey() }
         let editing = (panel.firstResponder as? NSTextView)?.delegate === searchField
         if !editing { panel.makeFirstResponder(searchField) }
+    }
+
+    /// Panel-level cancellation seam: unlike the field-delegate tests, this
+    /// exercises Escape after first responder has wandered elsewhere.
+    func cancelFromPanel() { panel.cancelOperation(nil) }
+
+    /// The owner relationship is the behavior under test; exposing the fact
+    /// avoids asking UI tests to inspect AppKit's private child-window state.
+    var isAttachedToOwner: Bool {
+        guard let ownerWindow else { return false }
+        return panel.parent === ownerWindow
+    }
+
+    private func installEscapeMonitor() {
+        removeEscapeMonitor()
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  event.keyCode == 53,
+                  Self.activePicker === self,
+                  self.panel.isVisible,
+                  self.ownerWindow?.attachedSheet == nil,
+                  NSApp.keyWindow == nil
+                    || NSApp.keyWindow === self.ownerWindow
+                    || NSApp.keyWindow === self.panel
+            else { return event }
+            self.hide()
+            return nil
+        }
+    }
+
+    private func removeEscapeMonitor() {
+        guard let escapeMonitor else { return }
+        NSEvent.removeMonitor(escapeMonitor)
+        self.escapeMonitor = nil
     }
 
     /// Whether the field is what the keyboard reaches: the panel is key and
@@ -554,6 +716,23 @@ final class TabPickerPanel: NSObject {
         symbolNames.indices.contains(index) ? symbolNames[index] : FileKindIcon.untitledSymbolName
     }
 
+    /// Whether the tab at `index` is bookmarked, which is what draws its icon
+    /// filled. A caller that said nothing means no.
+    private func isTabBookmarked(_ index: Int) -> Bool {
+        bookmarkedTabs.indices.contains(index) ? bookmarkedTabs[index] : false
+    }
+
+    /// Whether a row draws its icon filled: an open tab that is bookmarked,
+    /// and every row of the bookmarks list, all of which are. A bookmark
+    /// listed under the open tabs in `.tabs` is not drawing its kind at all
+    /// — see `symbolName(of:)` — so it has nothing to fill.
+    private func isFilled(_ row: Row) -> Bool {
+        switch row {
+        case .tab(let index): return isTabBookmarked(index)
+        case .bookmark: return mode == .bookmarks
+        }
+    }
+
     /// What a row says. A bookmark is listed by its file name — the same
     /// thing a tab of it would be titled.
     private func text(of row: Row) -> String {
@@ -575,8 +754,10 @@ final class TabPickerPanel: NSObject {
 
     /// A bookmark under the open tabs carries the `bookmark` symbol rather
     /// than its file kind, so the two halves of the ⌘P list read apart at a
-    /// glance: these are the ones that are not open yet. In bookmarks mode
-    /// there is nothing to tell them apart from, so the kind icon is back.
+    /// glance: these are the ones that are not open yet — and a filled kind
+    /// icon could not say it, since that is what a bookmarked *tab* wears.
+    /// In bookmarks mode there is nothing to tell them apart from, so the
+    /// kind icon is back, filled, because every row there is a bookmark.
     private func symbolName(of row: Row) -> String? {
         switch row {
         case .tab(let index):
@@ -989,7 +1170,8 @@ extension TabPickerPanel: NSTableViewDataSource, NSTableViewDelegate {
                     isDimmed: isMissing(entry.row)
                 ),
                 symbolName: symbolName(of: entry.row),
-                isDimmed: isMissing(entry.row)
+                isDimmed: isMissing(entry.row),
+                filled: isFilled(entry.row)
             )
         case .headings:
             guard let headings, rankedHeadings.indices.contains(row) else { return cell }
@@ -1014,6 +1196,7 @@ extension TabPickerPanel: NSTableViewDataSource, NSTableViewDelegate {
                     ]
                 ),
                 symbolName: symbolName(at: match.tabIndex),
+                filled: isTabBookmarked(match.tabIndex),
                 snippet: snippetRow(match)
             )
         }
@@ -1135,9 +1318,17 @@ private final class HoverTrackingTableView: NSTableView {
 /// hit sits on under it. Both lines hang off the same icon, so a search row
 /// and a tab row line their text up at the same x.
 private final class TabPickerRowView: NSTableCellView {
-    static let iconSize: CGFloat = 16
+    /// The icon slot: the badge art is three units wide to two high, so the
+    /// slot is 24 × 16 where a square 16 used to be — the strip's slot again.
+    static let iconWidth: CGFloat = 24
+    static let iconHeight: CGFloat = 16
     static let leadingMargin: CGFloat = 14
     static let iconTitleGap: CGFloat = 6
+    /// The badge is a solid rectangle and an SF Symbol a glyph, so the two
+    /// need different point sizes to stand the same height in one list: 11
+    /// draws the art 15 high, 13 puts about as much ink in a symbol.
+    private static let artPointSize: CGFloat = 11
+    private static let symbolPointSize: CGFloat = 13
 
     private let icon = NSImageView()
     private let snippetField = NSTextField(labelWithString: "")
@@ -1182,8 +1373,8 @@ private final class TabPickerRowView: NSTableCellView {
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.leadingMargin),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: Self.iconSize),
-            icon.heightAnchor.constraint(equalToConstant: Self.iconSize),
+            icon.widthAnchor.constraint(equalToConstant: Self.iconWidth),
+            icon.heightAnchor.constraint(equalToConstant: Self.iconHeight),
 
             titleAfterIcon,
             field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
@@ -1206,7 +1397,7 @@ private final class TabPickerRowView: NSTableCellView {
 
     func configure(
         _ text: NSAttributedString, symbolName: String?, isDimmed: Bool = false,
-        snippet: NSAttributedString? = nil
+        filled: Bool = false, snippet: NSAttributedString? = nil
     ) {
         textField?.attributedStringValue = text
         icon.contentTintColor = isDimmed ? .tertiaryLabelColor : .secondaryLabelColor
@@ -1222,7 +1413,11 @@ private final class TabPickerRowView: NSTableCellView {
             titleCentred.isActive = true
         }
         if let symbolName {
-            icon.image = FileKindIcon.image(named: symbolName, pointSize: Self.iconSize)
+            let pointSize = FileKindIcon.isCustomArt(symbolName)
+                ? Self.artPointSize : Self.symbolPointSize
+            icon.image = FileKindIcon.image(
+                named: symbolName, pointSize: pointSize, filled: filled
+            )
             icon.isHidden = false
             titleAtMargin.isActive = false
             titleAfterIcon.isActive = true

@@ -7,7 +7,7 @@ import XCTest
 /// beside the file and spells them as ordinary relative Markdown links;
 /// opening a file reads relative links back as chips, remembering where their
 /// author put them so the next save leaves them there.
-final class SidecarTests: XCTestCase {
+final class SidecarTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func setUp() {

@@ -13,7 +13,7 @@ import XCTest
 /// document, a picture, an HTML page — they zoom the content instead. A
 /// render in reading mode stays with the font, since the font already *is*
 /// the zoom there.
-final class ZoomTests: XCTestCase {
+final class ZoomTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {

@@ -6,7 +6,7 @@ import XCTest
 /// SPEC Todo 16, editor half: spell checking follows the tab it is on
 /// (prose, and under `BigFile.threshold`), and word wrap on a huge note lays
 /// out only what the window can show rather than the whole document.
-final class BigFileTests: XCTestCase {
+final class BigFileTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
     private var windows: [NSWindow] = []
 

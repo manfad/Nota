@@ -7,11 +7,12 @@ struct TabBarItem {
     /// of its own. Drawn as a hairline ring round the unsaved dot — the dot
     /// still says "unsaved", the ring says "and the file has moved".
     var hasExternalChange: Bool = false
-    /// The leading icon's SF Symbol, from the file's kind (`FileKindIcon`).
+    /// The leading icon's name, from the file's kind (`FileKindIcon`).
     /// Defaulted so a strip test that only cares about titles need not say.
     var symbolName: String = FileKindIcon.untitledSymbolName
-    /// The file behind this tab is bookmarked (SPEC Todo 13). Drawn as a
-    /// small `bookmark.fill` badge on the corner of the leading icon.
+    /// The file behind this tab is bookmarked (SPEC Todo 13). Drawn by
+    /// filling the leading icon in — the same kind, solid — rather than by
+    /// putting a second mark on its corner.
     var isBookmarked: Bool = false
     /// There is a file on disk behind this tab, so "Reveal in Finder" has
     /// somewhere to go. An untitled note has none and the item is greyed.
@@ -36,8 +37,10 @@ protocol TabBarViewDelegate: AnyObject {
     /// The release (`committed`) or Esc (`false`) that ends a torn-off drag.
     func tabBarDragEnded(_ bar: TabBarView, committed: Bool, at screenPoint: NSPoint)
 
-    /// The bookmark button at the trailing edge of the strip: the picker, in
-    /// bookmarks mode.
+    /// The Bookmark button at the trailing edge of the strip: ⌘D, by
+    /// another door — the tab in front bookmarked, or unbookmarked.
+    func tabBarDidToggleFrontTabBookmark(_ bar: TabBarView)
+    /// The Bookmarks button beside it: the picker, in bookmarks mode.
     func tabBarDidRequestBookmarks(_ bar: TabBarView)
     /// "Bookmark" / "Remove Bookmark" in a tab's context menu.
     func tabBar(_ bar: TabBarView, didToggleBookmarkAt index: Int)
@@ -60,6 +63,7 @@ extension TabBarViewDelegate {
     func tabBar(_ bar: TabBarView, tearOff index: Int, grabOffset: NSPoint, screenPoint: NSPoint) {}
     func tabBarDragMoved(_ bar: TabBarView, to screenPoint: NSPoint) {}
     func tabBarDragEnded(_ bar: TabBarView, committed: Bool, at screenPoint: NSPoint) {}
+    func tabBarDidToggleFrontTabBookmark(_ bar: TabBarView) {}
     func tabBarDidRequestBookmarks(_ bar: TabBarView) {}
     func tabBar(_ bar: TabBarView, didToggleBookmarkAt index: Int) {}
     func tabBar(_ bar: TabBarView, didRequestRevealAt index: Int) {}
@@ -122,6 +126,7 @@ final class TabBarView: NSView {
     private var selectedIndex = 0
     private var itemViews: [TabItemView] = []
     private let newTabButton = NewTabButton()
+    private let bookmarkToggleButton = BookmarkToggleButton()
     private let bookmarksButton = BookmarksButton()
     private let settingsButton = SettingsButton()
 
@@ -229,6 +234,9 @@ final class TabBarView: NSView {
         newTabButton.target = self
         newTabButton.action = #selector(requestNewTab)
         addSubview(newTabButton)
+        bookmarkToggleButton.target = self
+        bookmarkToggleButton.action = #selector(toggleFrontTabBookmark)
+        addSubview(bookmarkToggleButton)
         bookmarksButton.target = self
         bookmarksButton.action = #selector(requestBookmarks)
         addSubview(bookmarksButton)
@@ -382,19 +390,32 @@ final class TabBarView: NSView {
     /// Test hook: where the + sits.
     internal var newTabButtonFrameForTesting: NSRect { newTabButton.frame }
 
-    /// Test hook: where the bookmark button sits.
+    /// Test hook: where the Bookmark toggle sits.
+    internal var bookmarkToggleButtonFrameForTesting: NSRect { bookmarkToggleButton.frame }
+
+    /// Test hook: where the Bookmarks button sits.
     internal var bookmarksButtonFrameForTesting: NSRect { bookmarksButton.frame }
 
     /// Test hook: where the Settings gear sits.
     internal var settingsButtonFrameForTesting: NSRect { settingsButton.frame }
 
-    /// Test hook: which of the two trailing buttons Settings has hidden.
-    internal var trailingButtonsHiddenForTesting: (bookmark: Bool, settings: Bool) {
-        (bookmarksButton.isHidden, settingsButton.isHidden)
+    /// Test hook: which of the three trailing buttons Settings has hidden.
+    internal var trailingButtonsHiddenForTesting:
+        (bookmarkToggle: Bool, bookmark: Bool, settings: Bool) {
+        (bookmarkToggleButton.isHidden, bookmarksButton.isHidden, settingsButton.isHidden)
     }
 
-    /// Test hook: which tabs are drawing the bookmark badge on their icon.
-    internal var bookmarkBadgesForTesting: [Bool] { itemViews.map(\.showsBookmarkBadge) }
+    /// Test hook: what the Bookmark toggle is saying about the front tab —
+    /// the symbol it is drawing, whether it can be pressed, and its tip.
+    internal var bookmarkToggleStateForTesting:
+        (symbol: String?, isEnabled: Bool, toolTip: String?) {
+        (bookmarkToggleButton.symbolNameForTesting, bookmarkToggleButton.isEnabled,
+         bookmarkToggleButton.toolTip)
+    }
+
+    /// Test hook: which tabs are drawing their kind's icon filled — which
+    /// is what says they are bookmarked.
+    internal var filledIconsForTesting: [Bool] { itemViews.map(\.drawsFilledIcon) }
 
     /// Test hook: how much of the hover wash each tab is wearing — 0 at rest
     /// and on the selected tab, which never takes it.
@@ -411,7 +432,15 @@ final class TabBarView: NSView {
         return contextMenu(for: itemViews[index])
     }
 
-    /// Test hook: clicks the bookmark button at the trailing edge.
+    /// Test hook: clicks the Bookmark toggle at the trailing edge. A button
+    /// Settings has switched off, or one greyed because the front tab has no
+    /// file, does nothing — exactly as the pointer would find it.
+    internal func pressBookmarkToggleButtonForTesting() {
+        guard !bookmarkToggleButton.isHidden, bookmarkToggleButton.isEnabled else { return }
+        toggleFrontTabBookmark()
+    }
+
+    /// Test hook: clicks the Bookmarks button at the trailing edge.
     internal func pressBookmarksButtonForTesting() { requestBookmarks() }
 
     /// Test hook: clicks the Settings gear.
@@ -515,6 +544,10 @@ final class TabBarView: NSView {
 
     @objc private func requestNewTab() {
         delegate?.tabBarDidRequestNewTab(self)
+    }
+
+    @objc private func toggleFrontTabBookmark() {
+        delegate?.tabBarDidToggleFrontTabBookmark(self)
     }
 
     @objc private func requestBookmarks() {
@@ -710,28 +743,37 @@ final class TabBarView: NSView {
         }
     }
 
-    /// The bookmark button and the gear are pinned at the trailing edge and
-    /// never move with the tabs, so they are placed the same way whatever
-    /// else the strip is doing — a drag included.
+    /// The three trailing buttons are pinned at the trailing edge and never
+    /// move with the tabs, so they are placed the same way whatever else the
+    /// strip is doing — a drag included.
     private func placeBookmarksButton() {
-        let size = TabStripLayout.bookmarkSlot
-        bookmarksButton.frame = NSRect(
-            x: TabStripLayout.bookmarkX(bounds.width),
-            y: (bounds.height - size) / 2,
-            width: size,
-            height: size
-        )
-        let gear = TabStripLayout.settingsSlot
-        settingsButton.frame = NSRect(
-            x: TabStripLayout.settingsX(bounds.width),
-            y: (bounds.height - gear) / 2,
-            width: gear,
-            height: gear
-        )
+        func place(_ button: StripButton, size: CGFloat, x: CGFloat) {
+            button.frame = NSRect(x: x, y: (bounds.height - size) / 2, width: size, height: size)
+        }
+        place(bookmarkToggleButton, size: TabStripLayout.bookmarkToggleSlot,
+              x: TabStripLayout.bookmarkToggleX(bounds.width))
+        place(bookmarksButton, size: TabStripLayout.bookmarkSlot,
+              x: TabStripLayout.bookmarkX(bounds.width))
+        place(settingsButton, size: TabStripLayout.settingsSlot,
+              x: TabStripLayout.settingsX(bounds.width))
         // A button Settings has switched off is not drawn and not clickable;
         // the layout has already given its slot back to the tabs.
+        bookmarkToggleButton.isHidden = !TabStripLayout.controls.bookmarkToggle
         bookmarksButton.isHidden = !TabStripLayout.controls.bookmark
         settingsButton.isHidden = !TabStripLayout.controls.settings
+    }
+
+    /// What the Bookmark toggle says about the tab in front: the filled
+    /// bookmark once it is one, the outline while it is not, and greyed out
+    /// on a note that has no file to bookmark. The window calls this
+    /// wherever it refreshes the strip, so a tab switch and somebody else's
+    /// window bookmarking the same file both land here.
+    func setFrontTabBookmark(canBookmark: Bool, isBookmarked: Bool) {
+        bookmarkToggleButton.setState(canBookmark: canBookmark, isBookmarked: isBookmarked)
+        // The button beside it says nothing about the tab, but its words are
+        // translated and the language can change under an open window — so
+        // they are written again on the same beat rather than only at birth.
+        bookmarksButton.refreshLabel()
     }
 
     /// Brave draws a hairline only between two plain tabs — never beside the
@@ -1182,8 +1224,20 @@ class StripButton: NSButton {
 
     override var mouseDownCanMoveWindow: Bool { false }
 
+    /// A button greyed while the pointer is still on it drops the wash with
+    /// it: the light is what says a click would land, and none would.
+    override var isEnabled: Bool {
+        didSet { if !isEnabled { isHovered = false } }
+    }
+
+    /// The symbol this button is drawing. `NSImage` hands back the picture
+    /// and not the name it was made from, so a button whose symbol changes
+    /// writes it down as it sets it.
+    private(set) var symbolNameForTesting: String?
+
     init(symbolName: String, name: String, toolTip: String) {
         super.init(frame: .zero)
+        symbolNameForTesting = symbolName
         let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
         image = NSImage(systemSymbolName: symbolName, accessibilityDescription: name)?
             .withSymbolConfiguration(config)
@@ -1199,6 +1253,16 @@ class StripButton: NSButton {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Swaps the picture without touching anything else about the button —
+    /// the template flag stays on, so `contentTintColor` keeps colouring it.
+    func setSymbol(_ name: String) {
+        guard name != symbolNameForTesting else { return }
+        symbolNameForTesting = name
+        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+        image = NSImage(systemSymbolName: name, accessibilityDescription: accessibilityLabel())?
+            .withSymbolConfiguration(config)
+    }
 
     override func layout() {
         super.layout()
@@ -1242,7 +1306,8 @@ class StripButton: NSButton {
 
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
-        isHovered = true
+        // A greyed button takes no click, so it lights up for nobody.
+        isHovered = isEnabled
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -1260,14 +1325,52 @@ final class NewTabButton: StripButton {
     required init?(coder: NSCoder) { fatalError("not used") }
 }
 
-/// The bookmark button in the strip's top-right corner (SPEC Todo 13): the
-/// ⇧⌘J picker, opened straight into its bookmarks list.
-final class BookmarksButton: StripButton {
+/// The Bookmark button, first of the three in the strip's top-right corner:
+/// ⌘D by another door — it bookmarks the tab in front, and unbookmarks it
+/// again. The symbol is the answer as much as the offer: an outline while the
+/// tab is not bookmarked, filled once it is, which is the same pair the badge
+/// on the tab's own icon uses. A note with no file has nothing to bookmark,
+/// and the button is greyed rather than quietly doing nothing.
+final class BookmarkToggleButton: StripButton {
     init() {
-        super.init(symbolName: "bookmark", name: "Bookmarks", toolTip: "Bookmarks")
+        super.init(symbolName: "bookmark", name: "Bookmark", toolTip: "Bookmark")
+        setState(canBookmark: false, isBookmarked: false)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    func setState(canBookmark: Bool, isBookmarked: Bool) {
+        setSymbol(isBookmarked ? "bookmark.fill" : "bookmark")
+        isEnabled = canBookmark
+        // A greyed button keeps the shape of the offer and loses its weight:
+        // `secondaryLabelColor` is the idle colour, one step quieter again
+        // while there is nothing to press. AppKit does not dim a bordered-off
+        // button that was given a tint of its own, so it is said here.
+        contentTintColor = canBookmark ? .secondaryLabelColor : .tertiaryLabelColor
+        let key = Preferences.shared.combo(for: .bookmarkTab).displayName
+        let name = L10n.text(isBookmarked ? "Remove Bookmark" : "Bookmark")
+        setAccessibilityLabel(name)
+        toolTip = name + "  " + key
+    }
+}
+
+/// The Bookmark dialog button beside it (SPEC Todo 13): the ⇧⌘J picker,
+/// opened straight into its bookmarks list. A closed book rather than a
+/// second bookmark ribbon — the one next to it is the ribbon, and two of them
+/// in a row said nothing about which was which.
+final class BookmarksButton: StripButton {
+    init() {
+        super.init(symbolName: "book.closed", name: "Bookmark dialog", toolTip: "")
+        refreshLabel()
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func refreshLabel() {
+        let name = L10n.text("Bookmark dialog")
+        setAccessibilityLabel(name)
+        toolTip = name + "  " + Preferences.shared.combo(for: .showBookmarks).displayName
+    }
 }
 
 /// The Settings gear in the strip's top-right corner, past the bookmark: the
@@ -1324,7 +1427,10 @@ private final class TabItemView: NSView {
     private static let titleSlotGap: CGFloat = 4
     private static let crossFadeDuration: TimeInterval = 0.12
     private static let dragThreshold: CGFloat = 3
-    private static let iconSize: CGFloat = 16
+    /// The icon slot: the badge art is three units wide to two high, so the
+    /// slot is too — 24 × 16, where a square 16 used to be.
+    private static let iconWidth: CGFloat = 24
+    private static let iconHeight: CGFloat = 16
     private static let iconTitleGap: CGFloat = 5
     /// The title is clipped rather than ellipsized, with the last few points
     /// faded out; below the shorter figure there is no room worth drawing in.
@@ -1332,10 +1438,6 @@ private final class TabItemView: NSView {
     private static let minimumTitleWidth: CGFloat = 12
     /// The unsaved dot when it has to sit on the icon instead of in the slot.
     private static let compactDotDiameter: CGFloat = 5
-    /// The bookmark badge on the corner of the leading icon: small enough to
-    /// be a mark rather than a second icon, drawn in the same quiet grey as
-    /// the unsaved dot.
-    private static let bookmarkBadgeSize: CGFloat = 7
     /// The point size every kind's icon is drawn at.
     private static let iconPointSize: CGFloat = 11
 
@@ -1368,7 +1470,7 @@ private final class TabItemView: NSView {
         hoverFillView.alphaValue = 0
         addSubview(hoverFillView)
 
-        setIcon(named: FileKindIcon.untitledSymbolName)
+        setIcon(named: FileKindIcon.untitledSymbolName, filled: false)
         iconView.contentTintColor = .secondaryLabelColor
         iconView.imageScaling = .scaleProportionallyDown
         addSubview(iconView)
@@ -1408,19 +1510,28 @@ private final class TabItemView: NSView {
     /// Test hook: which SF Symbol the leading icon is drawing, so a test can
     /// check a tab's icon follows its file kind.
     internal private(set) var iconSymbolName = ""
+    /// Which of the two drawings of that kind is up, so `setIcon` knows a
+    /// bookmark toggle is a change even though the name has not moved.
+    private var isIconFilled = false
 
-    /// Test hook: whether the bookmark badge is on this tab's icon.
-    internal var showsBookmarkBadge: Bool { isBookmarked }
+    /// Test hook: whether this tab is drawing the filled art — which is what
+    /// says it is bookmarked.
+    internal var drawsFilledIcon: Bool { isBookmarked }
 
-    private func setIcon(named symbolName: String) {
-        guard symbolName != iconSymbolName else { return }
+    private func setIcon(named symbolName: String, filled: Bool) {
+        guard symbolName != iconSymbolName || filled != isIconFilled else { return }
         iconSymbolName = symbolName
-        iconView.image = FileKindIcon.image(named: symbolName, pointSize: Self.iconPointSize)
+        isIconFilled = filled
+        iconView.image = FileKindIcon.image(
+            named: symbolName, pointSize: Self.iconPointSize, filled: filled
+        )
     }
 
     func configure(_ item: TabBarItem, isSelected: Bool) {
         title = item.title
-        setIcon(named: item.symbolName)
+        // A bookmarked tab draws the same kind of icon solid; that is the
+        // whole mark, so nothing is drawn on the corner.
+        setIcon(named: item.symbolName, filled: item.isBookmarked)
         isDirty = item.isDirty
         hasExternalChange = item.hasExternalChange
         isBookmarked = item.isBookmarked
@@ -1448,16 +1559,16 @@ private final class TabItemView: NSView {
     private var iconRect: NSRect {
         NSRect(
             x: Self.horizontalPadding,
-            y: (bounds.height - Self.iconSize) / 2,
-            width: Self.iconSize,
-            height: Self.iconSize
+            y: (bounds.height - Self.iconHeight) / 2,
+            width: Self.iconWidth,
+            height: Self.iconHeight
         )
     }
 
     /// The room left for the title once the icon, and the slot when there is
     /// one, have taken theirs.
     private var titleRect: NSRect {
-        let x = Self.horizontalPadding + Self.iconSize + Self.iconTitleGap
+        let x = Self.horizontalPadding + Self.iconWidth + Self.iconTitleGap
         let trailing = isCompact
             ? bounds.maxX - Self.horizontalPadding
             : slotRect.minX - Self.titleSlotGap
@@ -1687,8 +1798,6 @@ private final class TabItemView: NSView {
 
         drawTitle()
 
-        drawBookmarkBadge()
-
         // With the slot gone, the only place left to say "unsaved" is the
         // corner of the icon.
         if isCompact, isDirty {
@@ -1761,30 +1870,6 @@ private final class TabItemView: NSView {
         )
         context.endTransparencyLayer()
         context.restoreGState()
-    }
-
-    /// A `bookmark.fill` on the corner of the leading icon. It sits at the
-    /// icon's bottom-right, where a badge belongs — except on a tab narrow
-    /// enough to have lost its trailing slot *and* carrying unsaved edits,
-    /// where the dot has already taken that corner; the badge then goes to
-    /// the bottom-left rather than the two drawing on top of each other.
-    private func drawBookmarkBadge() {
-        guard isBookmarked else { return }
-        let size = Self.bookmarkBadgeSize
-        let config = NSImage.SymbolConfiguration(pointSize: size, weight: .semibold)
-            .applying(NSImage.SymbolConfiguration(paletteColors: [.secondaryLabelColor]))
-        guard let badge = NSImage(systemSymbolName: "bookmark.fill", accessibilityDescription: nil)?
-            .withSymbolConfiguration(config)
-        else { return }
-
-        let onTheLeft = isCompact && isDirty
-        let drawn = badge.size
-        badge.draw(in: NSRect(
-            x: onTheLeft ? iconRect.minX - 1 : iconRect.maxX - drawn.width + 1,
-            y: iconRect.minY - 1,
-            width: drawn.width,
-            height: drawn.height
-        ))
     }
 }
 

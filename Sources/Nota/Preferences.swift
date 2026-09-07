@@ -196,6 +196,7 @@ final class Preferences {
         static let footerCharacters = "footerShowsCharacters"
         static let footerImages = "footerShowsImages"
         static let footerLines = "footerShowsLines"
+        static let footerFormat = "footerShowsFormat"
         static let footerEncoding = "footerShowsEncoding"
         static let footerLineEndings = "footerShowsLineEndings"
         static let footerCursorPosition = "footerShowsCursorPosition"
@@ -203,6 +204,7 @@ final class Preferences {
         static let hidesTabBar = "hidesTabBar"
         static let autoHidesTabBar = "autoHidesTabBar"
         static let hidesTrafficLights = "hidesTrafficLights"
+        static let hidesBookmarkToggleButton = "hidesBookmarkToggleButton"
         static let hidesBookmarkButton = "hidesBookmarkButton"
         static let hidesSettingsButton = "hidesSettingsButton"
         static let language = "appLanguage"
@@ -421,6 +423,11 @@ final class Preferences {
         set { setFooterSegment(newValue, current: footerShowsLines, key: Key.footerLines) }
     }
 
+    var footerShowsFormat: Bool {
+        get { defaults.object(forKey: Key.footerFormat) as? Bool ?? true }
+        set { setBoolean(newValue, current: footerShowsFormat, key: Key.footerFormat) }
+    }
+
     var footerShowsEncoding: Bool {
         get { defaults.object(forKey: Key.footerEncoding) as? Bool ?? true }
         set { setBoolean(newValue, current: footerShowsEncoding, key: Key.footerEncoding) }
@@ -469,7 +476,20 @@ final class Preferences {
         set { setBoolean(newValue, current: hidesTrafficLights, key: Key.hidesTrafficLights) }
     }
 
-    /// The bookmark button at the strip's trailing edge; ⇧⌘D still opens it.
+    /// The Bookmark button at the strip's trailing edge, the one that
+    /// bookmarks the tab in front; ⌘D still does it.
+    var hidesBookmarkToggleButton: Bool {
+        get { defaults.bool(forKey: Key.hidesBookmarkToggleButton) }
+        set {
+            setBoolean(newValue, current: hidesBookmarkToggleButton,
+                       key: Key.hidesBookmarkToggleButton)
+        }
+    }
+
+    /// The Bookmarks button beside it, the one that opens the picker; ⇧⌘D
+    /// still opens it. The key is the older `hidesBookmarkButton`, from when
+    /// this was the only bookmark button in the strip, so a session that
+    /// switched it off keeps it off.
     var hidesBookmarkButton: Bool {
         get { defaults.bool(forKey: Key.hidesBookmarkButton) }
         set { setBoolean(newValue, current: hidesBookmarkButton, key: Key.hidesBookmarkButton) }

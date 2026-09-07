@@ -25,7 +25,10 @@ protocol PillActionResponder: AnyObject {
 class PillView: NSView {
 
     static let height: CGFloat = 34
-    static let width: CGFloat = 300
+    /// How wide a pill is. Overridable, and overridden exactly once: the
+    /// format offer carries a sentence and two words rather than a field, and
+    /// at 300 the sentence truncates. Every other pill is the one width.
+    class var width: CGFloat { 300 }
     /// The air between two pills stacked in one corner.
     static let gap: CGFloat = 6
     private static let cornerRadius: CGFloat = 10

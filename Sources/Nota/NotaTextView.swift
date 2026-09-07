@@ -29,6 +29,11 @@ final class NotaTextView: NSTextView {
     /// Text files were dropped on the editor. They belong in tabs of their
     /// own, which only the window controller can make.
     var onOpenFiles: (([URL]) -> Void)?
+    /// A whole board's worth of text arrived at once — a paste, or a drop
+    /// into the text. Typing is a letter at a time and waits for the pause
+    /// after it; this is a note appearing whole, and whatever wants to look
+    /// at what the note now says can look at once.
+    var onBulkInsert: (() -> Void)?
 
     /// Vim's first refusal on a key press. Returning true swallows it.
     var vimKeyHandler: ((NSEvent) -> Bool)?
@@ -699,7 +704,9 @@ final class NotaTextView: NSTextView {
     override func readSelection(from pboard: NSPasteboard) -> Bool {
         pasteboardBeingRead = pboard
         defer { pasteboardBeingRead = nil }
-        return super.readSelection(from: pboard)
+        let read = super.readSelection(from: pboard)
+        if read { onBulkInsert?() }
+        return read
     }
 
     /// `NSTextView` asks this which flavour to take; the default picks by the
@@ -892,7 +899,9 @@ final class NotaTextView: NSTextView {
         guard let type = droppableType(on: sender) else {
             return openable.isEmpty ? super.performDragOperation(sender) : true
         }
-        return readSelection(from: sender.draggingPasteboard, type: type) || !openable.isEmpty
+        let read = readSelection(from: sender.draggingPasteboard, type: type)
+        if read { onBulkInsert?() }
+        return read || !openable.isEmpty
     }
 
     private func claimsDrag(_ sender: NSDraggingInfo) -> Bool {

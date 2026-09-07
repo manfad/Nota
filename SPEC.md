@@ -120,8 +120,11 @@
 - Settings toggle "Word wrap" (default on). Off: a long line runs on and the editor scrolls sideways; the gutter stays
   pinned at the left edge. The Markdown render always wraps.
 - Settings (⌘,): a source list of eight pages down the left — General, Appearance, Editor, Preview,
-  Tab bar, Status bar, Shortcuts, About — over one shared Save button, which applies every page's draft
-  together and is greyed until something changes. The sidebar is a `.sidebar`-material column, 180pt,
+  Tab bar, Status bar, Shortcuts, About. There is no Save button: every control writes its own
+  preference the moment it changes and the app follows at once — a switch on the flip, a popup on the
+  pick, the size field on Return or on the focus leaving it, a shortcut on the key being recorded.
+  Language and theme rebuild the dialog after writing, so the new wording is on screen without closing
+  it. The one refusal is a shortcut clash (below): it is not written at all. The sidebar is a `.sidebar`-material column, 180pt,
   running the full height with the traffic lights over it (the titlebar is transparent and the title is
   not drawn); each row is an accent-coloured SF Symbol beside its name, and the page on screen is a
   rounded row filled in the accent colour. The pane beside it carries the page's title at the top,
@@ -132,11 +135,16 @@
   — language and theme. The language popup lists five, each naming
   itself in its own script: System Default, English, 简体中文, 繁體中文, Bahasa Melayu. System Default reads
   the Mac's own preferred language — `zh-Hant` / `zh-TW` / `zh-HK` → 繁體中文, `zh-Hans` / `zh-CN` / bare
-  `zh` → 简体中文, `ms` → Bahasa Melayu, anything else English. **Appearance** — font family, size, line
+  `zh` → 简体中文, `ms` → Bahasa Melayu, anything else English. The footer's counts speak the language too —
+  "182 字 · 1860 字符", "182 字 · 1860 字元", "182 perkataan · 1860 aksara" — one word for one and for many,
+  since neither Chinese nor Malay has a plural; and a new tab is 无标题 / 未命名 (Untitled 2, 无标题 2) while
+  Malay keeps Untitled. A name a tab already has stays when the language changes (2026-09-07). **Appearance** — font family, size, line
   spacing, editor padding, sidebar side (Left / Right, default Right). **Tab bar** — a first group of "Show tab bar" and "Auto-hide tab bar", then a
-  second group for what the strip shows: Traffic lights, Bookmark button, Settings button; no footnote —
-  the keys (⌘T, ⇧⌘J, ⇧⌘D, ⌘, and ⌘W) all keep working with the strip and its buttons hidden, but the page
-  does not say so. "Auto-hide tab bar" and "Traffic lights" are both greyed while
+  second group for what the strip shows: Traffic lights, Bookmark button, Bookmark dialog button, Settings
+  button; no footnote — the keys (⌘T, ⇧⌘J, ⌘D, ⇧⌘D, ⌘, and ⌘W) all keep working with the strip and its
+  buttons hidden, but the page does not say so. "Bookmark dialog button" keeps the older
+  `hidesBookmarkButton` key, from when it was the strip's only bookmark button, so a session that switched
+  it off keeps it off; the new row writes `hidesBookmarkToggleButton`. "Auto-hide tab bar" and "Traffic lights" are both greyed while
   "Show tab bar" is off — turning the strip off already takes the lights with it, the way zen does, so
   there is nothing left for either row to do. Whenever the lights are gone from their corner, the strip
   takes their slot, starting at the same 12pt inset it uses beside a left sidebar; a tab torn off from it
@@ -201,16 +209,18 @@
   against: ⌘Q ⌘H ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A ⌘M, and neither is ⌘N, Nota's older new-tab key, nor ⌘R and ⌘E, the
   two Find items that stay put.
   A row records the next combination you press: ⌘ or ⌃ has to be in it (⌘ with a letter is fine), Esc
-  cancels, Delete puts the command's own key back. Edits are a draft like everything else here.
-  Two rows on one combination, or a row on a reserved one, shows a red line naming both and holds Save
-  back until it is resolved. **Reset to Defaults**, at the foot of the page, clears every override in
-  the draft.
+  cancels, Delete puts the command's own key back. A key that lands somewhere free is written at once,
+  like everything else here. Two rows on one combination, or a row on a reserved one, is refused
+  instead: nothing is written, the field goes back to the key that is stored, and a red line names both.
+  The line stays until the next key that lands somewhere free, on any row. **Reset to Defaults**, at the
+  foot of the page, clears every override there and then.
   Only the moved keys are stored, as JSON under one defaults key, so a default Nota changes later moves
   with it. The menu bar reads the table when it is built and is rebuilt whole the moment the table
   changes — the menu items, the bookmarks toggle and the find bar's tooltips all come from that one
   place, so a moved key works everywhere at once.
 - Status bar: `[MODE]` bottom-left when vim mode is on · `N words · N characters` (· `3 / 7 done` on a `.md` with
-  task items) · `N pt` beside gear.
+  task items) · `N pt` beside gear. The trailing row is format · encoding · line ending · cursor, each its own
+  clickable badge and each switchable off in Settings › Status bar (see The format badge and the detector).
 - **Lists continue themselves (done 2026-09-05)** — Return at the end of a list item opens the next one, in any text
   tab and not only a `.md`: the same indent, the same delimiter and the counter stepped on once. `1.` → `2.`,
   `3)` → `4)`, `a.` → `b.`, `z.` → `aa.`, `A.` → `B.`, `viii.` → `ix.`, `IV.` → `V.`, and a bullet (`-`, `*`, `+`)
@@ -243,8 +253,9 @@
   vim mode but insert, where the same keys are vim's own.
 
 ## Markdown preview — three modes (⌘P cycles, View menu; per tab, remembered in the session)
-- **Editor** (default), **Split**, **Reading**. ⌘P cycles editor → split → reading → editor; ⇧⌘P jumps to reading and
-  back out to the editor. The View menu keeps "Mode Toggle" (checkmarked in split and reading) and adds
+- **Editor** (default), **Split**, **Reading**. ⌘P walks editor → split → reading → split → editor: split is the
+  middle, and from it the key moves on from wherever the tab came, so one press undoes the last and the render never
+  jumps from full to gone (2026-09-07; it used to cycle round). ⇧⌘P jumps to reading and back out to the editor. The View menu keeps "Mode Toggle" (checkmarked in split and reading) and adds
   "Reading Mode" (checkmarked in reading). Both checkmarks are the front tab's.
 - Rendered files only: a note whose file is spelled `.md` (`.markdown`, `.mdown`, `.mkd`; 2026-09-06), saved — or `.tex` (`.latex`, `.ltx`), which gets the LaTeX
   render below instead, or `.html` (`.htm`, `.xhtml`), which gets the HTML preview, and everything else here unchanged. Every
@@ -261,7 +272,9 @@
   while a column is closed, since the controller lays the divider out against the window's edge regardless of the
   delegate — a 1pt dark line right beside the sidebar's, so the seam read as two lines in dark mode.
 - Mode control: what the corner slot (below) holds over a tab with a render. Three segments —
-  `pencil` / `rectangle.split.2x1` / `book`, tool tips naming the state and its keys —
+  `long.text.page.and.pencil` / `rectangle.split.2x1` / `book` (the editor's was a bare `pencil` until
+  2026-09-07; a page with a pencil on it says "the text itself", where the pencil alone only said "write"),
+  tool tips naming the state and its keys —
   floating over the top-trailing corner of a column, 8pt under the strip and 12pt off the trailing edge, and nothing
   behind it — the control's own rounded bezel is the whole of it, with no plate or hairline around that. There is one per
   column: the editor's in editor and split modes, the preview's in split and reading. Split shows both, one in each
@@ -293,7 +306,8 @@
   file opens that tab in reading. Session restore ignores it — the tab's saved mode wins.
 - Native: Foundation's Markdown parser (`AttributedString(markdown:)`, full interpretation) + Nota's own block styling.
   No WebView, no dependencies, no theming. Same font family/size as the editor; headings scale from it (H1 ×1.6 … H6 ×1.0,
-  semibold); lists indented with `•` / `1.`; block quotes with a leading hairline bar in secondaryLabelColor; code spans
+  semibold; H1 and H2 underlined by a hairline the pane draws margin to margin, GitHub's way, as an attribute on
+  the heading rather than a character of its own, so the text a click maps back is unchanged); lists indented with `•` / `1.`; block quotes with a leading hairline bar in secondaryLabelColor; code spans
   and fenced blocks in the monospaced system font on labelColor @ 5%; thematic break = hairline; tables as aligned
   monospaced rows (best effort); links underlined in labelColor (monochrome), clickable; emphasis/strong/strike.
 - `Image N` chips render as the actual pictures from the asset store, scaled to the pane width; remote images are not
@@ -307,6 +321,13 @@
   key collapses the selection to one end the way any selection collapses. The same is true of a `.tex` tab's blocks
   and of a display formula, whose `$$` fences are part of what is selected. Moving the caret in the editor lights the block it is in and scrolls the preview to keep it visible. One block
   lit at a time; the band clears when the text changes under it. No proportional scroll following any more.
+- A **click** is the block click above; a **drag** is not (done 2026-09-07). A press that stays put is the jump it has
+  always been, and a press that sweeps selects the text it crosses, the way it does on any page — double-click a word,
+  triple-click a paragraph, ⌘C copies. The two are told apart by waiting: `NSTextView`'s own tracking loop runs to the
+  mouse up, and only a press that neither moved (a few points of slop for a shaky hand) nor left anything selected is
+  reported as a block click, and that one puts the render's own selection back to nothing before it jumps — the render
+  is not where a caret lives. A selection jumps nowhere and leaves the lit band exactly where it was. The pane still
+  refuses first responder in split, so the caret and ⌘F stay the editor's, and a fresh render starts unselected.
 - **Task lists (done 2026-09-04).** `- [ ]` / `- [x]` (`[X]` too, and in an ordered list) draw as real checkboxes —
   an SF Symbol `square` / `checkmark.square.fill` at the block's own font size, standing in the slot the bullet would
   have taken, so a task item shows a box and no bullet and the `[ ]` never reaches the page. Foundation's parser has
@@ -345,6 +366,69 @@
   `$$` or its fence in the source, and a caret in that source lights it. A `$$…$$` inside a sentence stays in the
   sentence, set in display style where it stands.
 
+## The format badge and the detector (done 2026-09-07, Todo 1)
+- What a tab is *read as* is its file's extension and always was. The badge is the reader's own word on top of it:
+  a fourth clickable capsule in the footer's trailing row, ahead of the encoding, so the row reads **format ·
+  encoding · line ending · cursor** — what the text is, then how it is written down, then where the caret is in it.
+  It says `Plain`, `MD`, `LaTeX`, `HTML`, `SVG`, `JSON`, `YAML`, `TOML`, `XML`, `CSV` or `SQL`, and it
+  is empty over a PDF or a picture, which is not read as anything — it *is* something.
+- Clicking it pops the same kind of footer menu the encoding half does: those eleven in that order, the tab's own
+  ticked. Picking one applies at once — the corner slot's Editor · Split · Reading segments appear or go, ⌘P works
+  or stops working, the split builds or tears down, the tab's icon follows, the footer's task count follows, and a
+  `.json` or `.html` picked by hand carries the Beautify / Compact segment like any file spelled that way. Picking
+  the format the *name* already says puts the override down rather than writing it: the name is saying it, and a
+  later Save As is free to change what the tab is again. Picking `Plain` on a real `.md` is the other
+  direction — the render goes and the whole window is source.
+- It is an override in both directions and it is kept on the tab, not on the app: `Note.formatOverride`, written to
+  `session.json` by the one spelling that means that format (`json`, `md`, `txt`) and restored with the tab. A
+  spelling a later Nota does not know is simply not an override.
+- Save panel: a tab the badge is showing as JSON opens the Format combo on `json`, so Save writes `blob.json` with
+  no second decision — and every other extension is still one click away in the same combo, since this is a help
+  and not a rule. After the write, an extension that means the same format drops the override — the name says it
+  now — and one that means something else leaves it standing: the reader said what the tab is, and a file name did
+  not unsay it.
+- **A file whose format the reader has changed wants a new name.** Picking a format on a tab that *has* a file, and
+  that the file's own extension does not already say, marks the tab dirty exactly as an edit does — the dot in the
+  strip, the close confirmation, the session record — and leaves it owing a name: the next ⌘S opens the save panel
+  instead of writing over `notes.txt`, with `md` already picked in the Format combo. Picking the name's own format
+  again puts that need down; it does not put the dirty mark down, since dirty is one flag for the whole tab and
+  there may be an edit under it this had nothing to do with. Answering the panel settles the name whichever way it
+  is answered: saved as `notes.md` the override is dropped, saved as `notes-copy.txt` the override stands and the
+  reader's word with it, and either way the *next* ⌘S writes where that one landed rather than asking again. The
+  need is kept on the tab (`Note.needsSaveAs`, written to `session.json` only where it is owed), so a tab quit in
+  that state comes back in it.
+- Settings › Status bar has a **Format** row beside Encoding, on by default. The badge is also the one footer
+  region that gives way in a narrow window: four badges at their full width would put a floor under the window
+  itself, and the window's floor is the columns' business.
+- **The detector.** `FormatDetector.detect(_:)` is a pure look at the characters — no file, no AppKit — asked in a
+  fixed order and answering `nil` unless it is sure: JSON that parses, an `<?xml` prolog or an `<svg` or an `<html`
+  root, `\documentclass`, two lines of `CREATE TABLE` / `INSERT INTO` / `SELECT` / `PRAGMA`, a `[section]` with two
+  keys under it, three `key: value` lines with no Markdown in them, three even records of two or more fields, and
+  two different Markdown signals. Under three non-blank lines or sixty characters it does not look at all. Prose
+  with a colon in it, a shopping list of one kind of line, and three plain paragraphs are all `nil`, deliberately:
+  an offer that is wrong is worse than no offer, because the reader has to read it and dismiss it and then it was
+  noise.
+- **The offer, when it is the typing that produced the text.** A floating pill in the editor column's
+  bottom-trailing corner — the reload offer's corner, and never up at the same time as it: **`JSON detected` ·
+  Preview in JSON · Not now**. Non-modal, never takes the keyboard, and gone the moment either word is clicked.
+  Never an alert here: an alert would stop the typing that produced the text.
+- **The offer, when the note arrived whole.** A paste or a drop gets a real question instead — a sheet on the
+  window, `Markdown detected` over *Preview this tab in Markdown? You can change this any time from the format
+  badge in the footer.*, with **Preview in Markdown** as the default button (Return) and **Not now** beside it.
+  Nothing is interrupted: the typing an alert would have stopped is not happening, and the reader is looking
+  straight at what they have just put there. The pill never stands under it — a paste while it is up takes it down
+  first — and one question at a time: a second paste while the sheet is standing is ignored, since the sheet
+  answers for the tab. Both words do exactly what the pill's do: the first is the footer's own `setFormat`, and
+  "Not now" is remembered against the reading it declined, so neither half puts the same guess to that tab twice.
+- It is offered to **untitled notes only** — no file, no override, no preview of its own. A file is never offered
+  anything, not even a `.txt`: a name is its author saying what it is, and a `.txt` full of JSON is somebody's
+  `.txt`. The badge is there for anybody who disagrees, and one click does it.
+- It waits out the typing (about 1.5s after the last keystroke) and does not wait at all after a paste or a drop —
+  a note that arrived whole is not typing that might carry on, so the question is there when the reader looks up.
+  Once per tab per reading: "Not now" is remembered against the kind it declined, and only text that reads as
+  something *else* asks again. Picking a format in the footer takes the pill down, and so does switching
+  tabs — the reading is asked afresh for the tab you land on.
+
 ## The corner slot (done 2026-09-05, Todo 4; four options 2026-09-06, Todo 30)
 - One band per column, and the front tab says what stands in it. The band, the hover, the fade, the hit testing and
   the drop out of ⌘F's way are exactly as the mode control's above; only the thing in the corner changes.
@@ -364,9 +448,10 @@
   in one column and "Compact" in the other would be a bug you could see.
 
 ## Beautify / Compact — JSON and HTML (done 2026-09-05, Todo 5; HTML and the fourth segment 2026-09-06, Todo 30)
-- The action segment shows `arrow.up.left.and.arrow.down.right` "Beautify JSON" / "Beautify HTML" when the file is pulled
-  together, and `arrow.down.right.and.arrow.up.left` "Compact JSON" / "Minify HTML" when it is already laid out — one
-  pair of arrows pointing out and pointing in, so either says what the other would do (the Beautify side was
+- The action segment shows `rectangle.expand.vertical` "Beautify JSON" / "Beautify HTML" when the file is pulled
+  together, and `rectangle.compress.vertical` "Compact JSON" / "Minify HTML" when it is already laid out — one
+  box opening out and closing up, so either says what the other would do (a pair of diagonal arrows until
+  2026-09-07; the Beautify side was
   `text.alignleft` until 2026-09-06 evening). One direction,
   because the file is in one of the two shapes already and the only thing worth offering is the other one. A page is
   *minified*, which is the word its own tools use; a document is *compacted*. All four tool tips are localised.
@@ -503,9 +588,21 @@
   file needs — every node of a one-line export begins on line 1, so the line alone says nothing, and the caret walks
   the tree down as it moves along the line. A node whose parser could not say how wide it is falls back to the line,
   and then the *outermost* node beginning that line is lit.
-- A file that will not parse shows one centred line in the editor's font in place of the tree —
-  "Not valid JSON: line 3 — Expected `:`", the format named by how the file is spelled, localised — and the last
-  good tree is *not* kept: a tree that no longer matched the text beside it would be a map of somewhere else.
+- A file that will not parse shows a centred block in place of the tree, and the last good tree is *not* kept: a
+  tree that no longer matched the text beside it would be a map of somewhere else. The block is a headline in
+  `labelColor` naming the format the file is spelled as — "Not valid JSON" — and under it, quieter, the line and the
+  parser's own reason: "Line 3 — Expected `:`". A file that *parses* but is one plain value — YAML and TOML read a
+  pasted page or a paragraph of prose as a single scalar, and one row holding the whole file is not a reading of it —
+  gets the same block, its detail "The whole file is one plain value, not a YAML document." And where
+  `FormatDetector` reads the text as something else, a third line says so and says what to do about it: "It reads as
+  HTML — choose that in the footer's format badge." Centred, word-wrapped, three quarters of the column's width at
+  most, all of it localised (done 2026-09-07, Done 47).
+- The tree's one column is exactly as wide as the column it is drawn in, so a row too long for it is cut off with an
+  ellipsis rather than running off the edge: a row is a line of the tree, not a line of the file, and a leaf holding
+  a whole page in one string used to make the column as wide as the string. There is nothing to scroll sideways to.
+- ⌘F searches the tree itself in reading mode, where the outline has the keyboard (Done 47): the keys and the
+  values as the rows spell them, a match opening every branch above it and taking the editor's caret with it. In
+  split the editor has the keyboard and ⌘F is the editor's, the same rule the page keeps.
 - ⌘+ / ⌘- are the editor's font size here, as they are for Markdown: the tree's own fonts follow it. Nothing new is
   persisted — the mode the tab is in is all the session keeps. The file stays a text note in the editor; the preview
   is read-only and dirty and save semantics are untouched. Untitled notes have no tree; Save As to `.json` is what
@@ -752,8 +849,32 @@
   its scroll. Relative URLs resolve beside the file. A link that leaves the page — http(s), another file — opens in
   the browser; an in-page `#` stays. The keyboard belongs to the page in reading mode, and to the editor in the other
   two: a click in split must not steal the caret.
-- No block sync: a DOM is not a list of source ranges, and a click in the page is a click in the page (links still
-  open).
+- **A field in the page is the one exception (done 2026-09-07).** A page can carry an `input`, a `textarea`, a
+  `select` or a `contenteditable`, and clicking one used to focus it in the DOM while every keystroke went on landing
+  in the editor beside it — the form looked live and took nothing. A fourth injected script (same separate world)
+  reports `focusin` / `focusout` on editable elements; while the page holds one, `HTMLPageView` accepts first
+  responder and is given it, since WebKit delivers key events only to a first responder. Only a field does this — a
+  click anywhere else in the page still leaves the caret where it was — and the keyboard is never thrown back:
+  losing the field ends the exception and leaves the keys where they are, so the reader's next click decides. Losing
+  first responder ends it too, whatever the DOM still believes is focused, so the click after that is ordinary again.
+  A fresh load starts with no field held. Reading mode is unchanged; it has the keyboard already. While the page has
+  it, ⌘F is the page's own bar and the rest of the nil-targeted items walk the responder chain as they always did.
+- **A press in the page reveals its tag (done 2026-09-07).** A DOM is still not a list of source ranges, so there are
+  no blocks and no band — but a press does its best rather than nothing. An injected script (`mousedown`, capture
+  phase, never `preventDefault`, in the same separate world as the find script) reports the pressed element's place in
+  `document.querySelectorAll('*')` order along with the tag names up to it; `HTMLSourceMap` tokenises the page's own
+  text with `HTMLFormat`'s walker — one tokeniser over a page, not two — and lines the source's start tags up against
+  that list by name. The DOM has elements no file wrote (an implied `html`, `head`, `body` or `tbody`; anything a
+  script added) and occasionally the file has tags the DOM dropped, so the walk skips whichever side is ahead when the
+  other's name turns up within four, and answers **nothing** when neither can find the other: a caret on the wrong tag
+  is worse than no caret. What is revealed is the start tag, or the whole element when it holds nothing but text and
+  inline markup and the walk found its end tag — `<h1>Hi</h1>` whole, `<div>` by its tag alone. It is `onSourceReveal`,
+  the call a tree row and a grid cell make: the editor selects and scrolls, the page keeps the keyboard, and a link
+  still opens (a press inside one is left alone). The page reports the press in every mode; the window acts on it
+  where a reveal means anything, which is split — `revealSource` has always declined reading, where there is no
+  editor on screen for a caret to be moved in. The map is rebuilt with each load and
+  is `nil` for anything that is not the note's own text — a book's chapter, the message a broken drawing gets, and a
+  page the tokeniser refuses (an unterminated comment, an unclosed quote, nesting past 256).
 - ⌘F searches the page (done 2026-09-04), in reading mode, where the page has the keyboard: the same pill in the same
   corner, "Find in page", the same counts and the same keys. In split the editor has the keyboard and ⌘F is the
   editor's, unchanged. The search itself is a script injected into every page alongside the scroll reporter, in the
@@ -770,7 +891,10 @@
 - Untitled notes and every other extension have no HTML preview. Save As to `.html` is what turns a note into one.
 - An `.svg` is the same arrangement (decided 2026-09-04): text you edit, a drawing beside it, the same pane and the
   same three modes, and the View item is the same "Mode Toggle". It is handed to WebKit as `image/svg+xml`, so the root
-  `<svg>` is the document rather than a tag inside a page the file never had. It is never one of the picture tabs
+  `<svg>` is the document rather than a tag inside a page the file never had. It is checked first (`SVGCheck`, an
+  `XMLParser` pass): an empty or unparsable drawing gets Nota's own page — "This drawing cannot be shown" over the
+  line and column — in the column's colours, light or dark, since WebKit's XML error page is black type in a pink
+  box whatever the appearance and prints the find bar's injected stylesheet as text under it (Done 46). It is never one of the picture tabs
   below — its bytes are text, and the system filing it under images does not make it one.
 - Beautify / Minify a `.html` file. The corner slot on an HTML tab offers the same two shapes the `.json` tab
   offers, over Nota's own walker (`HTMLFormat`) rather than any HTML parser. Beautify indents by nesting, two spaces
@@ -872,6 +996,14 @@
   when it did not, so a query that asked for its columns in any order still lands on the right one. A cell that
   cannot be placed — a computed column of a query, a name in neither list, a tuple that will not read — is the whole
   tuple instead, and never nothing.
+- And whatever else is picked out, in the same one call (done 2026-09-07, Done 49). A run of whole rows — a click in
+  the `#` gutter, a ⇧-click, Space — is the tuples those rows were written as, and not the values inside them; a
+  rectangle a drag or a ⇧-arrow grew is the values it crossed. Several of anything is *one* range, from the earliest
+  start to the latest end with whatever lies between them included, the way a selection over three paragraphs of text
+  is one range. The editor follows a drag rather than staying on the cell the press landed on: every mouse event that
+  actually moves an edge says so again, and one that moves nothing says nothing. The schema is asked once per
+  selection rather than once per cell, so a drag over a rectangle does not put a `PRAGMA table_info` to SQLite for
+  every cell it crosses. Same rules as the single click throughout: split only, and the grid keeps the keyboard.
 - A query's rows jump too, when they are one table's rows (decided 2026-09-05, Todo 6-C). The last statement of the
   box is read once by `SQLQueryRewrite` — loosely, since SQLite has already said the text is good — and if it is
   plainly `SELECT <list> FROM <one table> [WHERE / ORDER BY / LIMIT …]` the page is asked of that query with the
@@ -923,10 +1055,41 @@
   open where it was left; a session written before this has neither key and opens on the first table with an empty
   box. `PreviewContent` grew one callback for it — `onStateChange`, "the content wrote something on the note" — and
   the window answers it with a session save and nothing else.
-- ⌘F is the editor's, unchanged, in every mode: the find bar's machinery bands ranges in text, and a page of cells is
-  not text — the query box is how you find a row in a database. Nothing about the grid takes the find bar's corner.
+- ⌘F searches the grid (done 2026-09-07, Done 49): the same pill in the same corner, `Find in table`, the same counts
+  and the same keys, in reading mode, where the grid is what is being read. In split ⌘F is the editor's, unchanged
+  — and it stays the editor's after a click has put the first responder in the grid, which is why the rule is the
+  pane's `takesKeyboard` and not where the first responder is. The grid and the query box both implement
+  `performTextFinderAction(_:)`, which makes them the target whether they answer or not, so out of reading mode both
+  hand the action straight back up the responder chain (`nextResponder?.tryToPerform`) and both keep the menu item
+  enabled — it is the editor's find the key is about to run. The *whole* table is searched and
+  not the hundred rows on screen, so `3 of 412` is exact and a match eleven pages down turns the page to it. It is
+  one statement rather than a walk over the pages: `row_number()` over the very `ORDER BY` the page is cut with gives
+  each hit its place in the table, and `instr(lower(CAST(col AS TEXT)), lower(?))` OR-ed over the columns is the
+  sieve — which is case-insensitive for ASCII and exact for everything else, coarser than the editor's bar on
+  purpose. Which columns of a returned row are the match is then decided in Swift from each value's *display* text,
+  so `NULL` is the word on screen, a real is `12` rather than `12.0`, and a blob is its size. A query's result is
+  searched the same way, over the reader's own query as a sub-select. ⌘F with the caret in the query box searches the
+  rows rather than the five lines of the question. See the CSV section for the rest of the behaviour, which the two
+  grids share.
 - Untitled notes and every other extension have no SQL preview. Save As to `.sql` is what turns a note into one.
   `Examples/Shop.sql` is the demo: four tables that know about each other, and more rows than one page.
+- A dump does not have to be SQLite's own (2026-09-07). A `.sql` from `mysqldump`, phpMyAdmin or `pg_dump` loads
+  instead of stopping at its first foreign statement — "near SET: syntax error" on the `SET NAMES utf8mb4` every
+  MySQL export opens with was the report. MySQL's session state (`SET`, `LOCK`/`UNLOCK TABLES`, `USE`), Postgres's
+  (`SET`, `GRANT`/`REVOKE`, `SELECT pg_catalog.set_config`/`.setval`, `CREATE EXTENSION`/`SEQUENCE`, `ALTER … OWNER
+  TO`, a constraint added after the fact) and psql's own `\` meta-commands are skipped as carrying no data;
+  `START TRANSACTION` runs as `BEGIN`. A `CREATE TABLE`'s MySQL decoration (`ENGINE=`, `AUTO_INCREMENT`, `UNSIGNED`,
+  a column's `CHARACTER SET`/`COLLATE`/`COMMENT`, `ON UPDATE CURRENT_TIMESTAMP`, `enum(…)`, `KEY`/`INDEX` lines — a
+  column merely *named* `key` is a column) and Postgres's (`character varying`, `timestamp with/without time zone`,
+  `boolean`, `numeric`, `bytea`, `json[b]`, `uuid`, `text[]`, `::text` casts, `DEFAULT nextval(…)`, `public.`
+  prefixes, a `CHECK (… ANY (ARRAY[…]))`) are stripped before SQLite sees them, while `PRIMARY KEY`, `FOREIGN KEY`,
+  SQLite's own collations and `WITHOUT ROWID` pass through, and `CREATE INDEX … USING btree` loses only the `USING`.
+  MySQL's backslash escapes in a row's strings (`'O\'Brien'`, `\n`, `\\`) are decoded once the dump has shown
+  itself to be MySQL's. A `pg_dump` `COPY table FROM stdin` block is read row by row into batched inserts, `\N` and
+  its escapes resolved, `t`/`f` as 1/0 where the column was declared boolean, each row still traceable to its own
+  line in the file. Anything still foreign stops the run as before, naming the statement as the file wrote it. See
+  `SQLDumpDialect`. `Examples/sql/MySQL.sql` (a phpMyAdmin export) and `Examples/sql/PostgreSQL.sql` (a `pg_dump`
+  export) are the same shop twice, with every spelling above in them, and the tests load both.
 
 ## CSV preview (done 2026-09-06, Todo 27)
 - A `.csv` or `.tsv` file is a tab with a preview beside it, exactly the way a `.sql` is: the same three modes, the
@@ -980,6 +1143,13 @@
   record's range begins where the record begins. A cell that cannot be placed falls back to the whole record and
   never to nothing: a ragged row that never wrote the field the column stands for, and a click with no column under
   it. The header row is unchanged: a click there sorts.
+- And whatever else is picked out, in the same one call (done 2026-09-07, Done 49). A run of whole rows — a click in
+  the `#` gutter, a ⇧-click, Space — is `sources`, the records' own lines; a rectangle a drag or a ⇧-arrow grew is
+  the `fieldSources` it crossed. Several of anything is *one* range, from the earliest start to the latest end with
+  whatever lies between them included, the way a selection over three paragraphs of text is one range. The editor
+  follows a drag rather than staying on the cell the press landed on: every mouse event that actually moves an edge
+  says so again, and one that moves nothing says nothing. Same rules as the single click: split only, and the grid
+  keeps the keyboard.
 - Off the main thread, always: the read is asked on a serial queue and answered back on the main one carrying a
   token, so an answer about the file two keystrokes ago is dropped rather than drawn. An ordinary file is read again
   ~150 ms after typing stops, on the same debounce the Markdown render uses. A file past the `BigFile` threshold is
@@ -988,7 +1158,20 @@
   it was on; a read the *file* asked for drops the sort, since the columns may not even be the same ones.
 - Nothing new is persisted: the mode the tab is in is all the session keeps, and `sqlTable` / `sqlQuery` stay a
   dump's. The file stays a text note in the editor — the preview is read-only and dirty and save semantics are
-  untouched. ⌘F is the editor's, unchanged, in every mode.
+  untouched.
+- ⌘F searches the table (done 2026-09-07, Done 49): the same pill in the same corner as every other column's,
+  `Find in table`, `canReplace` off since a preview is read-only, and `3 of 412` / `412 matches` / `1 match` /
+  `No matches` / `2000+` in the same words a document's says them. The *whole* table is searched in the order on
+  screen — `CSVTable.ordering` and not the file's — so sorting by city changes which row the first match is on, and
+  a match on the second page turns the page to it rather than being missed. Every match wears the editor's quiet
+  band; the one being stood on wears AppKit's find yellow with its text spelled black, and *is* the cell cursor,
+  since a match in a grid is a cell. The editor's caret follows it the way it follows a clicked cell — the field as
+  it is written, quotes and all — and the query field keeps the keyboard. ⌘G and ⇧⌘G wrap and go on working with the
+  pill down; ⌘E takes the cell the cursor is on for the query. Escape puts the bands down, leaves the reader standing
+  on the match and hands the keyboard back to the grid. A refresh, a sort, a page turn, a re-run, a table pick — each
+  one moves the rows under the list, so each one searches again and keeps the match the reader was on if it is still
+  there; a page of other columns drops it. The bar row drops by the height of the pill while it is up, the same way
+  the mode control does. Nothing of this reaches the file: a search is numbers held in `GridFindSession`.
 - Untitled notes and every other extension have no table preview. Save As to `.csv` is what turns a note into one. A
   `.tsv` wears the `.csv` drawing in the strip. `Examples/Products.csv` is the demo: forty rows, quoted fields with
   commas and quotes in them, and one record written over two lines.
@@ -1076,23 +1259,24 @@
   wash fades in and out over the same 0.12s the tab's dot→✕ cross-fade takes, rather than snapping on beside it. The
   strip buttons (+, bookmark, gear) wear the same wash and fade, one step darker at 9% (11.5% dark) while held; the
   disc behind a ✕ is 10% (13% dark) and 18% (22% dark) under a press.
-- The strip's top-right corner holds two buttons past the +: the bookmark button (the ⇧⌘J picker in bookmarks mode) and, last before the reserve, a Settings gear (⌘, by another door). Both pin at the trailing edge; the tabs and the + step left by exactly the slots they take.
+- The strip's top-right corner holds three buttons past the +, in this order (the first arrived 2026-09-07): a Bookmark button, `bookmark` and `bookmark.fill` once the front tab is one, which bookmarks that tab and unbookmarks it again — ⌘D by another door, tool tip "Bookmark" / "Remove Bookmark" with the key beside it, and greyed on a note with no file to bookmark; a Bookmark dialog button, `book.closed`, which is the ⇧⌘J picker in bookmarks mode (a closed book rather than a second ribbon, since two ribbons side by side said nothing about which was which); and, last before the reserve, a Settings gear (⌘, by another door). All three pin at the trailing edge, each in a 24pt slot with a 4pt gap; the tabs and the + step left by exactly the slots the visible ones take, and a hidden one hands its slot back and lets the rest close up.
 - The switcher's first row sits above its search field and never filters away: "Add new tab", with a `plus`, which ↑ from the top of the list reaches and Return (or a click) turns into a new tab, ⌘T by another door. It is there in the `@` mode too. It is a one-row table of its own, sharing the list's cell view and taking the list's own resolved table style, so it is drawn as a list row — same inset, same rounded selection highlight, icon and title at the list rows' own x. In the bookmarks panel the row is the front tab's bookmark instead: "Bookmark this tab" with a `bookmark`, or "Remove bookmark from this tab" with `bookmark.fill` once it is one, and choosing it is ⇧⌘D by another door; with no tab to bookmark it is greyed and takes no selection.
-- Every tab carries a leading icon for its kind, in the strip and in the switcher's rows, from `FileKindIcon`: most kinds (Markdown, plain text/no extension, PDF, EPUB, HTML, TeX, SQL, JSON, YAML, TOML, XML, CSV, common code and image extensions, and more — see `FileKindIcon.artStem(forExtension:)`) draw this app's own hand-drawn icon set, embedded as SVG text in the generated `FileKindArt.swift`; a kind the set has no art for falls back to an SF Symbol — pictures without art `photo`, logs `list.bullet.rectangle`, remaining code extensions `chevron.left.forwardslash.chevron.right`, an unsaved note `doc`, anything else `text.page` — with an older spelling behind any SF Symbol the running system lacks. Heading rows keep their bare indent, with no icon.
+- Every tab carries a leading icon for its kind, in the strip and in the switcher's rows, from `FileKindIcon`: a 96×64 rounded badge with the extension lettered inside it, drawn for 141 extensions and embedded as SVG text in the generated `FileKindArt.swift` (from `file-icon/` by `Icon/make-file-icons.py`). Every name gets one — a spelling the set did not draw twice folds onto the one it did (`.mjs` onto `js`, `.latex` and `.ltx` onto `tex`, `.zsh`/`.bash`/`.fish` onto `sh`, `.tif` onto `tiff`, `.mkd`/`.mdown` onto `md`, `.cc`/`.cxx` onto `cpp`, `.m`/`.mm` onto `c`), a name with no extension reads as `txt`, an unsaved note gets the empty badge (`untitled`) and a kind nobody drew gets the `?` badge (`unknown`), so nothing falls through to an SF Symbol. Each stem is drawn twice, outlined and solid; a bookmarked tab draws the solid one. The badge is three units wide to two high, so its slot is 24 × 16 and it stands 15pt high beside an 11pt title. Heading rows keep their bare indent, with no icon.
 - `@` as the switcher's first character (Done 9) swaps the list for the front `.md` tab's headings, indented by level, and the rest of the query fuzzy-filters those instead; `MarkdownHeadings` reads them straight from the note's own text — ATX and setext, fences skipped the way `MarkdownSourceMap` skips them — off the main thread once a note is past `BigFile.threshold`. A tab that is not `.md` answers with a quiet "No headings" row.
 - Choosing a heading puts the caret at its line start and scrolls it into view; in split or reading the render is walked to that block too, by hand through the `highlightBlock(containingSource:)` a caret move already drives.
 - The selected tab is always fully in view: at 40pt the strip stops shrinking and becomes a sliding window over the tabs, anchored on the selected one. Closing with the ✕ freezes the widths until the pointer leaves the strip, so a run of closes keeps each next ✕ under it; ⌘W does not freeze.
 - Tabs reorder by drag: the dragged tab rides the pointer and its neighbours slide into the gap; the order is the session's order.
-- Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab. Right-click a tab for Bookmark / Remove Bookmark, Reveal in Finder (greyed on an untitled note; the same item sits at the foot of the File menu as ⌥⌘R, for the front tab) and Close Tab. Closing the only tab closes the window too, the way the title-bar close button does: the last window hides, any other closes for real.
+- Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab. Right-click a tab for Bookmark / Remove Bookmark, Reveal in Finder (greyed on an untitled note; the same item sits at the foot of the File menu as ⌥⌘R, for the front tab) and Close Tab. Closing the only tab leaves a blank Untitled tab in its place and keeps the window; closing that blank tab — no file, nothing typed — is what closes the window, the way the title-bar close button does: the last window hides, any other closes for real. So ⌘W pressed over and over walks every tab out, pauses on an empty window, and one more stroke closes it (decided 2026-09-07; before this, the last tab took the window with it).
 - **Bookmarks** (Done 13). A bookmark is a file path, app-wide, kept in `session.json` beside the
   windows in the order they were added. ⇧⌘D bookmarks the tab in front — any named tab, PDFs and pictures included —
   and an untitled note is asked for a name first, staying unbookmarked if the save panel is cancelled. File ›
   Bookmarks holds that toggle (its title reads Remove Bookmark when the front tab is one), then every bookmark by file
   name with its kind icon and the full path as a tooltip, then Remove Missing Bookmarks; it is rebuilt on
   `menuNeedsUpdate` the way Open Recent is, except for the ⇧⌘D item itself, which is made once so the key equivalent
-  is in the tree before the menu is ever opened. A bookmarked tab wears a 7pt `bookmark.fill` badge on the corner of
-  its leading icon — bottom-right, moving to the bottom-left on a tab narrow enough that the unsaved dot has already
-  taken that corner. A `bookmark` button pins in the strip's top-right, in a 24pt slot of its own past where the +
+  is in the tree before the menu is ever opened; each bookmark's icon there is the filled art, 14pt high. A
+  bookmarked tab draws its kind's icon filled in rather than outlined — the same badge, solid — and nothing is added
+  to its corner, so the unsaved dot keeps that corner to itself. The ⇧⌘D picker fills a row's icon the same way:
+  every bookmark row, and every open tab that is bookmarked. A `bookmark` button pins in the strip's top-right, in a 24pt slot of its own past where the +
   pins; `TabStripLayout` reserves it, so the tabs and the + step left by exactly that much and nothing subtracts it
   twice. Pressing it opens the ⇧⌘J panel in bookmarks mode: every bookmark, fuzzy-filtered by file name, ⌘⌫ (or ⌫ with
   the field empty) taking one off the list without closing the panel, and "No bookmarks" when there are none. Plain
@@ -1183,20 +1367,167 @@
    A PDF tab prints the PDF itself rather than a render — the open half of Done 12.
 2. **Ship it, signed.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on
    another Mac without the Gatekeeper allow-once dance (see Done 28 for the ad-hoc release itself).
-3. **⌘F over a tree preview.** A structured tab's ⌘F is the editor's, in every mode — the tree pane leaves the
-   find members at their protocol defaults. Searching the rows themselves (and reading mode, where there is no
-   editor on screen to search) is still open.
-4. **Tab strip overflow chevron.** The one piece of the Chromium strip still open (Done 15-A): a chevron at the
+3. **Tab strip overflow chevron.** The one piece of the Chromium strip still open (Done 15-A): a chevron at the
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+
+50. **Drag selects text in the render; a press in the page reveals its tag (done 2026-09-07).** Two halves of the same
+    complaint: the preview column was readable and not usable. In a `.md` or `.tex` render every press was a block
+    click, so there was no way to drag a sentence out of the rendered page — the gesture was spent before it began.
+    It now waits: `super.mouseDown` runs AppKit's tracking loop, and the block click is reported afterwards, only for a
+    press that neither moved nor selected anything. Double- and triple-click keep their word and paragraph, the pane
+    still refuses first responder in split, and a selection leaves the band alone. In a `.html` page the spec said "no
+    block sync" and meant it, which was true of a *list* of source ranges and too strong as a rule: the page can say
+    which element was pressed in document order, and `HTMLSourceMap` can line that up against the start tags
+    `HTMLFormat`'s walker finds in the file. The alignment is deliberately timid — it skips the DOM's implied and
+    script-made elements, recovers within four tags, and gives up with `nil` rather than pointing at the wrong one —
+    and it reveals rather than jumps, the same `onSourceReveal` the tree and the grids send. Pinned by
+    `HTMLSourceMapTests` (9), three tests in `MarkdownPreviewTests` and two in `HTMLPreviewTests`. The same pass gave
+    a page's fields the keyboard: clicking an `input` in split focused it in the DOM and nothing typed reached it,
+    since `HTMLPageView` refuses first responder there. A `focusin` / `focusout` script now says when the page holds
+    an editable element, and for exactly as long as it does the view takes the keys — the one exception to "a click
+    in split must not steal the caret", ended by losing the field or losing the keyboard, and never by snatching the
+    keys back. Two more `HTMLPreviewTests`.
+49. **⌘F over a grid (done 2026-09-07).** A `.csv` and a `.sql` tab's find was the editor's in every mode, and the
+    spec said so on purpose: a page of cells is not text, and the find bar's machinery bands ranges in a text
+    storage. But the reader looking for a customer in four hundred rows has no business retyping them as a `WHERE`,
+    and a `.csv` has no query box to retype them into at all. So the grid has its own: `GridFindSession` over
+    `SQLGridView`, the third telling of the shape `TextFindSession` and `PDFFindSession` share, and a small
+    `GridFindSource` both panes adopt — `matches(for:limit:)`, where the page on screen starts, what a cell says, and
+    "turn to this row". The whole table is searched and never the page, which is the only thing that makes the count
+    and the wrap mean anything; a match is a pair of numbers, the band is drawn by `SQLCellView` under the selection
+    wash, and the current match *is* the cell cursor. The two panes answer the search in completely different ways
+    and the session knows neither: the table walks `CSVTable.ordering` in memory, and the dump asks SQLite one
+    statement — `row_number()` over the page's own `ORDER BY` for the row's place, `instr(lower(CAST(… AS TEXT)))`
+    OR-ed over the columns for the sieve — since walking a table of two hundred thousand rows a page at a time is a
+    `LIMIT … OFFSET` per hundred, each reading everything before it. That sieve is coarser than the editor's bar
+    (ASCII case, no diacritic folding) and deliberately so; which columns of a returned row are the match is decided
+    afterwards in Swift, from the display text, so a `NULL` and a real behave like what the reader sees. Landing on a
+    match turns the page through the pane's own paging and never scrolls to the top, and the editor's caret follows
+    it the way a clicked cell takes it. `SQLGridView` and the query box both forward the nil-targeted Find items in
+    reading mode and hand them back up the chain out of it, so ⌘F reaches the grid from either and stays the
+    editor's in split even with the first responder in the grid. In the same pass the editor stopped being shown
+    only the first cell of a gesture: `SQLGridView.onSelectionReveal` says every *other* thing the reader does — the
+    gutter, a ⇧-click, a drag, Space, a ⇧-arrow — and one function per pane turns the grid's `Selection` into one
+    span, so a run of rows is the records or the `INSERT` tuples they were written as and a rectangle is the values
+    it crossed. Pinned by `GridFindTests` (22).
+48. **New file icons, filled when bookmarked (done 2026-09-07).** The old set was a 200×200 document outline with
+    the extension lettered under it, and at 16pt in the strip nobody could read which kind it was. Replaced by a
+    96×64 rounded badge with the extension lettered *inside* it, drawn for 141 extensions and drawn twice — outlined
+    and solid — in `file-icon/icons` and `file-icon/icons-filled`. `Icon/make-file-icons.py` now reads both from this
+    repo and writes `FileKindArt.outline` and `FileKindArt.filled`, shortening every coordinate on the way (two
+    decimals at or above 1, six significant digits below it, since the glyph groups carry a `scale(0.018018 …)`);
+    the export's 15-digit floats would otherwise have put 1.4 MB of decimal places into the binary. The set covers
+    enough that no name reaches an SF Symbol any more: an unnamed spelling folds onto one that was drawn, no
+    extension reads as `txt`, an unsaved note gets an empty badge and an unheard-of kind a `?`. The badge is three
+    units wide to two high, so the strip's and the picker's icon slots became 24 × 16 (and `minInactiveWidth` 44 with
+    them) and the art draws 15pt high beside an 11pt title. Bookmarking a tab now fills its icon in rather than
+    putting a 7pt `bookmark.fill` on the corner of it — one mark, the same kind, and the unsaved dot gets that corner
+    back. Same rule in the ⇧⌘D picker and in File › Bookmarks; the Bookmark button's own `bookmark`/`bookmark.fill`
+    pair is untouched.
+47. **⌘F over a tree preview (done 2026-09-07).** A `.json`, `.yaml`, `.toml` or `.xml` tab's find was the
+    editor's in every mode, so reading mode — where there is no editor on screen at all — had no search. The tree
+    has its own now: `TreeFindSession`, the third of the shape `TextFindSession` and `PDFFindSession` share, with
+    the same pill floating in the same corner, the same five actions, the same `2000+` cap and the same words in
+    the count. It is searched by what it *shows* — the key a file names a member with and the value as the row
+    spells it, quotes and all, a comment counted as its text — case- and diacritic-insensitively, in the order the
+    file writes the rows, a node's key before its value. Landing on a match opens every branch above it through
+    `expandedPaths`, so the next parse keeps what the search opened, and collapses nothing: what the reader left
+    open is theirs. There is no storage here to lay a temporary attribute on, so the bands are a background colour
+    on the row's own attributed string — the editor's quiet wash on the others, AppKit's find yellow with black
+    type on the one being stood on — and a query, a step and a re-parse each ask for the rows they touch to be
+    drawn again. The editor's caret follows the *part* that matched: the value alone where the value did, the whole
+    member where its key did, and in reading mode as well as split, since a find is the reader saying where they
+    want to be. Escape puts the bands down, leaves the row selected and hands the keyboard back to the outline;
+    ⌘G goes on working with the bar closed and brings the bands back with it. In split the editor keeps ⌘F,
+    whatever was last clicked in the column: the outline answers `performTextFinderAction:` only while it is what
+    is being read, which is the rule the page keeps, and otherwise hands the item *on* rather than dropping it —
+    implementing the selector at all makes the outline the target, so a silent return greyed ⌘F out the moment a
+    reader clicked a row. It goes up the chain to `MainWindowController`, which sits after the window and now
+    answers for the Find menu itself (`performTextFinderAction:` into its own `TextFindSession`, and
+    `validateUserInterfaceItem` saying what a text session handles). One fallback there serves every column. A re-parse runs the query again over the new rows and keeps
+    the match being stood on if the same part of the same node is still there. Pinned by `TreeFindTests`.
+    The same pass made the wrong-format state presentable, since a search over a file that is not a tree is a
+    search of nothing: the one column is now held to the pane's own width, so a leaf holding a pasted page is
+    cut off with an ellipsis rather than running off the edge; a file that parses into a single plain value is
+    told the same news as a failure rather than shown as one enormous row; and the centred line became a
+    centred block — the format named in `labelColor`, the line and the reason quieter under it, and, where
+    `FormatDetector` reads the text as something else, the way out named in the reader's own terms: "It reads
+    as HTML — choose that in the footer's format badge." Pinned by `TreeErrorTests`.
+46. **A broken drawing gets a readable page (done 2026-09-07).** An `.svg` that would not parse — an empty one, on a
+    fresh tab called SVG from the footer — went to WebKit as it stood, and WebKit's XML error page came back: black
+    type in a pink box over a dark column, with the find bar's injected `::highlight` rules printed under it as
+    text. `SVGCheck.problem(in:)` runs an `XMLParser` over the text first and `HTMLPreviewView.svgProblemPage`
+    is what a failure shows, `color-scheme: light dark` and `CanvasText` so it reads in either appearance, the
+    message escaped so a `<` in it stays a character. Pinned by
+    `HTMLPreviewTests.testABrokenDrawingIsNamedBeforeWebKitSeesIt`.
+45. **A Bookmark button in the strip, and a page in the corner (done 2026-09-07).** Bookmarking the tab in front
+    was ⌘D or a trip through File › Bookmarks; the one bookmark button the strip had opened the picker instead,
+    which is the list and not the act. There are three buttons past the + now — Bookmark, Bookmark dialog, gear —
+    and the first of them is the act: `bookmark` while the tab is not one, `bookmark.fill` the moment it is, the
+    same pair the badge on the tab's own icon wears, both in `secondaryLabelColor` rather than the accent. It is
+    told what to say wherever the strip is refreshed, so a tab switch, a save, a rename and another window
+    bookmarking the same file all reach it. A note with no file is asked for a name first, exactly as ⌘D asks —
+    the button was greyed there for an hour, and so was the dialog's own "Bookmark this tab" row, until the
+    user asked for ⌘D's behaviour from both doors. The dialog's row hands the toggle to the next turn of the run
+    loop (`RunLoop.main.perform`): run inside the row's own click, in a non-activating panel that had just
+    ordered itself out, the save panel never came up and the row stayed lit. Pinned by
+    `BookmarksTests.testTheStripButtonAndTheDialogRowAskAnUntitledNoteForANameLikeCommandD`.
+    The button beside it kept its job and changed its picture to
+    `book.closed`: two bookmark ribbons in a row said nothing about which was which, and the second one is a list.
+    `TabStripLayout` grew a third slot on the same 24pt-and-4pt rule, and a hidden button hands its slot back and
+    lets the rest close up rather than leaving a hole. Settings › Tab bar lists all three — Bookmark button,
+    Bookmark dialog button, Settings button — and the older `hidesBookmarkButton` key stayed with the dialog
+    button it has always meant, the new row writing `hidesBookmarkToggleButton`. The corner slot's Editor segment
+    changed drawing in the same pass: `long.text.page.and.pencil`, a page with a pencil on it, where the bare
+    `pencil` only ever said "write".
+44. **A rule under H1 and H2 (done 2026-09-07).** Set beside GitHub's render, Nota's had no line under a section's
+    title. The two top levels now carry `notaHeadingRule`, and `RenderedPreviewView` draws a `separatorColor` hairline
+    4pt under each one's last line, margin to margin, inside the extra air those two levels are given below (0.55em
+    against 0.3em). Drawn, not spelled: an earlier cut appended a rule paragraph and moved every rendered string and
+    click range along with it. Pinned by `MarkdownPreviewTests.testALevelOneOrTwoHeadingCarriesTheRuleAttribute` and
+    `testThePaneDrawsAHairlineUnderALevelOneHeadingAcrossItsFullWidth`.
+43. **The footer says what a tab is, and Nota offers to guess (done 2026-09-07).** A tab's preview came from its
+    file extension and from nothing else, so a note pasted into a fresh tab had to be saved as `.md` before it
+    could be read as anything. There is a fourth badge in the footer now, ahead of the encoding, showing what the
+    tab is read as — `Plain Text`, `Markdown`, `JSON`, one of eleven (shortened to `Plain` and `MD` on 2026-09-07) — and its menu is the whole feature: pick one
+    and the corner segments, ⌘P, the split, the icon and the task count all follow at once. `NoteFormat` is
+    `RenderedPreviewKind` with the ordinary case put back, since plain text has no preview to name; the choice
+    lives on the note as `formatOverride`, honoured by `previewKind`, `isJSON` and `isHTML`, and written to
+    `session.json` as the one spelling that means that format. Picking what the file name already says puts the
+    override down rather than writing it, and a save under the format's own extension does the same — the name is
+    saying it now. Saved as something else, the reader's word stands. The save panel opens its Format combo on the
+    badge, so a tab called JSON writes `blob.json` with no second decision — and a *file* the reader has renamed
+    the format of goes dirty and owes a name for it: ⌘S there is the Save As flow, `md` picked in the combo and
+    every other extension still there to pick instead, and once the panel has been answered the next ⌘S writes
+    where that one landed. `Note.needsSaveAs` carries it, and `SessionTab` writes it only where it is owed. `FormatDetector` is the
+    guess: a pure, deliberately shy look at the characters, `nil` under three lines or sixty characters and `nil`
+    for prose with a colon, a list of dashes, or three paragraphs. `FormatOfferPill` puts it to the reader in the
+    reload offer's corner — `JSON detected` · Preview in JSON · Not now — non-modal, one debounce after the typing
+    stops, once per tab per reading, and **untitled notes only**: a file has a name, and a name is its author
+    saying what it is. A paste or a drop is the other half and asks properly: `FormatOfferAlert` is a sheet on the
+    window, *Preview this tab in Markdown?* with the change-it-later line under it, **Preview in Markdown** on
+    Return and **Not now** beside it. Nothing is interrupted there — the typing an alert would have stopped is not
+    happening — and one question stands at a time, the pill going down as the sheet comes up. Either word does what
+    the pill's does, "Not now" included. A `Format` row in Settings › Status bar switches the badge off, and
+    the badge is the region that gives way in a narrow window rather than widening it. `FormatDetectorTests` (30)
+    and `FormatOfferTests` (42).
+42. **Settings apply as you change them (done 2026-09-07).** The window had one shared Save button and every
+    control staged a draft behind it, so a setting was two gestures and a greyed button said whether the second
+    one was owed. The button is gone: each control writes its own preference on the change, and the app follows
+    at once. Language and theme rebuild the dialog afterwards, as Save used to. A shortcut is the one thing that
+    can still be refused — a combination two commands would share, or one the Mac has spoken for, is not written,
+    the field snaps back to the stored key and the red line says which two commands would have shared it. Pinned by
+    `NotaTests.testSettingsHasNoSaveButtonOnAnyPage`, `NotaTests.testFlippingHighlightCurrentLineAppliesWithNoSave`
+    and `ShortcutsTests.testATakenComboWarnsAndIsNeverWritten`.
 41. **The cursorline at the end of the document (done 2026-09-07).** With the caret after the last character the
     band lit every line: `lineBand` had no glyph to ask about at that index and fell back to the whole view. It
     now takes the extra line fragment when the text ends in a newline or is empty, and the last glyph's line
     otherwise. Pinned by `NotaTests.testTheCursorlineBandAtTheEndOfTheDocumentIsOneLine`.
 40. **Less air at the top of the tree (done 2026-09-07).** The tree pane started a whole corner-slot band (44pt)
     down; it starts at the editor's padding (14pt) now. The CSV bar was moved up the same way with its pager pulled
-    in clear of the capsule, and put back under the band the same evening — the pager belongs at the edge. Refresh
+    in clear of the capsule, and put back under the band the same evening — the pager belongs at the edge; later that day the CSV bar's top came up from the band's 44pt to 36pt, 8pt under the control's bottom edge, since the whole band read as a hole (the SQL pane keeps the band). Refresh
     on the CSV and SQL bars no longer folds into two lines or shrinks to its icon: it is the last control to give way. The tree's list also read a shade off the editor in the dark (27 to the editor's 30, measured off a
     screenshot) though every part of it was given `textBackgroundColor`: an `NSOutlineView` paints that colour its
     own way. So nothing in the scroll view paints a background any more — the outline is `.clear`, the scroll view
@@ -1648,12 +1979,9 @@
     leaving every other character — and the rich flavours, which already carry the formula as a real image — as they
     were.
 15. **Tab strip, Chromium style (after the LaTeX preview; design agreed 2026-09-03 with a second reviewer).** Every
-    tab shows a leading icon, per file kind (done 2026-09-04; custom art added 2026-09-04): `FileKindIcon` maps the
-    name's extension to an icon — most kinds draw this app's own hand-drawn set, embedded by `Icon/make-file-icons.py`
-    into `FileKindArt.swift`; a kind the set has no art for falls back to an SF Symbol (pictures without art `photo`,
-    `.log` `list.bullet.rectangle`, remaining code extensions `chevron.left.forwardslash.chevron.right`, untitled
-    `doc`, the rest `text.page`), with an older spelling behind any SF Symbol this macOS does not have — and the
-    same icon in the ⇧⌘J rows. Then, in this order:
+    tab shows a leading icon, per file kind (done 2026-09-04; custom art added 2026-09-04, redrawn 2026-09-07 —
+    see Done 48): `FileKindIcon` maps the name's extension to a lettered badge, embedded by
+    `Icon/make-file-icons.py` into `FileKindArt.swift` — and the same icon in the ⇧⌘J rows. Then, in this order:
     - **C. One press to select and drag (done 2026-09-03).** The first drag on a tab moved the window: native
       title-bar dragging and the tab's reorder gesture were running at the same time. Fix: `window.isMovable = false`
       turns the native drag off for the whole window; the strip refuses `mouseDownCanMoveWindow` and a press on empty

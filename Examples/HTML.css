@@ -55,6 +55,62 @@ code {
     font: 0.88em ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.script-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0.6rem;
+}
+
+input[type="text"],
+button {
+    font: inherit;
+    padding: 0.35rem 0.9rem;
+    border-radius: 6px;
+}
+
+input[type="text"] {
+    flex: 1;
+    min-width: 0;
+    outline: none;
+    border: 1px solid color-mix(in srgb, var(--bolt) 55%, var(--ink));
+    background: color-mix(in srgb, var(--bolt) 14%, var(--paper));
+    color: var(--ink);
+}
+
+input[type="text"]::placeholder {
+    color: var(--quiet);
+}
+
+input[type="text"]:hover {
+    background: color-mix(in srgb, var(--bolt) 28%, var(--paper));
+}
+
+input[type="text"]:focus {
+    background: var(--paper);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--bolt) 28%, transparent);
+}
+
+button {
+    border: 1px solid var(--bolt);
+    background: var(--bolt);
+    color: #fff;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+button:hover {
+    background: color-mix(in srgb, var(--bolt) 82%, #000);
+}
+
+button:active {
+    transform: translateY(1px);
+}
+
+#click-status {
+    margin-top: 0.45rem;
+    color: var(--quiet);
+}
+
 footer {
     margin-top: 3rem;
     padding-top: 1rem;

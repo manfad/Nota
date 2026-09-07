@@ -10,7 +10,7 @@ import XCTest
 /// Nothing here sleeps. The dispatch source fires when the file system says
 /// so, on a queue of its own, so every test waits on an expectation the
 /// controller fulfils once it has dealt with the change.
-final class ExternalChangeTests: XCTestCase {
+final class ExternalChangeTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {

@@ -41,6 +41,12 @@ final class CSVPreviewView: NSView, PreviewContent {
     /// The quiet line where the grid would be, for a file with nothing to
     /// show yet — which is only ever the big one waiting to be read.
     private let emptyLabel = NSTextField(labelWithString: "")
+    /// The table's own ⌘F bar, floating in the top-trailing corner of the
+    /// column — the same pill the editor, the render and a document use.
+    private let findBar = FindBarView(placeholder: L10n.text("Find in table"))
+    private lazy var findSession = GridFindSession(bar: findBar, grid: grid, source: self)
+    /// The bar's own top constraint, which drops while the pill is up.
+    private var barTop: NSLayoutConstraint?
 
     private enum Layout {
         static let blankColumnWidth: CGFloat = 160
@@ -53,11 +59,16 @@ final class CSVPreviewView: NSView, PreviewContent {
         static let minimumColumnWidth: CGFloat = 56
         static let maximumColumnWidth: CGFloat = 420
         static let cellPadding: CGFloat = 10
-        /// The band the corner slot floats its control in. The bar begins
-        /// under it, full width, so the pager at its trailing end is never
-        /// behind the control (tried inside the band for an hour on
-        /// 2026-09-07, with the pager pulled in; under it reads better).
-        static let topClearance = ModeControlOverlay.hoverBandHeight
+        /// The bar begins under the corner slot's control, full width, so
+        /// the pager at its trailing end is never behind it (tried inside
+        /// the band for an hour on 2026-09-07, with the pager pulled in;
+        /// under it reads better). Not a whole band under, though: the
+        /// control is `controlTopInset` down and a small segmented control
+        /// tall, and the bar takes `barSpacing` of air under that — 36pt,
+        /// against the band's 44, which read as a hole (2026-09-07).
+        static let topClearance = ModeControlOverlay.controlTopInset + smallControlHeight + barSpacing
+        /// A small `NSSegmentedControl` stands this tall.
+        static let smallControlHeight: CGFloat = 20
     }
 
     // MARK: - What the pane is showing
@@ -103,6 +114,15 @@ final class CSVPreviewView: NSView, PreviewContent {
     /// How many times the file has been read into a table. The one number
     /// that says a big file is not being re-read on every keystroke.
     private(set) var readCount = 0
+    /// Run when the ⌘F pill opens or closes, so the column's mode control
+    /// drops out of the corner the two share.
+    var onFindBarVisibilityChange: ((Bool) -> Void)?
+    var isFindBarVisible: Bool { findSession.isVisible }
+    var findBarHeight: CGFloat { findBar.stackHeight }
+    /// What to do once the page a ⌘F match lives on is on screen. A page is
+    /// cut on the main thread here, but the pane is written the way the dump's
+    /// is, where it is not.
+    private var pendingFindLanding: (() -> Void)?
 
     // MARK: - Building
 
@@ -113,7 +133,36 @@ final class CSVPreviewView: NSView, PreviewContent {
         buildBar()
         buildGrid()
         activateConstraints()
+        buildFindBar()
         updateChrome()
+    }
+
+    /// The pill goes in the corner the mode control keeps, added after the
+    /// grid so it floats over it. The bar under it is `topClearance` down,
+    /// which is six short of the pill's own foot — so that row drops while the
+    /// pill is up, the same way the mode control does.
+    private func buildFindBar() {
+        grid.findSession = findSession
+        findSession.onVisibilityChange = { [weak self] visible in
+            guard let self else { return }
+            applyFindBarClearance()
+            onFindBarVisibilityChange?(visible)
+        }
+        findBar.onHeightChange = { [weak self] in
+            guard let self else { return }
+            applyFindBarClearance()
+            onFindBarVisibilityChange?(isFindBarVisible)
+        }
+        findBar.floatStack(
+            in: self, under: topAnchor, gap: ModeControlOverlay.controlTopInset,
+            trailingInset: ModeControlOverlay.controlInset
+        )
+    }
+
+    private func applyFindBarClearance() {
+        barTop?.constant = findSession.isVisible
+            ? ModeControlOverlay.controlTopInset + findBar.stackHeight + Layout.barSpacing
+            : Layout.topClearance
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -204,6 +253,9 @@ final class CSVPreviewView: NSView, PreviewContent {
         grid.onCellClick = { [weak self] row, column in
             self?.revealSource(ofRow: row, column: column)
         }
+        grid.onSelectionReveal = { [weak self] selection in
+            self?.revealSource(of: selection)
+        }
         grid.setAccessibilityIdentifier("csv-grid")
 
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -241,8 +293,11 @@ final class CSVPreviewView: NSView, PreviewContent {
         barSpacing.priority = .init(rawValue: 200)
         barSpacing.isActive = true
 
+        let top = bar.topAnchor.constraint(equalTo: topAnchor, constant: Layout.topClearance)
+        barTop = top
+
         NSLayoutConstraint.activate([
-            bar.topAnchor.constraint(equalTo: topAnchor, constant: Layout.topClearance),
+            top,
             bar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Layout.inset),
             bar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Layout.inset),
             bar.heightAnchor.constraint(equalToConstant: Layout.controlHeight),
@@ -315,6 +370,8 @@ final class CSVPreviewView: NSView, PreviewContent {
         sort = nil
         separator = note.fileURL
             .flatMap { CSVTable.Separator(fileExtension: $0.pathExtension) } ?? .comma
+        pendingFindLanding = nil
+        findSession.close()
         grid.clearCellSelection()
         grid.deselectAll(nil)
         rebuildColumns()
@@ -392,6 +449,13 @@ final class CSVPreviewView: NSView, PreviewContent {
             scrollsToTop = false
             if grid.numberOfRows > 0 { grid.scrollRowToVisible(0) }
         }
+        // The page under ⌘F has moved: the rows it holds may not be the rows
+        // it held. Then whatever was waiting for this page — a match on it,
+        // which is why the page was turned to at all.
+        findSession.refresh()
+        let landing = pendingFindLanding
+        pendingFindLanding = nil
+        landing?()
         onDidFinish?()
     }
 
@@ -609,22 +673,63 @@ final class CSVPreviewView: NSView, PreviewContent {
     /// begins. Nothing here takes the keyboard: the grid keeps it, so the
     /// arrows go on walking the cells.
     private func revealSource(ofRow row: Int, column: Int) {
-        guard sendsBlockClicks, let onSourceReveal, let page,
-              row >= 0, row < page.sources.count
+        revealSource(of: .cells(rows: row...row, columns: column...column))
+    }
+
+    /// And whatever is picked out, whatever shape it is: a run of whole rows
+    /// from the `#` gutter or from Space, a rectangle a drag or a ⇧-arrow grew.
+    /// One range over the lot — from the earliest thing selected to the latest
+    /// — the way a selection over three paragraphs of text is one range.
+    private func revealSource(of selection: SQLGridView.Selection) {
+        guard sendsBlockClicks, let onSourceReveal,
+              let range = sourceRange(of: selection)
         else { return }
-        // A column of the grid is one past its column of the page: the `#`
-        // gutter is the first of them.
-        let index = column - 1
-        if index >= 0, row < page.fieldSources.count, index < page.fieldSources[row].count {
-            onSourceReveal(page.fieldSources[row][index])
-            return
+        onSourceReveal(range)
+    }
+
+    private func sourceRange(of selection: SQLGridView.Selection) -> NSRange? {
+        guard let page else { return nil }
+        switch selection {
+        case .none:
+            return nil
+        case .rows(let rows):
+            // A whole row is the record as it is written, over as many lines
+            // as it took.
+            return SQLGridView.span(of: rows.compactMap { row in
+                row >= 0 && row < page.sources.count ? page.sources[row] : nil
+            })
+        case .cells(let rows, let columns):
+            var spans: [NSRange] = []
+            for row in rows where row >= 0 && row < page.sources.count {
+                var placed = false
+                for column in columns {
+                    // A column of the grid is one past its column of the page:
+                    // the `#` gutter is the first of them.
+                    let index = column - 1
+                    guard index >= 0, row < page.fieldSources.count,
+                          index < page.fieldSources[row].count
+                    else { continue }
+                    spans.append(page.fieldSources[row][index])
+                    placed = true
+                }
+                // The record is the fallback and never nothing: a ragged row
+                // that never wrote the fields the columns stand for lands on
+                // the whole of itself.
+                if !placed { spans.append(page.sources[row]) }
+            }
+            return SQLGridView.span(of: spans)
         }
-        onSourceReveal(page.sources[row])
     }
 
     // MARK: - The keyboard
 
-    var takesKeyboard = false
+    /// Reading mode. It is handed down to the grid, which is what decides
+    /// whether ⌘F is this table's or the editor's — a click puts the first
+    /// responder in the grid in split too, and that must not take the key off
+    /// the text beside it.
+    var takesKeyboard = false {
+        didSet { grid.takesKeyboard = takesKeyboard }
+    }
 
     @discardableResult
     func focus(in window: NSWindow?) -> Bool {
@@ -702,6 +807,8 @@ final class CSVPreviewView: NSView, PreviewContent {
     var refreshButtonTip: String? { refreshButton.toolTip }
     var refreshButtonTitle: String { refreshButton.title }
     var gridForTesting: SQLGridView { grid }
+    var findBarForTesting: FindBarView { findBar }
+    var findSessionForTesting: GridFindSession { findSession }
     static var barTopInsetForTesting: CGFloat { Layout.topClearance }
     var refreshButtonWrapsForTesting: Bool { refreshButton.cell?.wraps ?? true }
     var barFrameForTesting: NSRect { bar.frame }
@@ -720,6 +827,72 @@ final class CSVPreviewView: NSView, PreviewContent {
         let column = index + 1
         guard column >= 0, column < grid.tableColumns.count else { return }
         tableView(grid, didClick: grid.tableColumns[column])
+    }
+}
+
+// MARK: - ⌘F over the table
+
+/// The whole table is searched and not the page on screen, which is what makes
+/// a count and a wrap mean anything: `CSVTable` is already in memory, so this
+/// is a walk over the rows in the order the grid is showing them, stopped at
+/// the cap.
+extension CSVPreviewView: GridFindSource {
+
+    var findPageOffset: Int { page?.offset ?? 0 }
+
+    var findColumnCount: Int { page?.columns.count ?? 0 }
+
+    func matches(for query: String, limit: Int) -> [GridMatch] {
+        guard let table, !query.isEmpty, limit > 0 else { return [] }
+        var found: [GridMatch] = []
+        for (position, index) in table.ordering(sort).enumerated() {
+            for (column, value) in table.rows[index].enumerated() {
+                guard value.range(of: query, options: GridFindSession.matchOptions) != nil
+                else { continue }
+                found.append(GridMatch(row: position, column: column))
+                if found.count >= limit { return found }
+            }
+        }
+        return found
+    }
+
+    func findCellText(pageRow: Int, column: Int) -> String? {
+        guard let page, pageRow >= 0, pageRow < page.rows.count,
+              column >= 0, column < page.rows[pageRow].count
+        else { return nil }
+        return page.rows[pageRow][column]
+    }
+
+    /// The page the row is on, then the cell on it. Never a scroll to the top:
+    /// the reader asked for one row and that is the one to be looking at.
+    func revealFindMatch(row: Int, column: Int) {
+        guard let table else { return }
+        let wanted = CSVTable.clamp(offset: (row / CSVTable.pageSize) * CSVTable.pageSize,
+                                    total: table.rows.count)
+        let landing: () -> Void = { [weak self] in
+            self?.landOnFindMatch(row: row, column: column)
+        }
+        guard wanted != offset || page == nil else {
+            landing()
+            return
+        }
+        offset = wanted
+        pendingFindLanding = landing
+        reload()
+    }
+
+    private func landOnFindMatch(row: Int, column: Int) {
+        guard let page else { return }
+        let local = row - page.offset
+        let gridColumn = column + 1
+        guard local >= 0, local < page.rows.count,
+              gridColumn > 0, gridColumn < grid.tableColumns.count
+        else { return }
+        // The cursor is the match, and `setCursor` scrolls it into view. The
+        // editor's caret follows it the same way a click on the cell would
+        // take it.
+        grid.setCursor(row: local, column: gridColumn)
+        revealSource(ofRow: local, column: gridColumn)
     }
 }
 
@@ -745,6 +918,7 @@ extension CSVPreviewView: NSTableViewDataSource, NSTableViewDelegate {
             field.font = .monospacedDigitSystemFont(ofSize: max(9, cellFont.pointSize - 2),
                                                     weight: .regular)
             field.textColor = .tertiaryLabelColor
+            cell.text = nil
             field.stringValue = "\(page.offset + row + 1)"
             cell.toolTip = nil
             return cell
@@ -752,13 +926,14 @@ extension CSVPreviewView: NSTableViewDataSource, NSTableViewDelegate {
 
         let index = columnIndex - 1
         guard index >= 0, index < page.rows[row].count else {
+            cell.text = nil
             field.stringValue = ""
             return cell
         }
         let value = page.rows[row][index]
         field.font = cellFont
         field.textColor = .labelColor
-        field.attributedStringValue = attributed(value)
+        cell.text = attributed(value)
         // What the column is too narrow to show is one hover away, rather than
         // gone. A value written over more than one line says so on its own
         // line, since the cell can only ever draw the first.

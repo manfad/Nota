@@ -8,7 +8,7 @@ import XCTest
 /// its name is only asked when the bytes cannot say. A `report` with no
 /// extension, a PDF named `notes`, and a `.pdf` that is really a log all
 /// have to land the way their content says, not the way their name guesses.
-final class FileSniffTests: XCTestCase {
+final class FileSniffTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {

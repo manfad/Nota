@@ -6,7 +6,7 @@ import XCTest
 /// note keeps its own line table current, the counts that used to walk the
 /// whole file no longer do, and the token machinery leaves a text with no
 /// tokens in it alone.
-final class NoteBigFileTests: XCTestCase {
+final class NoteBigFileTests: AppKitTestCase {
     // MARK: - The note's line table
 
     func testNoteBuildsItsLineTable() {

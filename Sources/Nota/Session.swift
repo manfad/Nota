@@ -13,12 +13,11 @@ enum TextStats {
         text.count
     }
 
-    /// `"12 words · 34 characters"` — shown at the left of the status bar.
+    /// `"12 words · 34 characters"` — shown at the left of the status bar,
+    /// in the app's language ("12 字 · 34 字符").
     static func counts(_ text: String) -> String {
-        let words = wordCount(text)
-        let characters = characterCount(text)
-        return "\(words) \(words == 1 ? "word" : "words") · "
-            + "\(characters) \(characters == 1 ? "character" : "characters")"
+        phrase(.words, wordCount(text)) + separator
+            + phrase(.characters, characterCount(text))
     }
 
     /// One piece of the middle of the footer. The case order is the order the
@@ -41,8 +40,10 @@ enum TextStats {
 
     static let separator = " · "
 
+    /// The noun goes through the language table by its English spelling, so
+    /// Chinese and Malay — which have no plural — say the one word for both.
     static func phrase(_ segment: Segment, _ count: Int) -> String {
-        "\(count) \(count == 1 ? segment.singular : segment.plural)"
+        "\(count) " + L10n.text(count == 1 ? segment.singular : segment.plural)
     }
 
     /// Every way the counts can be written, longest first: all the enabled
@@ -241,7 +242,10 @@ enum TextStats {
 
 /// Naming for tabs that have never been saved: `Untitled`, `Untitled 2`, …
 enum UntitledNaming {
-    static let base = "Untitled"
+    /// The tab's name before it has a file, in the app's language: 无标题,
+    /// 未命名. Malay keeps the English word. A name already given stays as it
+    /// was when the language changes; only the next new tab takes the new one.
+    static var base: String { L10n.text("Untitled") }
 
     /// Lowest unused name given the titles already on screen.
     static func nextName(existing: [String]) -> String {
@@ -319,11 +323,21 @@ struct SessionTab: Codable, Equatable {
     /// written before dumps had a grid at all.
     var sqlTable: String?
     var sqlQuery: String?
+    /// What the reader told the footer this tab is, by the one spelling that
+    /// means that format — `"json"`, `"md"`, `"txt"`. `nil` for a tab going
+    /// by its file name, which is most of them, and for a session written
+    /// before the badge existed.
+    var formatOverride: String?
+    /// Whether that word has left the tab owing a name: the file is spelled
+    /// one way and the badge says another, so the next ⌘S opens the panel.
+    /// `nil` for every tab that owes nothing — which is most of them — and
+    /// for a session written before the badge existed.
+    var needsSaveAs: Bool?
 
     /// Named, so the old yes/no key is decoded without being written back.
     enum CodingKeys: String, CodingKey {
         case id, path, untitledName, isDirty, selection, scroll, format, previewMode
-        case sqlTable, sqlQuery
+        case sqlTable, sqlQuery, formatOverride, needsSaveAs
     }
 
     private enum LegacyKeys: String, CodingKey {
@@ -349,6 +363,10 @@ extension SessionTab {
         // query box.
         sqlTable = try container.decodeIfPresent(String.self, forKey: .sqlTable)
         sqlQuery = try container.decodeIfPresent(String.self, forKey: .sqlQuery)
+        // Written since the footer grew a format badge; a session from
+        // before it has no key, and its tabs go by their names.
+        formatOverride = try container.decodeIfPresent(String.self, forKey: .formatOverride)
+        needsSaveAs = try container.decodeIfPresent(Bool.self, forKey: .needsSaveAs)
         if let mode = try container.decodeIfPresent(PreviewMode.self, forKey: .previewMode) {
             previewMode = mode
         } else {

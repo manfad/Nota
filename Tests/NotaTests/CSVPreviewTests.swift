@@ -7,7 +7,7 @@ import XCTest
 /// one — the same three modes, the same control, the same session — and what
 /// stands beside the source is the table the file already is, a hundred rows
 /// at a time, in the grid a dump is read in.
-final class CSVPreviewTests: XCTestCase {
+final class CSVPreviewTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
     private var windows: [NSWindow] = []
 
@@ -375,9 +375,14 @@ final class CSVPreviewTests: XCTestCase {
         let (pane, _) = try makePane()
         pane.layoutSubtreeIfNeeded()
         let bar = pane.barFrameForTesting
-        XCTAssertEqual(pane.bounds.maxY - bar.maxY, ModeControlOverlay.hoverBandHeight,
-                       accuracy: 0.5, "the floating mode control never covers the bar")
-        XCTAssertEqual(CSVPreviewView.barTopInsetForTesting, ModeControlOverlay.hoverBandHeight)
+        // 8pt under the control's bottom edge (8pt inset + a small
+        // control's 20pt), not a whole 44pt band under: that read as a hole.
+        XCTAssertEqual(pane.bounds.maxY - bar.maxY, 36, accuracy: 0.5,
+                       "the floating mode control never covers the bar")
+        XCTAssertEqual(CSVPreviewView.barTopInsetForTesting, 36)
+        XCTAssertGreaterThanOrEqual(CSVPreviewView.barTopInsetForTesting,
+                                    ModeControlOverlay.controlTopInset + 20 + 8)
+        XCTAssertLessThan(CSVPreviewView.barTopInsetForTesting, ModeControlOverlay.hoverBandHeight)
         XCTAssertFalse(pane.refreshButtonWrapsForTesting, "Refresh never folds into two lines")
     }
 

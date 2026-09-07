@@ -6,7 +6,9 @@ import AppKit
 ///
 /// It is a view of the note, never a second place to type in it. Clicking a
 /// block does not put a caret here — it sends you to that block in the editor,
-/// which is the only place a note is ever edited.
+/// which is the only place a note is ever edited. Dragging across it does what
+/// dragging across any page does: it selects the words swept, and sends
+/// nowhere.
 ///
 /// Everything a rendered pane does is here: the blocks and their source
 /// ranges, the band under the one being pointed at, the find bar, the frozen
@@ -261,6 +263,12 @@ class RenderedPreviewView: NSView, PreviewContent {
 
     /// One rectangle per fenced code block, in the text view's coordinates.
     var codeBoxRects: [NSRect] { textView.codeBoxRects }
+    var headingRuleRects: [NSRect] { textView.headingRuleRects }
+    /// The text view's own frame and inset, for a test measuring where a
+    /// drawn rule lands against the lines around it.
+    var textGeometry: (bounds: NSRect, origin: NSPoint, layoutManager: NSLayoutManager?, string: String) {
+        (textView.bounds, textView.textContainerOrigin, textView.layoutManager, textView.string)
+    }
 
     /// The lit block's band, if one is lit.
     var highlightedBandRect: NSRect? { textView.bandRect }
@@ -340,9 +348,9 @@ class RenderedPreviewView: NSView, PreviewContent {
         layoutSubtreeIfNeeded()
         scroll(to: previous)
         // Replacing the storage leaves AppKit's own caret at the end of what
-        // it put in. The render is not a place a caret lives — in split it is
-        // never selected at all — so a fresh page starts unselected, and only
-        // a click in reading mode puts a caret in it.
+        // it put in. The render is not a place a caret lives, so a fresh page
+        // starts unselected — whatever the reader had swept belonged to the
+        // page that has just been replaced.
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         // The band is drawn from ranges that have just been replaced.
         setHighlight(nil)
@@ -454,12 +462,18 @@ class RenderedPreviewView: NSView, PreviewContent {
 
 /// The pane's text view.
 ///
-/// In Split a click here is a jump to a block, not a place to type: the caret
-/// stays in the editor, and everything that is not a link reports the block it
-/// landed in. In Reading there is no editor on screen to jump to, so it is an
-/// ordinary read-only text view again — a click puts the caret in the render,
-/// drag to select, double-click a word, ⌘C to copy — and a link still opens
-/// the same way it does in Split.
+/// In Split a *click* here is a jump to a block, not a place to type: the
+/// caret stays in the editor, and everything that is not a link reports the
+/// block it landed in. A *drag* is not a jump at all — it selects the text it
+/// sweeps, the way any read-only text view does, and reports nothing (done
+/// 2026-09-07). The two are told apart by waiting: the press is answered on
+/// the way up, and only a press that neither moved nor selected anything is a
+/// block click — and that one puts the render's own selection back to nothing
+/// before it jumps, since the render is not where a caret lives.
+/// A double click still takes a word and a triple a paragraph.
+/// In Reading there is no editor on screen to jump to, so every press is the
+/// ordinary one — a click puts the caret in the render, drag to select, ⌘C to
+/// copy — and a link opens the same way in both.
 ///
 /// It takes the keyboard in reading mode only, where the editor is collapsed
 /// and something has to answer the arrow and page keys — and ⌘F, which opens
@@ -555,13 +569,55 @@ private final class PreviewTextView: NSTextView {
 
         let index = characterIndexForInsertion(at: point)
         // A link is the one thing in the pane that does something of its own
-        // with a click; everything else is a block to be sent to.
+        // with a click; everything else is a block to be sent to — or the
+        // beginning of a selection.
         if let storage = textStorage, index < storage.length,
            storage.attribute(.link, at: index, effectiveRange: nil) != nil {
             super.mouseDown(with: event)
             return
         }
+
+        // A press is not answered until it is over, because until then there
+        // is no telling which of the two gestures it was. `super` runs
+        // AppKit's own tracking loop to the mouse up: a press that stayed put
+        // comes back with nothing selected, and a press that was swept comes
+        // back holding the text it swept — a word for a double click, a
+        // paragraph for a triple. So the block is reported afterwards, and
+        // only for the first of those; a selection leaves the lit band
+        // exactly where it was, since nothing was jumped to.
+        pressOrigin = point
+        pointerLeftThePress = false
+        super.mouseDown(with: event)
+        let selected = selectedRange().length > 0
+        let moved = pointerLeftThePress
+        pressOrigin = nil
+        pointerLeftThePress = false
+        guard !selected, !moved else { return }
+        // Nothing was swept, so the render goes back to holding nothing: the
+        // caret AppKit's tracking loop left behind belongs to a view that is
+        // not a place a caret lives, and the jump is about to put a real one
+        // in the editor.
+        setSelectedRange(NSRange(location: 0, length: 0))
         onClick?(index)
+    }
+
+    /// Where the press being tracked went down, and whether the pointer has
+    /// since left that spot. A wobble of a point or two is a click with a
+    /// shaky hand, not a drag — and a sweep out and back to where it started
+    /// selects nothing, so the selection alone would call it a click.
+    private var pressOrigin: NSPoint?
+    private var pointerLeftThePress = false
+    private static let dragSlop: CGFloat = 3
+
+    override func mouseDragged(with event: NSEvent) {
+        if let origin = pressOrigin {
+            let point = convert(event.locationInWindow, from: nil)
+            if abs(point.x - origin.x) > Self.dragSlop
+                || abs(point.y - origin.y) > Self.dragSlop {
+                pointerLeftThePress = true
+            }
+        }
+        super.mouseDragged(with: event)
     }
 
     /// The task item's box under a point, if the point is on one. The nearest
@@ -642,11 +698,54 @@ private final class PreviewTextView: NSTextView {
             }
         }
 
+        let rules = headingRuleRects
+        if !rules.isEmpty {
+            NSColor.separatorColor.setFill()
+            for rule in rules { rule.fill() }
+        }
+
         // Over the top of them, so a lit code block darkens evenly instead of
         // showing two shapes competing.
         guard let band = bandRect else { return }
         NSColor.labelColor.withAlphaComponent(0.06).setFill()
         band.fill()
+    }
+
+    /// The gap between a heading's last line and the rule under it.
+    private static let headingRuleGap: CGFloat = 4
+
+    /// A hairline under each level-1 and level-2 heading, from margin to
+    /// margin, a little under the heading's last line — inside the air the
+    /// renderer leaves below those two levels, so nothing after it moves.
+    var headingRuleRects: [NSRect] {
+        guard let storage = textStorage, let layoutManager, let textContainer,
+              storage.length > 0
+        else { return [] }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let origin = textContainerOrigin
+        let left = origin.x
+        let right = bounds.width - origin.x
+        var rules: [NSRect] = []
+        storage.enumerateAttribute(
+            .notaHeadingRule, in: NSRange(location: 0, length: storage.length)
+        ) { value, range, _ in
+            guard value != nil, range.length > 0 else { return }
+            let glyphs = layoutManager.glyphRange(
+                forCharacterRange: range, actualCharacterRange: nil
+            )
+            guard glyphs.length > 0 else { return }
+            var last = NSRect.null
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { _, usedRect, _, _, _ in
+                last = usedRect
+            }
+            guard !last.isNull else { return }
+            rules.append(NSRect(
+                x: left, y: (last.maxY + origin.y + Self.headingRuleGap).rounded(),
+                width: max(0, right - left), height: 1
+            ))
+        }
+        return rules
     }
 
     /// A box for each fenced block: its lines' used rects run out to the

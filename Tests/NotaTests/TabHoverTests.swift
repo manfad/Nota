@@ -6,7 +6,7 @@ import AppKit
 /// pointer's wash, an unselected tab takes the wash while the pointer is on
 /// it, and nothing wears it at rest.
 @MainActor
-final class TabHoverTests: XCTestCase {
+final class TabHoverTests: AppKitTestCase {
     private func makeBar() -> (NSWindow, TabBarView) {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: TabBarView.height),

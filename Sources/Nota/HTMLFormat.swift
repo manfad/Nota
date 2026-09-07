@@ -620,3 +620,79 @@ enum HTMLFormat {
         }
     }
 }
+
+// MARK: - The elements, as the source spells them
+
+/// The fourth question asked of the same walk, and the only one that is not
+/// about writing the page back out: *where is each element written?*
+///
+/// `HTMLSourceMap` lines the page's own DOM up against this list to answer a
+/// press in the preview with a range in the editor. It lives here rather than
+/// beside the map because the walker is here — one tokeniser over a page, not
+/// two — and because everything it needs is already taken down while the tree
+/// is built.
+extension HTMLFormat {
+
+    /// One element, as the file writes it.
+    struct SourceTag: Equatable {
+        /// The tag name, case folded — the DOM's own `tagName.toLowerCase()`.
+        let name: String
+        /// The start tag itself, `<p class="a">`, in UTF-8 byte offsets.
+        let open: Range<Int>
+        /// The whole element, its start tag through its end tag, when the
+        /// walk found an end tag for it. `nil` for a void element, a
+        /// self-closing tag, and an element whose end tag the author left
+        /// out — none of which have a span to give.
+        let whole: Range<Int>?
+        /// Whether everything inside it is text and inline markup: a heading,
+        /// a paragraph, a cell, a `<title>`. Those are the ones worth
+        /// revealing whole; a `<div>` around half the page is not.
+        let holdsTextOnly: Bool
+    }
+
+    /// Every element in the page, in document order — which is the order the
+    /// start tags are written in, and the order `querySelectorAll('*')` hands
+    /// the DOM's own elements back in.
+    ///
+    /// Throws the same `ParseError` the other three questions do: a page the
+    /// walk cannot finish has no map at all rather than half of one.
+    static func sourceTags(of text: String) throws -> [SourceTag] {
+        let bytes = Array(text.utf8)
+        var walker = Walker(bytes: bytes)
+        let nodes = try walker.parseDocument()
+        var tags: [SourceTag] = []
+        tags.reserveCapacity(bytes.count / 24 + 8)
+        collectTags(nodes, into: &tags)
+        return tags
+    }
+
+    private static func collectTags(_ nodes: [Node], into tags: inout [SourceTag]) {
+        for node in nodes {
+            switch node {
+            case .element(let element):
+                let close = element.close
+                tags.append(SourceTag(
+                    name: element.name,
+                    open: element.open,
+                    whole: close.map { element.open.lowerBound..<$0.upperBound },
+                    holdsTextOnly: close != nil && !element.children.contains(where: isBlock)
+                ))
+                collectTags(element.children, into: &tags)
+
+            case .raw(let raw):
+                // `script`, `style`, `pre`, `textarea`, `title`: the content
+                // is bytes rather than markup, so there is nothing inside to
+                // walk and nothing inside that is a block.
+                tags.append(SourceTag(
+                    name: raw.name,
+                    open: raw.open,
+                    whole: raw.close.map { raw.open.lowerBound..<$0.upperBound },
+                    holdsTextOnly: raw.close != nil
+                ))
+
+            case .text, .comment, .strayEnd:
+                break
+            }
+        }
+    }
+}

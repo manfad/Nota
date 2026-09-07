@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 @testable import Nota
 
-final class MarkdownPreviewTests: XCTestCase {
+final class MarkdownPreviewTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {
@@ -285,6 +285,42 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(link[.underlineStyle] as? Int, NSUnderlineStyle.single.rawValue)
         // Monochrome: underlined, never tinted.
         XCTAssertEqual(link[.foregroundColor] as? NSColor, .labelColor)
+    }
+
+    /// GitHub's rule: a level-1 or level-2 heading is underlined across the
+    /// pane, a level-3 is not. The rule is drawn, not spelled — the rendered
+    /// text is the heading's words alone, so nothing a click maps back moves.
+    func testALevelOneOrTwoHeadingCarriesTheRuleAttribute() throws {
+        XCTAssertEqual(try attributes(render("# Title\n\ntext"), at: "Title")[.notaHeadingRule] as? Bool, true)
+        XCTAssertEqual(try attributes(render("## Section\n\ntext"), at: "Section")[.notaHeadingRule] as? Bool, true)
+        XCTAssertNil(try attributes(render("### Sub\n\ntext"), at: "Sub")[.notaHeadingRule])
+        XCTAssertNil(try attributes(render("# Title\n\ntext"), at: "text")[.notaHeadingRule])
+        XCTAssertEqual(render("# Title\n\ntext").string, "Title\ntext", "no character is added for it")
+    }
+
+    @MainActor
+    func testThePaneDrawsAHairlineUnderALevelOneHeadingAcrossItsFullWidth() throws {
+        _ = NSApplication.shared
+        let preview = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        preview.layoutSubtreeIfNeeded()
+        preview.show(result("# Title\n\nBody text.\n\n### Sub\n\nMore.", width: preview.contentWidth))
+
+        let rules = preview.headingRuleRects
+        XCTAssertEqual(rules.count, 1, "one rule, under the level-1 heading only")
+        let rule = try XCTUnwrap(rules.first)
+        let geometry = preview.textGeometry
+        let origin = geometry.origin
+        XCTAssertEqual(rule.minX, origin.x, accuracy: 0.5, "from the left margin")
+        XCTAssertEqual(rule.maxX, geometry.bounds.width - origin.x, accuracy: 0.5, "to the right one")
+        XCTAssertEqual(rule.height, 1)
+
+        // Under the heading's line and above the body's.
+        let layout = try XCTUnwrap(geometry.layoutManager)
+        let title = layout.lineFragmentUsedRect(forGlyphAt: 0, effectiveRange: nil)
+        let bodyStart = (geometry.string as NSString).range(of: "Body").location
+        let body = layout.lineFragmentUsedRect(forGlyphAt: bodyStart, effectiveRange: nil)
+        XCTAssertGreaterThan(rule.minY, title.maxY + origin.y)
+        XCTAssertLessThan(rule.maxY, body.minY + origin.y)
     }
 
     func testAThematicBreakBecomesAHairlineAcrossThePane() throws {
@@ -631,11 +667,16 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(controller.previewState.isVisible)
         XCTAssertEqual(controller.previewMode, .split)
 
-        // Reading is the third stop of the cycle, and the render is still up.
+        // Reading is the far end of the walk, and the render is still up.
         controller.toggleMarkdownPreview()
         XCTAssertTrue(controller.previewState.isVisible)
         XCTAssertEqual(controller.previewMode, .reading)
 
+        // And back the way it came: split again, then the editor. The render
+        // never goes from the whole window to gone in one press.
+        controller.toggleMarkdownPreview()
+        XCTAssertTrue(controller.previewState.isVisible)
+        XCTAssertEqual(controller.previewMode, .split)
         controller.toggleMarkdownPreview()
         XCTAssertFalse(controller.previewState.isVisible)
         XCTAssertEqual(controller.previewMode, .off)
@@ -1586,11 +1627,12 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(plus.frame.minY, 0)
         XCTAssertLessThanOrEqual(plus.frame.maxY, tabBar.bounds.maxY + 0.5)
 
-        // The bookmark button and the Settings gear are the two things that
+        // The two bookmark buttons and the Settings gear are the things that
         // sit *past* the + by design (SPEC Todo 13); everything else in the
         // strip is a tab, and a tab stops short of it.
         for subview in tabBar.subviews
-        where subview !== plus && !(subview is BookmarksButton) && !(subview is SettingsButton)
+        where subview !== plus && !(subview is BookmarkToggleButton)
+            && !(subview is BookmarksButton) && !(subview is SettingsButton)
             && !subview.isHidden {
             XCTAssertFalse(
                 subview.frame.intersects(plus.frame),
@@ -1872,6 +1914,81 @@ final class MarkdownPreviewTests: XCTestCase {
             ),
             "Paragraph 100"
         )
+    }
+
+    @MainActor
+    func testAPressThatDoesNotMoveIsStillTheBlockClick() throws {
+        _ = NSApplication.shared
+        let controller = try makeControllerShowingPreview()
+        let editor = try editorTextView(of: controller)
+        editor.insertText(
+            "# Title\n\nFirst paragraph.\n\nSecond paragraph.",
+            replacementRange: editor.selectedRange()
+        )
+        waitForDebounce()
+
+        try clickPreview(of: controller, on: "Second paragraph.")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 27, length: 17))
+
+        let preview = try previewView(of: controller)
+        let rendered = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+        XCTAssertEqual(rendered.selectedRange().length, 0,
+                       "a press that swept nothing selects nothing in the render")
+        XCTAssertEqual(preview.highlightedSourceRange, NSRange(location: 27, length: 17),
+                       "and the band lights under the block it landed in")
+    }
+
+    @MainActor
+    func testDraggingAcrossTheRenderSelectsTextAndJumpsNowhere() throws {
+        _ = NSApplication.shared
+        let controller = try makeControllerShowingPreview()
+        let editor = try editorTextView(of: controller)
+        editor.insertText(
+            "# Title\n\nFirst paragraph.\n\nSecond paragraph.",
+            replacementRange: editor.selectedRange()
+        )
+        waitForDebounce()
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+
+        let preview = try previewView(of: controller)
+        let rendered = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+        let caret = editor.selectedRange()
+        let band = preview.highlightedSourceRange
+
+        try pressPreview(of: controller, on: "First paragraph.",
+                         draggingTo: "Second paragraph.")
+
+        let swept = rendered.selectedRange()
+        XCTAssertGreaterThan(swept.length, 0, "the sweep selected the text it crossed")
+        XCTAssertTrue(
+            (rendered.string as NSString).substring(with: swept).hasPrefix("First paragraph."),
+            "starting where the press went down"
+        )
+        XCTAssertEqual(editor.selectedRange(), caret, "a drag is a selection, not a jump")
+        XCTAssertEqual(preview.highlightedSourceRange, band, "and the band is left as it was")
+    }
+
+    @MainActor
+    func testADoubleClickInTheRenderTakesAWordRatherThanJumping() throws {
+        _ = NSApplication.shared
+        let controller = try makeControllerShowingPreview()
+        let editor = try editorTextView(of: controller)
+        editor.insertText(
+            "# Title\n\nFirst paragraph.\n\nSecond paragraph.",
+            replacementRange: editor.selectedRange()
+        )
+        waitForDebounce()
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+
+        let preview = try previewView(of: controller)
+        let rendered = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+        let caret = editor.selectedRange()
+
+        try pressPreview(of: controller, on: "Second paragraph.", clickCount: 2)
+
+        let word = rendered.selectedRange()
+        XCTAssertEqual((rendered.string as NSString).substring(with: word), "Second")
+        XCTAssertEqual(editor.selectedRange(), caret, "and it jumped nowhere")
     }
 
     @MainActor
@@ -2757,7 +2874,9 @@ final class MarkdownPreviewTests: XCTestCase {
     }
 
     /// Split still gives up nothing to the click: the render itself is never
-    /// where a caret lands, only where the jump comes from.
+    /// where a caret lands, only where the jump comes from. The press now
+    /// runs through `NSTextView`'s own tracking so that a drag can select
+    /// (2026-09-07), and the caret that loop leaves behind is put back.
     @MainActor
     func testClickingABlockInSplitLeavesThePaneUnselected() throws {
         _ = NSApplication.shared
@@ -2774,7 +2893,13 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertEqual(controller.previewMode, .split, "the block click still fired")
         let preview = try previewView(of: controller)
         let textView = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
-        XCTAssertEqual(textView.selectedRange(), NSRange(location: 0, length: 0))
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 0, length: 0),
+                       "no text was swept, so the render holds none")
+        XCTAssertFalse(textView.acceptsFirstResponder, "and the keyboard never came here")
+        XCTAssertTrue(
+            controller.window?.firstResponder is NotaTextView,
+            "it is still the editor's"
+        )
     }
 
     /// Reading gives up nothing a plain read-only text view has: a click
@@ -3825,6 +3950,63 @@ final class MarkdownPreviewTests: XCTestCase {
         textView.mouseDown(with: try event(.leftMouseDown))
         while NSApp.nextEvent(
             matching: .leftMouseUp, until: nil, inMode: .default, dequeue: true
+        ) != nil {}
+    }
+
+    /// Where in the pane a piece of the rendered text is drawn: just inside
+    /// its first glyph, or just past its last.
+    @MainActor
+    private func previewPoint(
+        in textView: NSTextView, of text: String, atEnd: Bool = false
+    ) throws -> NSPoint {
+        let layoutManager = try XCTUnwrap(textView.layoutManager)
+        let container = try XCTUnwrap(textView.textContainer)
+        let range = (textView.string as NSString).range(of: text)
+        try XCTSkipIf(range.location == NSNotFound, "\(text.debugDescription) is not in the pane")
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+        rect.origin.x += textView.textContainerOrigin.x
+        rect.origin.y += textView.textContainerOrigin.y
+        return NSPoint(x: atEnd ? rect.maxX - 2 : rect.minX + 2, y: rect.midY)
+    }
+
+    /// A press in the render that is not the plain single click above: a
+    /// sweep across to another piece of text, or a double click.
+    ///
+    /// The drag and the release are queued before the press, since
+    /// `NSTextView` answers a press by running its own tracking loop until
+    /// the button comes back up — the reader's events are already in the
+    /// queue when that loop starts looking, and a test's have to be too.
+    @MainActor
+    private func pressPreview(
+        of controller: MainWindowController, on text: String,
+        draggingTo target: String? = nil, clickCount: Int = 1
+    ) throws {
+        let window = try XCTUnwrap(controller.window)
+        let preview = try previewView(of: controller)
+        let textView = try XCTUnwrap(descendant(of: preview, ofType: NSTextView.self))
+        let down = textView.convert(try previewPoint(in: textView, of: text), to: nil)
+        let up = try target.map {
+            textView.convert(try previewPoint(in: textView, of: $0, atEnd: true), to: nil)
+        } ?? down
+
+        func event(_ type: NSEvent.EventType, at location: NSPoint) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: location,
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                eventNumber: 0, clickCount: clickCount, pressure: 1
+            ))
+        }
+
+        if target != nil { window.postEvent(try event(.leftMouseDragged, at: up), atStart: false) }
+        window.postEvent(try event(.leftMouseUp, at: up), atStart: false)
+        textView.mouseDown(with: try event(.leftMouseDown, at: down))
+        // Anything the tracking loop did not take is taken back out, or the
+        // next press in this suite would read it as a drag from here.
+        while NSApp.nextEvent(
+            matching: [.leftMouseUp, .leftMouseDragged], until: nil,
+            inMode: .default, dequeue: true
         ) != nil {}
     }
 

@@ -2,21 +2,23 @@ import AppKit
 import XCTest
 @testable import Nota
 
-/// Settings › Appearance › Window: the tab strip, the traffic lights and the
-/// strip's two trailing buttons can each be switched off, and every one of
-/// them comes back the moment the setting does.
-final class WindowChromeTests: XCTestCase {
+/// Settings › Tab bar: the tab strip, the traffic lights and the strip's
+/// three trailing buttons can each be switched off, and every one of them
+/// comes back the moment the setting does.
+final class WindowChromeTests: AppKitTestCase {
     private var originals: (tabBar: Bool, autoTabBar: Bool, lights: Bool,
-                            bookmark: Bool, settings: Bool)!
+                            bookmarkToggle: Bool, bookmark: Bool, settings: Bool)!
 
     override func setUp() {
         super.setUp()
         let prefs = Preferences.shared
         originals = (prefs.hidesTabBar, prefs.autoHidesTabBar, prefs.hidesTrafficLights,
-                     prefs.hidesBookmarkButton, prefs.hidesSettingsButton)
+                     prefs.hidesBookmarkToggleButton, prefs.hidesBookmarkButton,
+                     prefs.hidesSettingsButton)
         prefs.hidesTabBar = false
         prefs.autoHidesTabBar = false
         prefs.hidesTrafficLights = false
+        prefs.hidesBookmarkToggleButton = false
         prefs.hidesBookmarkButton = false
         prefs.hidesSettingsButton = false
     }
@@ -26,6 +28,7 @@ final class WindowChromeTests: XCTestCase {
         prefs.hidesTabBar = originals.tabBar
         prefs.autoHidesTabBar = originals.autoTabBar
         prefs.hidesTrafficLights = originals.lights
+        prefs.hidesBookmarkToggleButton = originals.bookmarkToggle
         prefs.hidesBookmarkButton = originals.bookmark
         prefs.hidesSettingsButton = originals.settings
         super.tearDown()
@@ -117,47 +120,66 @@ final class WindowChromeTests: XCTestCase {
     }
 
     /// A hidden button is not drawn, and its slot goes back to the tabs: the
-    /// + moves right by exactly what the button took.
+    /// + moves right by exactly what the button took. The three are peeled
+    /// off from the trailing edge inwards, and each time the ones left close
+    /// up rather than leaving a hole where the hidden one was.
     @MainActor
     func testHidingTheStripsButtonsGivesTheirSlotsBackToTheTabs() throws {
         let (controller, window) = try makeController()
         let strip = controller.tabStrip
+        let slot = TabStripLayout.bookmarkSlot
+        let gap = TabStripLayout.bookmarkGap
+        let reserve = TabStripLayout.trailingReserve
         func settle() {
             window.layoutIfNeeded()
             strip.layoutSubtreeIfNeeded()
         }
         settle()
-        let plusWithBoth = strip.newTabButtonFrameForTesting.minX
+        let plusWithAll = strip.newTabButtonFrameForTesting.minX
+        XCTAssertEqual(strip.trailingButtonsHiddenForTesting.bookmarkToggle, false)
         XCTAssertEqual(strip.trailingButtonsHiddenForTesting.bookmark, false)
         XCTAssertEqual(strip.trailingButtonsHiddenForTesting.settings, false)
+        // Bookmark, Bookmarks, gear — in that order, left to right.
+        XCTAssertLessThan(strip.bookmarkToggleButtonFrameForTesting.minX,
+                          strip.bookmarksButtonFrameForTesting.minX)
+        XCTAssertLessThan(strip.bookmarksButtonFrameForTesting.minX,
+                          strip.settingsButtonFrameForTesting.minX)
+        XCTAssertEqual(TabStripLayout.trailingControls, (slot + gap) * 3 + reserve)
 
         Preferences.shared.hidesSettingsButton = true
         settle()
         XCTAssertTrue(strip.trailingButtonsHiddenForTesting.settings)
         XCTAssertFalse(strip.trailingButtonsHiddenForTesting.bookmark)
-        // The bookmark button moves into the gear's place…
-        XCTAssertEqual(
-            strip.bookmarksButtonFrameForTesting.minX,
-            strip.bounds.width - TabStripLayout.trailingReserve - TabStripLayout.bookmarkSlot,
-            accuracy: 0.5
-        )
-        // …and the + follows it right by one slot and a gap. The strip is
+        // The Bookmarks button moves into the gear's place, and the Bookmark
+        // toggle follows it…
+        XCTAssertEqual(strip.bookmarksButtonFrameForTesting.minX,
+                       strip.bounds.width - reserve - slot, accuracy: 0.5)
+        XCTAssertEqual(strip.bookmarkToggleButtonFrameForTesting.minX,
+                       strip.bounds.width - reserve - slot - gap - slot, accuracy: 0.5)
+        // …and the + follows them right by one slot and a gap. The strip is
         // full here (one tab, so the + rides after it), so compare the room
         // the tabs are given instead.
-        XCTAssertEqual(
-            TabStripLayout.trailingControls,
-            TabStripLayout.bookmarkSlot + TabStripLayout.bookmarkGap + TabStripLayout.trailingReserve
-        )
+        XCTAssertEqual(TabStripLayout.trailingControls, (slot + gap) * 2 + reserve)
 
         Preferences.shared.hidesBookmarkButton = true
         settle()
         XCTAssertTrue(strip.trailingButtonsHiddenForTesting.bookmark)
-        XCTAssertEqual(TabStripLayout.trailingControls, TabStripLayout.trailingReserve)
+        XCTAssertEqual(TabStripLayout.trailingControls, slot + gap + reserve)
+        XCTAssertEqual(strip.bookmarkToggleButtonFrameForTesting.minX,
+                       strip.bounds.width - reserve - slot, accuracy: 0.5,
+                       "the last one left takes the trailing slot")
 
+        Preferences.shared.hidesBookmarkToggleButton = true
+        settle()
+        XCTAssertTrue(strip.trailingButtonsHiddenForTesting.bookmarkToggle)
+        XCTAssertEqual(TabStripLayout.trailingControls, reserve)
+
+        Preferences.shared.hidesBookmarkToggleButton = false
         Preferences.shared.hidesBookmarkButton = false
         Preferences.shared.hidesSettingsButton = false
         settle()
-        XCTAssertEqual(strip.newTabButtonFrameForTesting.minX, plusWithBoth, accuracy: 0.5)
+        XCTAssertEqual(strip.newTabButtonFrameForTesting.minX, plusWithAll, accuracy: 0.5)
+        XCTAssertEqual(strip.trailingButtonsHiddenForTesting.bookmarkToggle, false)
         XCTAssertEqual(strip.trailingButtonsHiddenForTesting.bookmark, false)
         XCTAssertEqual(strip.trailingButtonsHiddenForTesting.settings, false)
     }

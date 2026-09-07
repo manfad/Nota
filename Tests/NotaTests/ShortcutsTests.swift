@@ -5,7 +5,7 @@ import XCTest
 
 /// The adjustable app shortcuts: the table itself, the menu reading from it,
 /// and the Settings tab that edits it.
-final class ShortcutsTests: XCTestCase {
+final class ShortcutsTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
     private var storedShortcuts: [ShortcutAction: KeyCombo] = [:]
 
@@ -219,50 +219,44 @@ final class ShortcutsTests: XCTestCase {
         }
     }
 
+    /// No Save button holds the key back: the combination is written the
+    /// moment it is recorded, and taking it away again empties the table.
     @MainActor
-    func testRecordingAComboMarksTheDraftAndSaveWritesIt() throws {
+    func testRecordingAComboWritesItAtOnce() throws {
         _ = NSApplication.shared
         let controller = SettingsWindowController.shared
         let root = try XCTUnwrap(controller.window?.contentView)
         controller.selectPage(titled: "Shortcuts")
         defer { controller.selectPage(at: 0) }
 
-        let save = try XCTUnwrap(descendant(of: root, ofType: NSButton.self) {
-            $0.title == "Save"
-        })
-        XCTAssertFalse(save.isEnabled, "a fresh draft has nothing to save")
+        XCTAssertNil(descendant(of: root, ofType: NSButton.self) { $0.title == "Save" },
+                     "there is nothing to press")
 
         let row = try XCTUnwrap(field(for: .goToTab, in: root))
         XCTAssertEqual(row.combo, KeyCombo("j", [.command, .shift]))
         row.recordForTesting(keyEvent("j", [.command, .option]))
 
         XCTAssertEqual(row.combo, KeyCombo("j", [.command, .option]))
-        XCTAssertTrue(save.isEnabled, "recording a key is a draft change")
-        XCTAssertEqual(Preferences.shared.shortcuts, [:], "and nothing is written until Save")
-
-        save.performClick(nil)
-        XCTAssertEqual(Preferences.shared.combo(for: .goToTab), KeyCombo("j", [.command, .option]))
-        XCTAssertFalse(save.isEnabled)
+        XCTAssertEqual(Preferences.shared.combo(for: .goToTab), KeyCombo("j", [.command, .option]),
+                       "recording a key is what writes it")
 
         // Delete puts the command's own key back, which is not an override at
         // all, so the table empties again.
         row.recordForTesting(keyEvent("\u{8}", [], keyCode: 51))
         XCTAssertEqual(row.combo, KeyCombo("j", [.command, .shift]))
-        save.performClick(nil)
         XCTAssertEqual(Preferences.shared.shortcuts, [:])
     }
 
+    /// A clash is the one thing live apply refuses: nothing is written, the
+    /// field goes back to the key that is stored, and the page says why.
     @MainActor
-    func testATakenComboWarnsAndHoldsSaveBack() throws {
+    func testATakenComboWarnsAndIsNeverWritten() throws {
         _ = NSApplication.shared
         let controller = SettingsWindowController.shared
         let root = try XCTUnwrap(controller.window?.contentView)
         controller.selectPage(titled: "Shortcuts")
         defer { controller.selectPage(at: 0) }
 
-        let save = try XCTUnwrap(descendant(of: root, ofType: NSButton.self) {
-            $0.title == "Save"
-        })
         // The page's own warning line, not Summon's: both are red, so the one
         // the list writes to is picked out by name.
         XCTAssertNotNil(descendant(of: root, ofType: NSButton.self) {
@@ -280,26 +274,25 @@ final class ShortcutsTests: XCTestCase {
         XCTAssertTrue(warning.stringValue.contains("Save"))
         XCTAssertTrue(warning.stringValue.contains("Open…"))
         XCTAssertTrue(warning.stringValue.contains("⌘S"))
-        XCTAssertFalse(save.isEnabled)
-        save.performClick(nil)
         XCTAssertEqual(Preferences.shared.shortcuts, [:], "a clash is never written")
+        XCTAssertEqual(row.combo, ShortcutAction.openFile.defaultCombo,
+                       "the field goes back to the key that is stored")
 
         // ⌘C belongs to the Mac, not to Nota.
         row.recordForTesting(keyEvent("c", [.command]))
         XCTAssertFalse(warning.isHidden)
         XCTAssertTrue(warning.stringValue.contains("Copy"))
-        XCTAssertFalse(save.isEnabled)
+        XCTAssertEqual(Preferences.shared.shortcuts, [:])
+        XCTAssertEqual(row.combo, ShortcutAction.openFile.defaultCombo)
 
-        // Somewhere free, and the way out is open again.
+        // Somewhere free, and it lands at once — and clears the warning.
         row.recordForTesting(keyEvent("j", [.command, .control]))
         XCTAssertTrue(warning.isHidden)
-        XCTAssertTrue(save.isEnabled)
-        save.performClick(nil)
         XCTAssertEqual(Preferences.shared.combo(for: .openFile), KeyCombo("j", [.command, .control]))
     }
 
     @MainActor
-    func testResetToDefaultsClearsEveryOverrideOnSave() throws {
+    func testResetToDefaultsClearsEveryOverrideAtOnce() throws {
         _ = NSApplication.shared
         Preferences.shared.shortcuts = [
             .goToTab: KeyCombo("j", [.command, .option]),
@@ -320,14 +313,7 @@ final class ShortcutsTests: XCTestCase {
         })
         reset.performClick(nil)
         XCTAssertEqual(row.combo, KeyCombo("j", [.command, .shift]))
-        XCTAssertFalse(Preferences.shared.shortcuts.isEmpty, "still only a draft")
-
-        let save = try XCTUnwrap(descendant(of: root, ofType: NSButton.self) {
-            $0.title == "Save"
-        })
-        XCTAssertTrue(save.isEnabled)
-        save.performClick(nil)
-        XCTAssertEqual(Preferences.shared.shortcuts, [:])
+        XCTAssertEqual(Preferences.shared.shortcuts, [:], "the table empties on the press")
         XCTAssertEqual(Preferences.shared.combo(for: .zenMode), KeyCombo("z", [.command, .option]))
     }
 

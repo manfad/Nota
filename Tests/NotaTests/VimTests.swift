@@ -7,7 +7,7 @@ import XCTest
 /// `VimEngine.handle(_:)` with the keys `VimKey.parse` produces, which is
 /// exactly what the keyboard produces.
 @MainActor
-final class VimTests: XCTestCase {
+final class VimTests: AppKitTestCase {
 
     // MARK: - Harness
 

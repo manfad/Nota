@@ -61,6 +61,13 @@ extension NSAttributedString.Key {
     /// characters — a background attribute hugs each line's glyphs and comes
     /// out as a stack of loose rectangles.
     static let notaCodeBlock = NSAttributedString.Key("notaCodeBlock")
+
+    /// Laid on every character of a level-1 or level-2 heading. The hairline
+    /// under one is drawn by the pane across its whole width, the way GitHub
+    /// underlines a section's title and not a subsection's — not a character
+    /// of its own, so the text and the ranges a click maps back stay as they
+    /// are.
+    static let notaHeadingRule = NSAttributedString.Key("notaHeadingRule")
 }
 
 /// Markdown as an attributed string, for the preview pane.
@@ -353,7 +360,9 @@ enum MarkdownRenderer {
             let scale = Self.headingScales[min(max(level, 1), 6) - 1]
             blockFont = RenderStyle.heading(font, scale: scale)
             style.paragraphSpacingBefore = (font.pointSize * 0.9).rounded()
-            style.paragraphSpacing = (font.pointSize * 0.3).rounded()
+            // The two underlined levels take a little more air below, for
+            // the rule the pane draws there (`notaHeadingRule`).
+            style.paragraphSpacing = (font.pointSize * (level <= 2 ? 0.55 : 0.3)).rounded()
         case .codeBlock:
             isCodeBlock = true
             blockFont = RenderStyle.monospaced(font.pointSize)
@@ -454,6 +463,9 @@ enum MarkdownRenderer {
 
         let blockRange = NSRange(location: start, length: result.length - start)
         result.addAttribute(.paragraphStyle, value: style, range: blockRange)
+        if case .header(let level) = block.kind, level <= 2 {
+            result.addAttribute(.notaHeadingRule, value: true, range: blockRange)
+        }
         if isCodeBlock {
             RenderStyle.padEnds(of: blockRange, in: result, style: style,
                                 gap: (font.pointSize * 0.6).rounded())

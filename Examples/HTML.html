@@ -8,7 +8,6 @@
 <body>
 
 <h1><img src="HTML.svg" alt=""> HTML in Nota</h1>
-<p class="standfirst">Press ⇧⌘P to cycle editor → split → reading, or ⌥⇧⌘P to jump straight to reading.</p>
 
 <h2 id="the-page-is-the-page">The page is the page</h2>
 <p>
@@ -17,12 +16,6 @@
   you see is what a browser sees: this page's doctype, its
   <a href="HTML.css">own stylesheet</a> beside it, the
   <a href="#links">colours it asked for</a>, and its pictures.
-</p>
-<p>
-  Everything resolves beside the file. <code>HTML.css</code> and
-  <code>HTML.svg</code> sit in this folder, and that is all either needs to be
-  found. The stylesheet is source in its own right: open it in a tab and it has
-  no preview, because a stylesheet is not a page.
 </p>
 
 <h2 id="live">Live</h2>
@@ -40,6 +33,20 @@
   one</a> leaves, so it opens in your browser: Nota is an editor with a preview
   beside it, not a browser with an editor beside it.
 </p>
+
+<h2 id="scripts">Scripts</h2>
+<p>
+  A field is a field, and a button is a button. The script that listens to
+  both is <a href="HTML.js">HTML.js</a> beside this file, and it runs here the
+  way it would in a browser. Type, then click.
+</p>
+<p class="script-row">
+  <input type="text" id="say" placeholder="Type here" autocomplete="off" spellcheck="false">
+  <button type="button" id="click-me">Click me</button>
+</p>
+<p id="click-status">the script has not run yet</p>
+
+<script src="HTML.js"></script>
 
 <footer>Saved as <code>.html</code> or <code>.htm</code>, in any case you like.</footer>
 

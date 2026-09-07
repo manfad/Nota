@@ -20,6 +20,15 @@ import SQLite3
 /// handle that refuses every action but a read, so a query is a question
 /// and can never be an edit. The dump itself runs with no authorizer at
 /// all — it is all writes, and they are the point.
+///
+/// A dump does not have to be SQLite's own: an export from `mysqldump`,
+/// phpMyAdmin or `pg_dump` is welcome too. `SQLDumpDialect` is where each
+/// one's own spellings — `SET`, `LOCK`/`UNLOCK TABLES`, `START TRANSACTION`,
+/// a `CREATE TABLE`'s `ENGINE=` or `character varying`, `GRANT`, `ALTER …
+/// OWNER TO` and the rest — are turned into what SQLite's parser takes, or
+/// skipped outright where there is no data in them to lose. A `pg_dump`'s
+/// `COPY table FROM stdin` block is the one shape neither skip nor rewrite
+/// fits — see `runCopyBlock` below.
 final class SQLDump {
 
     /// How many rows a page holds. A page is what the grid draws and what
@@ -152,6 +161,14 @@ final class SQLDump {
         let ascending: Bool
     }
 
+    /// One row that ⌘F over the grid found: where it sits in the whole table
+    /// in the order on screen, 0-based, and its values. *Which* of them
+    /// actually matches is not decided here — see `hits(for:inTable:…)`.
+    struct Hit: Equatable {
+        let row: Int
+        let values: [Value]
+    }
+
     /// The failure that stopped the dump, if one did. Everything the
     /// statements before it made is still in the database and still
     /// readable: a dump that stops halfway is half a database, not none.
@@ -219,6 +236,19 @@ final class SQLDump {
         // end, in one pass.
         var spans: [(start: Int, end: Int, table: String?, rowids: ClosedRange<Int64>?)] = []
         var rowidTables: [String: Bool] = [:]
+        // Whether the file has shown itself to be a MySQL dump yet (a
+        // `LOCK TABLES`, a MySQL-only `SET`, or a `CREATE TABLE` with
+        // `ENGINE=` — see `SQLDumpDialect.looksLikeMySQL`), which is what
+        // tells `SQLDumpDialect.action` it may decode a statement's own
+        // backslash escapes rather than leave a `pg_dump` export's own `\`
+        // characters alone.
+        var mysqlDetected = false
+        // Which of a table's columns were declared `boolean`, kept beside
+        // its name from the moment its `CREATE TABLE` runs — by the time a
+        // `COPY` block for it is read, `boolean` has already become
+        // `INTEGER` in the schema itself, so this is the only place left
+        // that still knows which columns they were.
+        var booleanColumnsByTable: [String: Set<String>] = [:]
         sql.withCString { start in
             var cursor = UnsafePointer(start)
             while cursor.pointee != 0 {
@@ -226,8 +256,148 @@ final class SQLDump {
                 // the range begins on its first letter rather than on the
                 // newline before it.
                 cursor = skippingBlanks(cursor)
+                // Past everything that is not the start of a real statement
+                // but that `skippingBlanks` does not know is blank: a
+                // statement of nothing at all — the `;` a MySQL conditional
+                // comment (`/*!40101 … */;`) leaves behind once the comment
+                // itself is skipped above, or just a stray extra semicolon
+                // — and a psql meta-command (`\restrict …`, `\connect …`),
+                // which is not SQL at all and ends at its own line rather
+                // than at a `;`. `sqlite3_prepare_v2` does not stop at a
+                // leading `;`: given nothing but one in front of real SQL it
+                // reads straight through and compiles the statement after
+                // it, so this file has to skip both kinds itself — to keep
+                // `begin` on the statement that is actually about to run,
+                // and so the dialect check below is asked about that
+                // statement's own leading word rather than about a `;` or a
+                // `\`.
+                while true {
+                    let before = cursor
+                    while cursor.pointee == 59 {
+                        cursor = skippingBlanks(cursor + 1)
+                    }
+                    if cursor.pointee == 92 {
+                        while cursor.pointee != 0, cursor.pointee != 10 { cursor += 1 }
+                        cursor = skippingBlanks(cursor)
+                    }
+                    if cursor == before { break }
+                }
                 guard cursor.pointee != 0 else { return }
                 let begin = start.distance(to: cursor)
+
+                // `COPY table (cols) FROM stdin;` — a `pg_dump` export's own
+                // way of writing a table's rows — is not one statement at
+                // all: the header ends at its `;` like anything else, but
+                // the rows follow as their own lines, ended by a lone `\.`
+                // rather than by SQL of any kind. It is looked for before
+                // anything else because it fits none of `SQLDumpDialect`'s
+                // skip/rewrite/run shape: one block becomes many `INSERT`s,
+                // batched, and one source-map span *per row* rather than
+                // one for the whole thing.
+                if SQLDumpDialect.leadingKeyword(at: cursor) == "COPY",
+                   let block = SQLDumpDialect.parseCopyBlock(from: cursor) {
+                    let blockEnd = cursor + block.length
+                    let booleanColumns = booleanColumnsByTable[block.table.lowercased()] ?? []
+                    guard runCopyBlock(
+                        block, handle: handle, begin: begin, booleanColumns: booleanColumns,
+                        spans: &spans
+                    ) else {
+                        failure = Failure(
+                            message: String(cString: sqlite3_errmsg(handle)),
+                            statement: SQLDumpDialect.string(from: cursor, to: blockEnd)
+                        )
+                        return
+                    }
+                    cursor = blockEnd
+                    continue
+                }
+
+                // MySQL's and PostgreSQL's own spellings — a `SET`, `USE`,
+                // `LOCK`/`UNLOCK TABLES`, `START TRANSACTION`, `GRANT`,
+                // `ALTER … OWNER TO`, `CREATE TABLE`/`CREATE INDEX` and the
+                // rest a `mysqldump`, phpMyAdmin or `pg_dump` export
+                // carries — are looked at before anything is prepared.
+                // `handles` is a one-word check against the raw buffer, so
+                // every other statement (every `INSERT` with nothing to
+                // rewrite, above all) pays for nothing more than that.
+                // See `SQLDumpDialect`.
+                let leadingKeyword = SQLDumpDialect.leadingKeyword(at: cursor)
+                if SQLDumpDialect.handles(leadingKeyword) {
+                    let extentEnd = SQLDumpDialect.statementExtent(
+                        from: cursor, mysqlDetected: mysqlDetected
+                    )
+                    // `INSERT` is the one keyword here that shows up once a
+                    // row rather than once a table — a `.dump`'s worth of
+                    // them is most of the file — so before building a
+                    // `String` and tokenising it, a byte scan alone asks
+                    // whether this one could possibly need `action`'s
+                    // closer look at all: a `public.` prefix, or, once the
+                    // dump is known to be MySQL's, a backslash. Neither
+                    // found, and a plain `INSERT` falls straight through to
+                    // the ordinary prepare below, exactly as an unhandled
+                    // statement does — no `String`, no tokens, the same
+                    // cost this file already paid before `INSERT` was ever
+                    // one of the keywords `handles` answers yes to.
+                    let looksAtThisStatement = leadingKeyword != "INSERT"
+                        || SQLDumpDialect.mayNeedRewrite(
+                            from: cursor, to: extentEnd, mysqlDetected: mysqlDetected
+                        )
+                    if looksAtThisStatement {
+                        let rawText = SQLDumpDialect.string(from: cursor, to: extentEnd)
+                        if !mysqlDetected {
+                            mysqlDetected = SQLDumpDialect.looksLikeMySQL(rawText)
+                        }
+                        if leadingKeyword == "CREATE",
+                           let info = SQLDumpDialect.booleanColumns(inCreateTable: rawText) {
+                            booleanColumnsByTable[info.table] = info.columns
+                        }
+                        switch SQLDumpDialect.action(for: rawText, mysqlDetected: mysqlDetected) {
+                        case .skip:
+                            cursor = extentEnd
+                            continue
+                        case .rewrite(let rewritten):
+                            // The rewritten text is prepared on its own —
+                            // its tail is a position in a string that
+                            // exists nowhere in the file, so `extentEnd`,
+                            // found before the rewrite, is what the source
+                            // map and the cursor both use instead. A
+                            // rewrite that still will not run stops the
+                            // whole dump exactly as an unrecognised
+                            // statement always has, and shows the statement
+                            // as the file itself wrote it.
+                            var rewrittenStatement: OpaquePointer?
+                            guard sqlite3_prepare_v2(
+                                handle, rewritten, -1, &rewrittenStatement, nil
+                            ) == SQLITE_OK else {
+                                failure = Failure(
+                                    message: String(cString: sqlite3_errmsg(handle)),
+                                    statement: rawText
+                                )
+                                return
+                            }
+                            if let rewrittenStatement {
+                                var stepped = sqlite3_step(rewrittenStatement)
+                                while stepped == SQLITE_ROW {
+                                    stepped = sqlite3_step(rewrittenStatement)
+                                }
+                                sqlite3_finalize(rewrittenStatement)
+                                guard stepped == SQLITE_DONE else {
+                                    failure = Failure(
+                                        message: String(cString: sqlite3_errmsg(handle)),
+                                        statement: rawText
+                                    )
+                                    return
+                                }
+                            }
+                            spans.append((begin, start.distance(to: extentEnd), nil, nil))
+                            cursor = extentEnd
+                            continue
+                        case .run:
+                            break
+                        }
+                    }
+                }
+
                 var statement: OpaquePointer?
                 var tail: UnsafePointer<CChar>?
                 let prepared = sqlite3_prepare_v2(handle, cursor, -1, &statement, &tail)
@@ -278,6 +448,87 @@ final class SQLDump {
             }
         }
         return (failure, sourceMap(of: spans, in: sql))
+    }
+
+    /// One `COPY` block's rows, run as `INSERT`s two hundred at a time —
+    /// enough that a table of thousands of rows is a handful of statements
+    /// rather than one per row, and few enough that the SQL text of any one
+    /// of them stays reasonable.
+    ///
+    /// The batching is invisible to the source map: whichever statement
+    /// physically wrote a row, the span recorded for it is the row's own
+    /// line in the file, one rowid to one span, so `range(ofRowid:)` never
+    /// has to parse a batch's `VALUES (…),(…),(…)` back apart to find it —
+    /// the same shortcut a single-row span already takes.
+    ///
+    /// `false` for the first batch that will not run, leaving
+    /// `sqlite3_errmsg` set for the caller to build a `Failure` from —
+    /// nothing already run is undone, matching a plain statement's own
+    /// failure, which never undoes what came before it either.
+    private static func runCopyBlock(
+        _ block: SQLDumpDialect.CopyBlock, handle: OpaquePointer, begin: Int,
+        booleanColumns: Set<String>,
+        spans: inout [(start: Int, end: Int, table: String?, rowids: ClosedRange<Int64>?)]
+    ) -> Bool {
+        guard !block.rows.isEmpty else { return true }
+        let quotedTable = quote(block.table)
+        let columnList = block.columns.map { columns in
+            "(" + columns.map(quote).joined(separator: ", ") + ")"
+        } ?? ""
+        // A `WITHOUT ROWID` table leaves `last_insert_rowid` where it was,
+        // so its rows are recorded with no spans at all rather than with
+        // somebody else's — the same rule a plain `INSERT`'s own rows
+        // follow.
+        let keepsRowids = hasRowid(block.table, in: handle)
+        let batchSize = 200
+        var index = 0
+        while index < block.rows.count {
+            let batch = block.rows[index..<min(index + batchSize, block.rows.count)]
+            let values = batch.map { row -> String in
+                "(" + row.fields.enumerated().map { position, field -> String in
+                    // Postgres's own spelling for a boolean is the bare
+                    // letter `t` or `f`, not the word `true`/`false` — the
+                    // column's own name (from the header, in the row's
+                    // order) is what says whether this field is one.
+                    let column = (block.columns?.indices.contains(position) ?? false)
+                        ? block.columns![position].lowercased() : nil
+                    if SQLDumpDialect.copyFieldIsNull(field) { return "NULL" }
+                    if let column, booleanColumns.contains(column) {
+                        if field == "t" { return "1" }
+                        if field == "f" { return "0" }
+                    }
+                    return "'" + SQLDumpDialect.unescapeCopyField(field)
+                        .replacingOccurrences(of: "'", with: "''") + "'"
+                }.joined(separator: ", ") + ")"
+            }.joined(separator: ",")
+            let insertSQL = "INSERT INTO \(quotedTable)\(columnList) VALUES \(values);"
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(handle, insertSQL, -1, &statement, nil) == SQLITE_OK else {
+                return false
+            }
+            if let statement {
+                var stepped = sqlite3_step(statement)
+                while stepped == SQLITE_ROW { stepped = sqlite3_step(statement) }
+                sqlite3_finalize(statement)
+                guard stepped == SQLITE_DONE else { return false }
+            }
+            if keepsRowids {
+                let changes = Int64(sqlite3_changes(handle))
+                if changes > 0 {
+                    let last = sqlite3_last_insert_rowid(handle)
+                    let firstRowid = last - changes + 1
+                    for (offset, row) in batch.enumerated() {
+                        let rowid = firstRowid + Int64(offset)
+                        spans.append((
+                            begin + row.range.lowerBound, begin + row.range.upperBound,
+                            block.table.lowercased(), rowid...rowid
+                        ))
+                    }
+                }
+            }
+            index += batchSize
+        }
+        return true
     }
 
     /// The spans as the text's own UTF-16 ranges. Every offset the run took
@@ -586,6 +837,120 @@ final class SQLDump {
         default: false
         }
     }
+
+    // MARK: - Finding a row
+
+    /// Which rows of a table hold a piece of text somewhere in them, for ⌘F
+    /// over the grid.
+    ///
+    /// The whole table is searched and not the page on screen, which is the
+    /// only thing that makes a count and a wrap mean anything. Walking the
+    /// pages by hand to do it would be a `LIMIT … OFFSET` per hundred rows,
+    /// each one reading everything before it; this is one statement.
+    ///
+    /// `row_number()` over the very `ORDER BY` the page is cut with is what
+    /// gives each hit its place in the table, so a match on row 2,140 is
+    /// answered as 2,140 rather than as "somewhere". The filter is SQLite's
+    /// own `instr` over `lower(CAST(… AS TEXT))`, one `OR` per column — a
+    /// coarse sieve on purpose: it is case-insensitive for ASCII and exact for
+    /// everything else, and *which* column of a returned row is a match is
+    /// decided afterwards in Swift, from the text the grid actually draws, so
+    /// a `NULL` and a number behave like what the reader sees.
+    func hits(for needle: String, inTable table: String, sort: Sort?, limit: Int) -> [Hit] {
+        guard tables.contains(table) else { return [] }
+        let columns = declaredTypes(ofTable: table).map(\.name)
+        return hits(for: needle, from: SQLDump.quote(table),
+                    order: SQLDump.orderClause(sort, columns: columns),
+                    columns: columns, limit: limit)
+    }
+
+    /// The same over whatever is in the query box. The reader's own query is
+    /// the sub-select, exactly as `page(ofQuery:)` reads it — the rowid
+    /// rewrite is left out, so the columns line up with the page on screen —
+    /// and it is prepared under the same authorizer, so a search cannot do
+    /// what a query cannot.
+    func hits(for needle: String, inQuery query: String, sort: Sort?, limit: Int) -> [Hit] {
+        guard let handle else { return [] }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        sqlite3_set_authorizer(handle, { _, action, _, _, _, _ in
+            SQLDump.isRead(action) ? SQLITE_OK : SQLITE_DENY
+        }, nil)
+        defer { sqlite3_set_authorizer(handle, nil, nil) }
+        guard case .success(let statements) = SQLDump.statements(in: trimmed, of: handle),
+              let last = statements.last
+        else { return [] }
+        let base = "(" + SQLDump.dropTrailingSemicolon(last) + ")"
+        return hits(for: needle, from: base,
+                    order: SQLDump.orderClause(sort, columns: nil),
+                    columns: SQLDump.columnNames(of: base, in: handle), limit: limit)
+    }
+
+    /// The column names of a sub-select, as SQLite names them — which for a
+    /// plain read of a table are the table's own, and for a computed column
+    /// are whatever SQLite calls the expression.
+    private static func columnNames(of subquery: String, in handle: OpaquePointer) -> [String] {
+        var statement: OpaquePointer?
+        let sql = "SELECT * FROM \(subquery) LIMIT 0"
+        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement
+        else { return [] }
+        defer { sqlite3_finalize(statement) }
+        return (0..<Int(sqlite3_column_count(statement))).map {
+            sqlite3_column_name(statement, Int32($0)).map { String(cString: $0) } ?? ""
+        }
+    }
+
+    /// What the row number is called while it rides in front of the values. A
+    /// name nothing in a real schema is spelled, so a table free to have a
+    /// column called anything does not have this one taken from it.
+    private static let rowNumberColumn = "nota_find_row"
+
+    private func hits(
+        for needle: String, from base: String, order: String, columns: [String], limit: Int
+    ) -> [Hit] {
+        guard let handle, !needle.isEmpty, limit > 0 else { return [] }
+        // A name that is empty, or that two columns of the same result share,
+        // cannot be written into a `WHERE` that means one of them — so it is
+        // left out of the sieve rather than made the whole statement fail. A
+        // query of nothing but expressions finds nothing, which is honest.
+        var seen = Set<String>()
+        var repeated = Set<String>()
+        for name in columns where !name.isEmpty {
+            if !seen.insert(name).inserted { repeated.insert(name) }
+        }
+        let searchable = columns.filter { !$0.isEmpty && !repeated.contains($0) }
+        guard !searchable.isEmpty else { return [] }
+        let tests = searchable
+            .map { "instr(lower(CAST(\(SQLDump.quote($0)) AS TEXT)), lower(?1)) > 0" }
+            .joined(separator: " OR ")
+        let numbered = "SELECT row_number() OVER (\(order)) - 1 "
+            + "AS \(SQLDump.quote(SQLDump.rowNumberColumn)), * FROM \(base)"
+        let sql = "SELECT * FROM (\(numbered)) WHERE \(tests) LIMIT \(limit)"
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement
+        else { return [] }
+        defer { sqlite3_finalize(statement) }
+        // Copied by SQLite rather than borrowed: the Swift string the pointer
+        // is bridged from is gone the moment the call returns.
+        sqlite3_bind_text(statement, 1, needle, -1, SQLDump.transient)
+        let count = Int(sqlite3_column_count(statement))
+        guard count > 1 else { return [] }
+        var found: [Hit] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            found.append(Hit(
+                row: Int(sqlite3_column_int64(statement, 0)),
+                values: (1..<count).map { value(of: statement, at: Int32($0)) }
+            ))
+        }
+        return found
+    }
+
+    private static let transient = unsafeBitCast(
+        -1, to: sqlite3_destructor_type.self
+    )
 
     // MARK: - Running one statement
 

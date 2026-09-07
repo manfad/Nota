@@ -124,38 +124,68 @@ final class TabStripLayoutTests: XCTestCase {
         XCTAssertEqual(layout.visibleRange, 0..<3)
     }
 
-    // MARK: - The bookmark button's and the gear's slots (SPEC Todo 13)
+    // MARK: - The three trailing buttons' slots (SPEC Todo 13)
 
-    /// The gear pins at the trailing edge, the bookmark button one slot and a
-    /// gap before it, and the + steps left by exactly what the two take —
-    /// nothing overlaps and nothing is subtracted twice.
-    func testTheBookmarkButtonTakesASlotAndThePlusMovesLeftByIt() {
+    /// The gear pins at the trailing edge, the Bookmarks button one slot and
+    /// a gap before it, the Bookmark toggle one before that, and the + steps
+    /// left by exactly what the three take — nothing overlaps and nothing is
+    /// subtracted twice.
+    func testTheThreeTrailingButtonsTakeASlotEachAndThePlusMovesLeftByThem() {
         let layout = TabStripLayout(count: 14, selectedIndex: 0, viewportWidth: 900)
         let gearSlot = TabStripLayout.settingsSlot
+        let toggleSlot = TabStripLayout.bookmarkToggleSlot
         let gap = TabStripLayout.bookmarkGap
 
         XCTAssertEqual(TabStripLayout.settingsX(900), 900 - reserve - gearSlot,
                        "the gear pins inside the reserve")
         XCTAssertEqual(TabStripLayout.bookmarkX(900), 900 - reserve - gearSlot - gap - bookmarkSlot,
-                       "the bookmark button sits one gap before the gear")
-        XCTAssertEqual(layout.plusX, TabStripLayout.bookmarkX(900) - plusGap - plusSize,
-                       accuracy: 0.001, "the + sits one gap to the left of it")
-        XCTAssertEqual(controls, bookmarkSlot + gap + gearSlot + gap + reserve)
+                       "the Bookmarks button sits one gap before the gear")
+        XCTAssertEqual(TabStripLayout.bookmarkToggleX(900),
+                       900 - reserve - gearSlot - gap - bookmarkSlot - gap - toggleSlot,
+                       "and the Bookmark toggle one gap before that")
+        XCTAssertEqual(layout.plusX, TabStripLayout.bookmarkToggleX(900) - plusGap - plusSize,
+                       accuracy: 0.001, "the + sits one gap to the left of the first of them")
+        XCTAssertEqual(controls, toggleSlot + gap + bookmarkSlot + gap + gearSlot + gap + reserve)
 
-        // The room the tabs get shrank by the two slots and their gaps, and
+        // The room the tabs get shrank by the three slots and their gaps, and
         // by nothing else.
         XCTAssertEqual(
             TabStripLayout.tabsWidth(900),
-            900 - plusSize - plusGap - bookmarkSlot - gap - gearSlot - gap - reserve,
+            900 - plusSize - plusGap - toggleSlot - gap - bookmarkSlot - gap - gearSlot - gap
+                - reserve,
             accuracy: 0.001
         )
         let total = layout.widths.reduce(0, +) + spacing * 13
         XCTAssertLessThanOrEqual(total, layout.plusX + 0.001, "the tabs stop short of the +")
     }
 
+    /// A hidden button gives its slot back and the ones left close up: the
+    /// row never keeps a hole where one used to be.
+    func testAHiddenButtonHandsItsSlotBackAndTheRestCloseUp() {
+        let original = TabStripLayout.controls
+        defer { TabStripLayout.controls = original }
+        let slot = TabStripLayout.bookmarkSlot
+        let gap = TabStripLayout.bookmarkGap
+
+        TabStripLayout.controls = .init(bookmarkToggle: true, bookmark: false, settings: true)
+        XCTAssertEqual(TabStripLayout.trailingControls, (slot + gap) * 2 + reserve)
+        XCTAssertEqual(TabStripLayout.bookmarkToggleX(900),
+                       TabStripLayout.settingsX(900) - gap - slot,
+                       "with no Bookmarks button between them it sits against the gear")
+
+        TabStripLayout.controls = .init(bookmarkToggle: true, bookmark: false, settings: false)
+        XCTAssertEqual(TabStripLayout.trailingControls, slot + gap + reserve)
+        XCTAssertEqual(TabStripLayout.bookmarkToggleX(900), 900 - reserve - slot,
+                       "alone, it takes the trailing slot itself")
+
+        TabStripLayout.controls = .init(bookmarkToggle: false, bookmark: false, settings: false)
+        XCTAssertEqual(TabStripLayout.trailingControls, reserve)
+    }
+
     /// A strip too narrow to hold anything still hands back sane numbers
     /// rather than negative ones.
-    func testAVeryNarrowStripKeepsBothButtonsOnIt() {
+    func testAVeryNarrowStripKeepsAllThreeButtonsOnIt() {
+        XCTAssertEqual(TabStripLayout.bookmarkToggleX(20), 0)
         XCTAssertEqual(TabStripLayout.bookmarkX(20), 0)
         let layout = TabStripLayout(count: 3, selectedIndex: 0, viewportWidth: 20)
         XCTAssertGreaterThanOrEqual(layout.plusX, 0)

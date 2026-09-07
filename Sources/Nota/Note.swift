@@ -3,22 +3,19 @@ import PDFKit
 import UniformTypeIdentifiers
 
 /// What a tab does with the Markdown render: nothing, beside the editor, or
-/// instead of it. The case order is the order ⌘P cycles them in, and the
-/// order the mode control's segments sit in.
+/// instead of it. The case order is the order the mode control's segments sit
+/// in, with split in the middle: ⌘P walks along it and back, never round it
+/// (`MainWindowController.toggleMarkdownPreview`).
 enum PreviewMode: String, Codable, CaseIterable {
     case off, split, reading
 
-    /// The next one round the ring — what ⌘P moves to.
-    var next: PreviewMode {
-        let all = Self.allCases
-        let index = all.firstIndex(of: self) ?? 0
-        return all[(index + 1) % all.count]
-    }
-
-    /// The segment's picture in the mode control.
+    /// The segment's picture in the mode control. The editor's is a page
+    /// with a pencil on it rather than the pencil alone: the pencil said
+    /// "write" where the segment means "the text, and nothing beside it",
+    /// and the page is what the other two segments are about too.
     var symbolName: String {
         switch self {
-        case .off: "pencil"
+        case .off: "long.text.page.and.pencil"
         case .split: "rectangle.split.2x1"
         case .reading: "book"
         }
@@ -122,6 +119,104 @@ enum RenderedPreviewKind: Equatable {
     }
 }
 
+/// What a tab is *treated* as, said in one word — what the footer's format
+/// badge shows and what its menu offers.
+///
+/// `RenderedPreviewKind` is the same list with the ordinary case missing:
+/// there is no preview for plain text, so it has no case there. The footer
+/// has to name it all the same — "Plain" is a choice the reader makes,
+/// and the one that turns a preview back off — so it is the extra case here,
+/// and the rest of the list is carried rather than copied.
+enum NoteFormat: Equatable {
+    case plainText
+    case preview(RenderedPreviewKind)
+
+    /// Every format, in the order the footer's menu offers them: plain text
+    /// first, then the two Nota lays out, the two it draws as a page, the
+    /// four it reads as a tree, and the two it reads as a table.
+    static let all: [NoteFormat] = [
+        .plainText,
+        .preview(.markdown), .preview(.latex),
+        .preview(.html), .preview(.svg),
+        .preview(.tree(.json)), .preview(.tree(.yaml)),
+        .preview(.tree(.toml)), .preview(.tree(.xml)),
+        .preview(.csv), .preview(.sql),
+    ]
+
+    /// The word in the badge and in the menu. A format's name, like a
+    /// grammar's, is the same in every language, so none of these go through
+    /// `L10n` — except "Plain", which is a description rather than a
+    /// name and is translated at the call site.
+    var displayName: String {
+        switch self {
+        case .plainText: "Plain"
+        case .preview(let kind):
+            switch kind {
+            case .markdown: "MD"
+            case .latex: "LaTeX"
+            case .html: "HTML"
+            case .svg: "SVG"
+            case .sql: "SQL"
+            case .csv: "CSV"
+            case .tree(.json): "JSON"
+            case .tree(.yaml): "YAML"
+            case .tree(.toml): "TOML"
+            case .tree(.xml): "XML"
+            }
+        }
+    }
+
+    /// The one spelling that means this format — what the save panel's
+    /// Format combo is set to, and what the session file writes the override
+    /// as. One per format and never a list: `.markdown` reads back from
+    /// `.md`, `.markdown`, `.mdown` and `.mkd`, but it is *written* as `md`.
+    var canonicalExtension: String {
+        switch self {
+        case .plainText: "txt"
+        case .preview(let kind):
+            switch kind {
+            case .markdown: "md"
+            case .latex: "tex"
+            case .html: "html"
+            case .svg: "svg"
+            case .sql: "sql"
+            case .csv: "csv"
+            case .tree(.json): "json"
+            case .tree(.yaml): "yaml"
+            case .tree(.toml): "toml"
+            case .tree(.xml): "xml"
+            }
+        }
+    }
+
+    /// The way back, for the session file. Any spelling a file could carry is
+    /// accepted, not only the canonical one, so a session written by hand or
+    /// by an older Nota still reads.
+    init?(canonicalExtension: String) {
+        if canonicalExtension.caseInsensitiveCompare("txt") == .orderedSame {
+            self = .plainText
+            return
+        }
+        guard let kind = RenderedPreviewKind(fileExtension: canonicalExtension) else {
+            return nil
+        }
+        self = .preview(kind)
+    }
+
+    /// What a file of this name is, with no override in the way: the format
+    /// its extension asks for, and plain text when it asks for nothing.
+    static func ofFile(_ url: URL?) -> NoteFormat {
+        guard let url, let kind = Note.previewKind(url) else { return .plainText }
+        return .preview(kind)
+    }
+
+    /// The preview this format asks for, `nil` for plain text.
+    var previewKind: RenderedPreviewKind? {
+        guard case .preview(let kind) = self else { return nil }
+        return kind
+    }
+}
+
 /// What a tab is holding. Everything Nota edits is text; a PDF, a picture, a
 /// book and a rich-text document are the binaries it opens at all, and they
 /// open as viewers — there is no text storage behind any of them, nothing to
@@ -151,6 +246,11 @@ final class Note {
             startWatching()
         }
     }
+    /// The mode this tab was in before it went to split — what ⌘P from split
+    /// moves *away* from. Not remembered in the session: a restored split
+    /// tab walks on to reading, as a fresh one does.
+    var modeBeforeSplit: PreviewMode = .off
+
     /// Display name while the note has no file (`Untitled`, `Untitled 2`, …).
     var untitledName: String?
     /// Text, or the one binary Nota opens. A tab's kind is settled when it is
@@ -418,11 +518,62 @@ final class Note {
         return untitledName ?? UntitledNaming.base
     }
 
-    /// Which preview this tab has, if it has one at all. Only a saved file
-    /// spelled one of the three ways does. Nota still edits any text file, but
-    /// every other format keeps the full workspace for source.
+    /// The icon the strip and the ⇧⌘J switcher draw for this tab. The file's
+    /// name says it, as it always has; a tab given a format in the footer
+    /// wears that format's icon instead, since that is what the tab now is.
+    /// Picking `Plain` is not a kind of file, so it leaves the name's
+    /// own icon — or an untitled note's blank `doc` — exactly where it was.
+    var iconSymbolName: String {
+        if let kind = formatOverride?.previewKind {
+            return FileKindIcon.symbolName(
+                forTitle: "x." + NoteFormat.preview(kind).canonicalExtension
+            )
+        }
+        return FileKindIcon.symbolName(for: fileURL)
+    }
+
+    /// The format the reader picked for this tab in the footer, standing in
+    /// front of whatever its name would have said. `nil` — the ordinary case
+    /// — is "go by the file name", which is how every tab behaved before the
+    /// badge existed.
+    ///
+    /// It is an override in both directions: `.preview(.markdown)` gives an
+    /// untitled note a Markdown render, and `.plainText` takes the render off
+    /// a real `.md` for somebody who wants to look at the source of one.
+    var formatOverride: NoteFormat?
+
+    /// The kind the offer pill was last told "Not now" about, so the same
+    /// guess is not put to the reader twice. Only a *different* reading of
+    /// the text brings the pill back.
+    var declinedFormatKind: RenderedPreviewKind?
+
+    /// The tab is read as one thing and the file on disk is spelled as
+    /// another, because the reader said so in the footer. ⌘S then opens the
+    /// panel rather than writing over the old name — a file called `.txt`
+    /// that Nota is showing as Markdown is a file that wants a new name, and
+    /// the panel offers `md` in its Format combo without insisting on it.
+    ///
+    /// A flag rather than `formatOverride != nil`, because the two part
+    /// company the moment a Save As is answered: saved as `.txt` on purpose,
+    /// the override stands — the reader said what the tab is — but the
+    /// question of the name has been asked and answered, and the next ⌘S
+    /// writes where this one did.
+    var needsSaveAs = false
+
+    /// What the footer's badge says: the reader's own choice, else what the
+    /// name asks for, else plain text.
+    var effectiveFormat: NoteFormat {
+        formatOverride ?? NoteFormat.ofFile(fileURL)
+    }
+
+    /// Which preview this tab has, if it has one at all. The reader's own
+    /// choice first — the footer's badge is the last word, and it is the only
+    /// way an untitled note ever gets a preview — and the file's name after
+    /// it. Nota still edits any text file, but every other format keeps the
+    /// full workspace for source.
     var previewKind: RenderedPreviewKind? {
-        fileURL.flatMap(Note.previewKind)
+        if let formatOverride { return formatOverride.previewKind }
+        return fileURL.flatMap(Note.previewKind)
     }
 
     /// Whether the tab has a preview beside its source.
@@ -433,9 +584,14 @@ final class Note {
     /// two files with an action of its own in the corner slot: Beautify /
     /// Compact, in a fourth segment beside the three modes. Spelled, like
     /// every other question about how a file is *treated* rather than what it
-    /// is, by the name its author gave it.
+    /// is, by the name its author gave it — or, where the reader has said
+    /// otherwise in the footer, by the format they picked. A pasted JSON
+    /// blob in an untitled tab gets the Beautify / Compact segment the
+    /// moment it is called JSON.
     var isJSON: Bool {
-        guard kind == .text, let fileURL else { return false }
+        guard kind == .text else { return false }
+        if let formatOverride { return formatOverride.previewKind == .tree(.json) }
+        guard let fileURL else { return false }
         return fileURL.pathExtension.caseInsensitiveCompare("json") == .orderedSame
     }
 
@@ -444,7 +600,9 @@ final class Note {
     /// segments; an `.svg` is a tree of tags too but has no formatter of its
     /// own, so it is not one of them.
     var isHTML: Bool {
-        guard kind == .text, let fileURL else { return false }
+        guard kind == .text else { return false }
+        if let formatOverride { return formatOverride.previewKind == .html }
+        guard let fileURL else { return false }
         for spelling in ["html", "htm", "xhtml"]
         where fileURL.pathExtension.caseInsensitiveCompare(spelling) == .orderedSame {
             return true
@@ -683,7 +841,15 @@ final class Note {
             // Only a dump has either, and only while it is one: a tab saved
             // as something else takes its own preview with it.
             sqlTable: previewKind == .sql ? sqlTable : nil,
-            sqlQuery: previewKind == .sql ? sqlQuery : nil
+            sqlQuery: previewKind == .sql ? sqlQuery : nil,
+            // The reader's own word about what this tab is, kept by its one
+            // spelling. Only where there is one: a tab going by its name
+            // writes nothing, the way it always did.
+            formatOverride: formatOverride?.canonicalExtension,
+            // And whether that word has left the tab owing a name. Written
+            // only when it is owed, so an ordinary tab's record is the same
+            // JSON it always was.
+            needsSaveAs: needsSaveAs ? true : nil
         )
     }
 }

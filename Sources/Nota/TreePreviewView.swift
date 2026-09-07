@@ -29,12 +29,22 @@ import AppKit
 /// member is. The click reveals rather than jumps — the `onSourceReveal` a
 /// dump's cell click uses — so the keyboard stays in the tree and the arrows
 /// go on walking it.
+///
+/// In reading mode, where the tree is what is being read, it has its own ⌘F:
+/// `TreeFindSession` over the rows, in the pill every other column floats in
+/// the same corner. In split the editor has the keyboard and ⌘F is the
+/// editor's, whatever was last clicked here — the same rule the page keeps.
 final class TreePreviewView: NSView, PreviewContent {
 
     // MARK: - The chrome
 
     private let scrollView = NSScrollView()
     private let outlineView = TreeOutlineView()
+    /// The tree's own ⌘F bar, floating in the top-trailing corner of the
+    /// column — the same pill the editor, the render and a document use, over
+    /// the rows instead of a text storage.
+    private let findBar = FindBarView(placeholder: L10n.text("Find in tree"))
+    private lazy var findSession = TreeFindSession(bar: findBar, tree: self)
     /// What stands in the tree's place when the file will not parse: one
     /// centred line naming the format, the line and the reason.
     private let errorLabel = NSTextField(labelWithString: "")
@@ -53,6 +63,13 @@ final class TreePreviewView: NSView, PreviewContent {
         static let indentation: CGFloat = 14
         /// The gap between a row's key and the value after it.
         static let keyValueGap = "  "
+        /// The most of the column the centred message may measure across.
+        /// Three quarters left "document." alone on a line of its own in a
+        /// narrow split; this is still plainly a measure and not a width. An
+        /// upper bound and never an equality: a required equality between
+        /// the label and the pane pulled the pane to the label's width — an
+        /// empty, hidden label's — and the preview snapped shut every layout.
+        static let messageWidth: CGFloat = 0.82
     }
 
     /// The document is expanded whole below this many nodes, and to two
@@ -97,6 +114,12 @@ final class TreePreviewView: NSView, PreviewContent {
     /// Every row in the tree, by the line it starts on — what the caret falls
     /// back to for a node whose parser could not say how wide it is.
     private var rowsByLine: [Int: [Row]] = [:]
+    /// Every row again, flat, in the order the document writes them: a parent
+    /// before its children, whether or not the branch is open. It is what a
+    /// search walks, and where a row sits in it is that row's place in the
+    /// tree.
+    private var flatRows: [Row] = []
+    private var flatRowOrder: [ObjectIdentifier: Int] = [:]
     private var expandedPaths: Set<String> = []
     /// Whether the expansion set has been seeded for the document on screen.
     /// A fresh document opens by the rule above; a re-render of the same one
@@ -127,6 +150,18 @@ final class TreePreviewView: NSView, PreviewContent {
     /// being read.
     var sendsBlockClicks = true
 
+    /// Run when the find bar opens or closes, so the column's mode control
+    /// drops below it — the same as over a render.
+    var onFindBarVisibilityChange: ((Bool) -> Void)?
+
+    var isFindBarVisible: Bool { findSession.isVisible }
+
+    var findBarHeight: CGFloat { findBar.stackHeight }
+
+    /// The tree's find, for the outline that forwards the menu's actions to
+    /// it and for the tests.
+    var find: TreeFindSession { findSession }
+
     // MARK: - Building
 
     override init(frame frameRect: NSRect) {
@@ -136,6 +171,21 @@ final class TreePreviewView: NSView, PreviewContent {
         buildOutline()
         buildErrorLabel()
         activateConstraints()
+
+        // Added after the tree, so the pill floats over the first rows, and
+        // in the same corner every other column keeps its bars in.
+        outlineView.findSession = findSession
+        findSession.onVisibilityChange = { [weak self] visible in
+            self?.onFindBarVisibilityChange?(visible)
+        }
+        findBar.onHeightChange = { [weak self] in
+            guard let self else { return }
+            onFindBarVisibilityChange?(isFindBarVisible)
+        }
+        findBar.floatStack(
+            in: self, under: topAnchor, gap: ModeControlOverlay.controlTopInset,
+            trailingInset: ModeControlOverlay.controlInset
+        )
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -167,10 +217,18 @@ final class TreePreviewView: NSView, PreviewContent {
         column.resizingMask = .autoresizingMask
         outlineView.addTableColumn(column)
         outlineView.outlineTableColumn = column
+        // The one column is exactly as wide as the column it is drawn in, and
+        // is held there in `layout()`. A row is a line of a tree and not a
+        // line of a file: a leaf holding a whole HTML page in one string
+        // would otherwise make the column as wide as the string and run off
+        // the pane, since a field only truncates at the width it is given.
+        outlineView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = true
+        // Nothing to scroll sideways to: the row is cut off with an ellipsis
+        // where the pane ends.
+        scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         // The clip has to be ours before the document goes in it, or AppKit
@@ -210,7 +268,35 @@ final class TreePreviewView: NSView, PreviewContent {
             errorLabel.leadingAnchor.constraint(
                 greaterThanOrEqualTo: leadingAnchor, constant: 20
             ),
+            // A measure, not a width: a sentence run across the whole of a
+            // wide window is a line nobody reads twice. See `Layout.messageWidth`
+            // for why this is a bound and not an equality.
+            errorLabel.widthAnchor.constraint(
+                lessThanOrEqualTo: widthAnchor, multiplier: Layout.messageWidth
+            ),
         ])
+    }
+
+    /// The column is held to the width of the pane, and the message to
+    /// `Layout.messageWidth` of it. Done here rather than by a constraint because the
+    /// outline is a scroll view's document view, whose width is the sum of its
+    /// columns and not the clip view's — nothing binds the two on its own.
+    override func layout() {
+        super.layout()
+        let width = scrollView.contentSize.width
+        if width > 0, let column = outlineView.tableColumns.first,
+           abs(column.width - width) > 0.5 {
+            column.minWidth = width
+            column.maxWidth = width
+            column.width = width
+        }
+        let measure = (bounds.width * Layout.messageWidth).rounded(.down)
+        if measure > 0, errorLabel.preferredMaxLayoutWidth != measure {
+            errorLabel.preferredMaxLayoutWidth = measure
+            // Without this a label laid out wider kept its old line count at
+            // the new measure, and the last line was cut off.
+            errorLabel.invalidateIntrinsicContentSize()
+        }
     }
 
     private lazy var leadingConstraint =
@@ -237,6 +323,9 @@ final class TreePreviewView: NSView, PreviewContent {
     func show(_ note: Note, in context: PreviewContext) {
         isColumnVisible = context.isVisible
         let isNewDocument = self.note !== note
+        // Every row the search is holding belongs to the file being taken
+        // out, the way a document's selections do.
+        if isNewDocument { findSession.close() }
         self.note = note
         guard context.isVisible else { return }
         if case .tree(let format) = note.previewKind { self.format = format }
@@ -282,30 +371,113 @@ final class TreePreviewView: NSView, PreviewContent {
         do {
             let document = try format.parse(text)
             parseError = nil
+            // A file that is one plain value is not a tree — YAML and TOML
+            // will read a pasted page, or a paragraph of prose, as a single
+            // scalar, and a row holding the whole file is not a reading of
+            // it. It is the same news as a failure and it is told the same
+            // way.
+            guard !Self.isOnePlainValue(document) else {
+                showMessage(
+                    detail: String(
+                        format: L10n.text(
+                            "The whole file is one plain value, not a %@ document."
+                        ),
+                        format.displayName
+                    ),
+                    in: text
+                )
+                return
+            }
             build(document)
             errorLabel.isHidden = true
             scrollView.isHidden = false
             restore(scroll: scroll)
         } catch let error as StructuredParseError {
-            showFailure(error)
+            showFailure(error, in: text)
         } catch {
-            showFailure(StructuredParseError(line: 1, message: "Not readable"))
+            showFailure(StructuredParseError(line: 1, message: "Not readable"), in: text)
         }
     }
 
-    private func showFailure(_ error: StructuredParseError) {
+    /// The whole document as one leaf — no mapping, no sequence, no element:
+    /// nothing with parts. Several roots are a stream and still a tree.
+    private static func isOnePlainValue(_ document: StructuredDocument) -> Bool {
+        document.roots.count == 1 && document.roots[0].isBranch == false
+    }
+
+    private func showFailure(_ error: StructuredParseError, in text: String) {
         parseError = error
+        showMessage(
+            detail: String(format: L10n.text("Line %d — %@"), error.line, error.message),
+            in: text
+        )
+    }
+
+    /// What stands in the tree's place: the headline naming the format, one
+    /// line of detail under it, and — where the text plainly reads as
+    /// something else — the way out, which is the footer's own badge.
+    ///
+    /// The last good tree is not kept: a tree that no longer matched the text
+    /// beside it would be a map of somewhere else.
+    private func showMessage(detail: String, in text: String) {
         rows = []
         rowsByLine = [:]
+        flatRows = []
+        flatRowOrder = [:]
         rowsAreStale = false
         outlineView.reloadData()
-        errorLabel.font = font
-        errorLabel.stringValue = String(
-            format: L10n.text("Not valid %@: line %d — %@"),
-            format.displayName, error.line, error.message
+        // There is no tree to search until the file parses again.
+        findSession.refresh()
+        errorLabel.attributedStringValue = Self.message(
+            headline: String(format: L10n.text("Not valid %@"), format.displayName),
+            detail: detail, hint: hint(for: text), font: font
         )
         errorLabel.isHidden = false
         scrollView.isHidden = true
+        needsLayout = true
+    }
+
+    /// What the text reads as, if it is plainly something other than what the
+    /// tab is being read as. The detector is the same one the footer's own
+    /// offer is made from, so the two never disagree.
+    private func hint(for text: String) -> String? {
+        guard let kind = FormatDetector.detect(text), kind != .tree(format) else { return nil }
+        return String(
+            format: L10n.text("It reads as %@ — choose that in the footer's format badge."),
+            NoteFormat.preview(kind).displayName
+        )
+    }
+
+    /// The three lines as one centred string: the headline in the label
+    /// colour at the editor's size, the detail and the way out quieter under
+    /// it.
+    private static func message(
+        headline: String, detail: String, hint: String?, font: NSFont
+    ) -> NSAttributedString {
+        func centred(spacingAfter: CGFloat) -> NSParagraphStyle {
+            let style = NSMutableParagraphStyle()
+            style.alignment = .center
+            style.lineBreakMode = .byWordWrapping
+            style.paragraphSpacing = spacingAfter
+            return style
+        }
+        // The headline stands a little further off what it is a headline for
+        // than those lines stand off each other.
+        let title = centred(spacingAfter: 7)
+        let paragraph = centred(spacingAfter: 4)
+        let message = NSMutableAttributedString(string: headline, attributes: [
+            .font: NSFont.systemFont(ofSize: font.pointSize, weight: .medium),
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: title,
+        ])
+        for line in [detail, hint].compactMap({ $0 }) {
+            message.append(NSAttributedString(string: "\n" + line, attributes: [
+                .font: font,
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraph,
+            ]))
+        }
+        return message
     }
 
     /// The document, turned into rows and put on screen with whatever was
@@ -329,6 +501,7 @@ final class TreePreviewView: NSView, PreviewContent {
         }
 
         rows = makeRows(document.roots, parentPath: "", depth: 0)
+        indexFlatRows()
         for (_, sharing) in byLine {
             let first = sharing
                 .filter { $0.node.range != nil }
@@ -343,6 +516,23 @@ final class TreePreviewView: NSView, PreviewContent {
         }
         outlineView.reloadData()
         applyExpansion()
+        // The rows the search was holding were made by the last parse; the
+        // query is run again over the ones that have just replaced them.
+        findSession.refresh()
+    }
+
+    /// The flat walk a search reads the tree by, made once per parse.
+    private func indexFlatRows() {
+        flatRows = []
+        flatRowOrder = [:]
+        func walk(_ list: [Row]) {
+            for row in list {
+                flatRowOrder[ObjectIdentifier(row)] = flatRows.count
+                flatRows.append(row)
+                walk(row.children)
+            }
+        }
+        walk(rows)
     }
 
     /// Everything, for a document small enough that everything is readable;
@@ -418,7 +608,34 @@ final class TreePreviewView: NSView, PreviewContent {
                 .font: monospaced, .foregroundColor: colour(of: row.node.value),
             ]))
         }
+        applyFindBands(to: line, of: row)
         return line
+    }
+
+    /// The bands ⌘F leaves on a row. There is no text storage here to lay a
+    /// temporary attribute on, so a match is a background colour on the row's
+    /// own string, laid on as the row is built and gone the next time it is —
+    /// which is why a query, a step and a re-parse all ask for the rows they
+    /// touch to be drawn again.
+    private func applyFindBands(to line: NSMutableAttributedString, of row: Row) {
+        let whole = NSRange(location: 0, length: line.length)
+        for band in findSession.bands(of: row) {
+            let clamped = NSIntersectionRange(band.range, whole)
+            guard clamped.length > 0 else { continue }
+            guard band.isCurrent else {
+                line.addAttribute(.backgroundColor, value: TreeFindSession.quietBand,
+                                  range: clamped)
+                continue
+            }
+            // `findHighlightColor` is AppKit's own find yellow, the same light
+            // colour in both appearances, so the text on it is spelled black
+            // rather than left as the row's own colour, which is white in the
+            // dark and would disappear into the band.
+            line.addAttributes([
+                .backgroundColor: TreeFindSession.currentBand,
+                .foregroundColor: NSColor.black,
+            ], range: clamped)
+        }
     }
 
     /// The member's key, or the item's own place in the array it is in. An
@@ -454,8 +671,10 @@ final class TreePreviewView: NSView, PreviewContent {
 
     /// What a leaf says. A string wears its quotes, so an empty one and one
     /// made of spaces are still visible; everything else is spelled the way
-    /// the file spells it.
-    private func valueText(of node: StructuredNode) -> String {
+    /// the file spells it. Not private: it is also what ⌘F searches, and a
+    /// search over anything but the text on screen would be a search of
+    /// something the reader cannot see.
+    func valueText(of node: StructuredNode) -> String {
         switch node.value {
         case .string(let value): "\"\(value)\""
         case .number(let value): value
@@ -607,9 +826,149 @@ final class TreePreviewView: NSView, PreviewContent {
         clearHighlight()
     }
 
+    // MARK: - What ⌘F asks of the tree
+
+    /// Every row, flat, in the order the file writes them — what a search
+    /// walks. Rows inside a closed branch are in it like any other: a match is
+    /// what opens the branch.
+    var findRows: [Row] { flatRows }
+
+    /// The parts of a row a search looks in, and where each of them begins in
+    /// the row's own text.
+    ///
+    /// The key where the file names one — an array item's index is the tree
+    /// counting rather than the file saying something, so it is drawn and not
+    /// searched — and the value of a leaf as the row spells it, quotes and
+    /// all. A branch's `{3}` is the tree counting too.
+    func findFields(of row: Row) -> [TreeFindField] {
+        var fields: [TreeFindField] = []
+        let drawnKey = keyText(of: row).string as NSString
+        if let key = row.node.key, !key.isEmpty {
+            fields.append(TreeFindField(kind: .key, text: key, offset: 0))
+        }
+        guard !row.node.isBranch else { return fields }
+        let gap = Layout.keyValueGap as NSString
+        let offset = drawnKey.length == 0 ? 0 : drawnKey.length + gap.length
+        fields.append(TreeFindField(kind: .value, text: valueText(of: row.node), offset: offset))
+        return fields
+    }
+
+    /// Opens every branch above a row, so a match deep inside a closed one is
+    /// on screen to land on. It goes through `expandedPaths`, the way the
+    /// reader's own triangles do, so the next parse comes back with what the
+    /// search opened still open. Nothing is ever closed: the branches the
+    /// reader left open are theirs.
+    func expandAncestors(of row: Row) {
+        var chain: [Row] = []
+        var above = row.parent
+        while let parent = above {
+            chain.append(parent)
+            above = parent.parent
+        }
+        for branch in chain.reversed() {
+            expandedPaths.insert(branch.path)
+            outlineView.expandItem(branch)
+        }
+    }
+
+    /// Lands on a row: it is selected and brought into view, without being
+    /// read back as a click.
+    func selectFindRow(_ row: Row) {
+        let index = outlineView.row(forItem: row)
+        guard index >= 0 else { return }
+        isSelectingForCaret = true
+        outlineView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        isSelectingForCaret = false
+        outlineView.scrollRowToVisible(index)
+    }
+
+    /// The source a match stands for, sent to the editor so the caret follows
+    /// what the reader found: the value alone where the value matched, and the
+    /// whole member where its key did — a key has no span of its own, and the
+    /// member is how it is found again in the file.
+    ///
+    /// Unlike a click, this is sent in reading mode too. A find is the reader
+    /// saying where they want to be, and the editor they flip back to should
+    /// already be there.
+    func revealFindSource(of row: Row, kind: TreeFindKind) {
+        guard !rowsAreStale, let onSourceReveal, let note else { return }
+        let node = row.node
+        let fallback = node.range ?? note.lineIndex.range(ofLine: node.line)
+        onSourceReveal(kind == .value ? (node.valueRange ?? fallback) : fallback)
+    }
+
+    /// Draws the given rows again, for the bands they have just gained or
+    /// lost. A row inside a closed branch is not on screen and has nothing to
+    /// draw.
+    func redrawFindRows(_ rows: [Row]) {
+        var indexes = IndexSet()
+        for row in rows {
+            let index = outlineView.row(forItem: row)
+            if index >= 0 { indexes.insert(index) }
+        }
+        guard !indexes.isEmpty else { return }
+        outlineView.reloadData(forRowIndexes: indexes, columnIndexes: IndexSet(integer: 0))
+    }
+
+    /// Where the row at the top of the column sits in the flat walk — where an
+    /// incremental search counts from.
+    var firstVisibleFindRowOrder: Int? {
+        let visible = outlineView.rows(in: scrollView.contentView.documentVisibleRect)
+        guard visible.length > 0,
+              let row = outlineView.item(atRow: visible.location) as? Row
+        else { return nil }
+        return flatRowOrder[ObjectIdentifier(row)]
+    }
+
+    /// And where the selected row sits, which is where ⌘E counts from.
+    var selectedFindRowOrder: Int? {
+        guard let row = selectedFindRow else { return nil }
+        return flatRowOrder[ObjectIdentifier(row)]
+    }
+
+    /// What ⌘E takes from the tree: the selected row's value where it has one,
+    /// its key where it does not. A string's quotes are left behind — the
+    /// reader means the word inside them, and the quotes are the row's
+    /// spelling rather than the file's word.
+    var selectionTextForFind: String? {
+        guard let row = selectedFindRow else { return nil }
+        switch row.node.value {
+        case .string(let value): return value
+        case .object, .array: return row.node.key
+        default: return valueText(of: row.node)
+        }
+    }
+
+    private var selectedFindRow: Row? {
+        let index = outlineView.selectedRow
+        guard index >= 0 else { return nil }
+        return outlineView.item(atRow: index) as? Row
+    }
+
+    /// The keyboard back to the tree, which is where Escape leaves it.
+    ///
+    /// Only ever taken back from the bar itself: a find closed because the tab
+    /// in front changed must not pull the keyboard out of whatever is being
+    /// read now.
+    func focusOutline() {
+        guard let window = outlineView.window else { return }
+        let responder = window.firstResponder
+        let inBar = (responder as? NSView)?.isDescendant(of: findBar) ?? false
+        guard inBar || responder === outlineView else { return }
+        window.makeFirstResponder(outlineView)
+    }
+
     // MARK: - The keyboard
 
-    var takesKeyboard = false
+    /// Reading mode, where the tree is what is being read. It is also what
+    /// says whose ⌘F this is: in split the editor has the keyboard and the
+    /// find is the editor's, the same rule the page keeps.
+    var takesKeyboard = false {
+        didSet {
+            guard takesKeyboard != oldValue else { return }
+            outlineView.takesKeyboard = takesKeyboard
+        }
+    }
 
     @discardableResult
     func focus(in window: NSWindow?) -> Bool {
@@ -663,8 +1022,14 @@ final class TreePreviewView: NSView, PreviewContent {
     /// The line the tree failed on, and why. `nil` while it parses.
     var shownParseError: StructuredParseError? { parseError }
 
-    /// What the pane says in place of the tree.
+    /// What the pane says in place of the tree — all of it, the headline and
+    /// the lines under it, as one string.
     var shownErrorMessage: String? { errorLabel.isHidden ? nil : errorLabel.stringValue }
+
+    /// The same, as it is drawn, for a test that checks its two voices.
+    var shownMessage: NSAttributedString? {
+        errorLabel.isHidden ? nil : errorLabel.attributedStringValue
+    }
 
     /// The row the caret has lit, by its path.
     var selectedPath: String? {
@@ -794,7 +1159,53 @@ private final class TreeOutlineView: NSOutlineView {
     /// clicks.
     var onRowClick: ((Int) -> Void)?
 
+    /// The tree's find bar. Find…, Find Next, Find Previous and Use Selection
+    /// for Find are nil-targeted `performTextFinderAction:` items, so they
+    /// land here whenever the outline has the keyboard — which, after a click
+    /// on a row, is split as well as reading.
+    ///
+    /// So they are answered here only in reading mode. In split the editor is
+    /// what ⌘F belongs to, whatever was last clicked in the column, which is
+    /// the same rule the page keeps — and the item is *handed on* rather than
+    /// dropped: implementing the selector at all makes this view the target,
+    /// so a silent return would grey ⌘F out the moment a reader clicked a
+    /// row. It goes up the chain to `MainWindowController`, which is where
+    /// the editor's own session is.
+    weak var findSession: TreeFindSession?
+
+    /// Whether the tree is what is being read. Not `acceptsFirstResponder`:
+    /// the arrows go on walking the tree in split, where a click leaves the
+    /// keyboard here on purpose.
+    var takesKeyboard = false
+
     override var acceptsFirstResponder: Bool { true }
+
+    override func performTextFinderAction(_ sender: Any?) {
+        guard takesKeyboard else {
+            // Split: the editor's, so the item goes on up the chain rather
+            // than stopping here.
+            nextResponder?.tryToPerform(
+                #selector(performTextFinderAction(_:)), with: sender
+            )
+            return
+        }
+        guard let item = sender as? NSValidatedUserInterfaceItem,
+              let action = NSTextFinder.Action(rawValue: item.tag)
+        else { return }
+        findSession?.perform(action)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard item.action == #selector(performTextFinderAction(_:)) else {
+            return super.validateUserInterfaceItem(item)
+        }
+        guard let action = NSTextFinder.Action(rawValue: item.tag) else { return false }
+        // In split the answer is the editor's, and the editor takes every
+        // action a text session takes — Find and Replace… among them.
+        return takesKeyboard
+            ? TreeFindSession.handles(action)
+            : TextFindSession.handles(action)
+    }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)

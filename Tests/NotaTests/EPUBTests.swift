@@ -13,7 +13,7 @@ import XCTest
 /// on: `mimetype` first, stored rather than deflated, holding
 /// `application/epub+zip`. That order is the whole of what tells a book from
 /// any other zip, so a fixture that faked it would be testing nothing.
-final class EPUBTests: XCTestCase {
+final class EPUBTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
     private var windows: [NSWindow] = []
 

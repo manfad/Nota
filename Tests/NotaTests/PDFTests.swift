@@ -9,7 +9,7 @@ import XCTest
 /// strip, ⌘W closes it, the session brings it back — and unlike any other it
 /// is read rather than edited: locked in reading, never dirty, never cached
 /// and never written to.
-final class PDFTests: XCTestCase {
+final class PDFTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {

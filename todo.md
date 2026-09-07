@@ -4,18 +4,7 @@ Ideas queued on 2026-09-07, kept apart from `SPEC.md`'s ledger until each one is
 
 ## 1. Footer format selector: preview an unsaved note
 
-**What.** Paste JSON, Markdown, HTML, CSV, YAML, TOML, XML, SQL or LaTeX into a fresh tab and inspect it straight away, without saving it as `.md` first. Today a tab's preview kind is decided by its file extension and nothing else (`RenderedPreviewKind.init(fileExtension:)` in `Note.swift`), so an unsaved note is always plain text.
-
-**How it looks.** A third footer item beside the existing encoding · line ending pair (`formatEncodingLabel` in `MainWindowController.swift`, "Encoding and line endings" section): a `FooterMenuLabel` reading `Plain Text`, `Markdown`, `JSON`, … Clicking it pops the same kind of footer menu the encoding label uses (`popUpFooterMenu`). It is visible for every tab; for a saved file it shows the sniffed kind and lets the reader override it (a `.txt` that is really Markdown).
-
-**Behaviour.**
-- Picking a format on an unsaved note switches the tab to that preview kind at once: the corner slot's Editor · Split · Reading segments appear, ⌘P works, tree/grid/render as if the file had the extension.
-- The choice becomes the default in the save panel's Format combo (`SaveNameComposer.swift`), so Save writes `note.md` / `note.json` without a second decision.
-- Sniffing could pre-select on paste (a leading `{`/`[` that parses → JSON, `\documentclass` → LaTeX, a `CREATE TABLE` → SQL) but never silently: the label changes, the reader can put it back.
-- Stored on `Note` as a format override (session-restored with the tab, `Session.swift`); the extension stays the authority once the file is saved unless the override says otherwise.
-- A Settings row under Status bar: show / hide the format item, like `footerShowsEncoding`.
-
-**Tests.** `RenderedPreviewKind` from an override; footer menu contents; the save panel default follows the override; session round-trip.
+Done 2026-09-07, SPEC Done 43.
 
 ## 2. SQL query box: ghost text and a suggestion popover
 
@@ -37,15 +26,7 @@ Ideas queued on 2026-09-07, kept apart from `SPEC.md`'s ledger until each one is
 
 ## 3. Search inside tree previews
 
-**What.** ⌘F in a `.json` / `.yaml` / `.toml` / `.xml` tab searches the tree, not just the editor (this is `SPEC.md` Todo 3). Finding a deeply nested key or value is the natural next action after opening JSON.
-
-**Behaviour.**
-- The find bar (`FindBar.swift`) gets a `TreeFindSession` beside `FindSession` / `HTMLFindSession` / `PDFFindSession`: matches over keys and leaf values in `StructuredDocument`; count and next/previous like the others.
-- A match expands every ancestor branch, scrolls the row into view and selects it; non-matching branches stay as they were (no collapse-all).
-- Reading mode, where there is no editor on screen, gets the tree search too.
-- Matching a row also selects its source line in the editor in split mode (the existing `onSourceReveal` plumbing).
-
-**Where.** `TreePreviewView.swift`, `StructuredDocument.swift` for a flat visit of paths, `FindBar.swift` for the session protocol.
+Done 2026-09-07, SPEC Done 47.
 
 ## 4. Export the rendered result
 

@@ -10,29 +10,41 @@ import CoreGraphics
 /// sliding window over the tabs instead of squeezing them into slivers.
 struct TabStripLayout {
     /// A comfortable tab, and the two floors: an inactive tab may shrink to
-    /// icon-plus-a-sliver, the selected one keeps room for its ✕.
+    /// its icon and the padding either side of it, the selected one keeps
+    /// room for its ✕ as well. Both were four points narrower while the icon
+    /// was a 16pt square; the badge art is 24 wide, so the inactive floor
+    /// moved with it (2026-09-07) and the active one — 10 padding, 24 icon,
+    /// 4 gap, the 16pt slot, 6 padding — came out at exactly the 60 it was.
     static let maxTabWidth: CGFloat = 180
-    static let minInactiveWidth: CGFloat = 40
+    static let minInactiveWidth: CGFloat = 44
     static let minActiveWidth: CGFloat = 60
     static let spacing: CGFloat = 4
     static let plusSize: CGFloat = 24
     static let plusGap: CGFloat = 4
-    /// The bookmark button's slot at the trailing edge (SPEC Todo 13): the
+    /// The Bookmarks button's slot at the trailing edge (SPEC Todo 13): the
     /// same 24pt the + gets, sitting past it, with the same gap between the
     /// two. Everything to the left of it — the tabs and the + — moves along
     /// by exactly this much.
     static let bookmarkSlot: CGFloat = 24
     static let bookmarkGap: CGFloat = 4
-    /// The Settings gear's slot, past the bookmark: the same 24pt, the same
+    /// The Bookmark toggle's slot, the first of the three: the same 24pt and
+    /// the same gap again. Bookmark, then Bookmarks, then the gear — the
+    /// thing done to this tab before the list it joins.
+    static let bookmarkToggleSlot: CGFloat = 24
+    /// The Settings gear's slot, past the bookmarks: the same 24pt, the same
     /// gap. It is the last control before the reserve.
     static let settingsSlot: CGFloat = 24
     /// Room kept empty past the last button, so it never reaches the strip's
-    /// end.
-    static let trailingReserve: CGFloat = 40
+    /// end. 40 once; the three buttons left too much of the corner bare, so
+    /// the run past the gear came in to 16 (2026-09-07).
+    static let trailingReserve: CGFloat = 16
 
-    /// Which of the two trailing buttons the strip is showing. Settings can
-    /// hide either; a hidden one gives its slot back to the tabs.
+    /// Which of the three trailing buttons the strip is showing. Settings can
+    /// hide any of them; a hidden one gives its slot back to the tabs.
+    /// `bookmark` is the Bookmarks button — the one that opens the picker —
+    /// and `bookmarkToggle` the one that bookmarks the tab in front.
     struct TrailingControls: Equatable {
+        var bookmarkToggle = true
         var bookmark = true
         var settings = true
     }
@@ -41,11 +53,11 @@ struct TabStripLayout {
     /// set from `Preferences` by the window, read by every layout after.
     static var controls = TrailingControls()
 
-    /// Everything the trailing edge holds past the +: whichever of the
-    /// bookmark button and the gear are showing, their gaps, and the empty
-    /// run after them.
+    /// Everything the trailing edge holds past the +: whichever of the three
+    /// buttons are showing, their gaps, and the empty run after them.
     static var trailingControls: CGFloat {
-        (controls.bookmark ? bookmarkSlot + bookmarkGap : 0)
+        (controls.bookmarkToggle ? bookmarkToggleSlot + bookmarkGap : 0)
+            + (controls.bookmark ? bookmarkSlot + bookmarkGap : 0)
             + (controls.settings ? settingsSlot + bookmarkGap : 0)
             + trailingReserve
     }
@@ -56,13 +68,28 @@ struct TabStripLayout {
         max(0, viewportWidth - trailingReserve - settingsSlot)
     }
 
-    /// Leading x of the bookmark button: one slot and a gap before the gear,
+    /// Leading x of the Bookmarks button: one slot and a gap before the gear,
     /// or where the gear would be when the gear is hidden.
     static func bookmarkX(_ viewportWidth: CGFloat) -> CGFloat {
-        let edge = controls.settings
-            ? settingsX(viewportWidth) - bookmarkGap
-            : viewportWidth - trailingReserve
-        return max(0, edge - bookmarkSlot)
+        max(0, trailingEdge(viewportWidth, past: controls.settings ? settingsX(viewportWidth) : nil)
+            - bookmarkSlot)
+    }
+
+    /// Leading x of the Bookmark toggle: the slot before the Bookmarks
+    /// button, falling back through whichever of the two past it are hidden
+    /// so the row never leaves a gap where a hidden button used to be.
+    static func bookmarkToggleX(_ viewportWidth: CGFloat) -> CGFloat {
+        let neighbour: CGFloat? = controls.bookmark
+            ? bookmarkX(viewportWidth)
+            : (controls.settings ? settingsX(viewportWidth) : nil)
+        return max(0, trailingEdge(viewportWidth, past: neighbour) - bookmarkToggleSlot)
+    }
+
+    /// Where a button's trailing edge falls: a gap before the button past it,
+    /// or the near end of the reserve when it is the last one showing.
+    private static func trailingEdge(_ viewportWidth: CGFloat, past neighbourX: CGFloat?) -> CGFloat {
+        guard let neighbourX else { return viewportWidth - trailingReserve }
+        return neighbourX - bookmarkGap
     }
 
     /// One width per tab, indexed like the items.

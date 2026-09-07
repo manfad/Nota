@@ -7,7 +7,7 @@ import XCTest
 /// dirty, never cached and never written to — and, unlike the other three,
 /// counted in words, because rich text is words on a page. See SPEC.md
 /// "## RTF".
-final class RTFTests: XCTestCase {
+final class RTFTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {

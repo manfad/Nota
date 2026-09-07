@@ -5,7 +5,7 @@ import XCTest
 /// The tree previews: the two parsers written alongside this file (`JSONTree`
 /// and `XMLTree`), the view that draws whatever any of the four hands back,
 /// and the modes a structured tab has like every other rendered one.
-final class StructuredPreviewTests: XCTestCase {
+final class StructuredPreviewTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
     /// The pane holds its note weakly, the way the column does — so a test
     /// that made one has to keep it alive itself.
@@ -665,7 +665,7 @@ final class StructuredPreviewTests: XCTestCase {
     func testAFileThatWillNotParseSaysSoInsteadOfShowingATree() throws {
         let pane = try makePane(showing: "{\n  \"a\": 1,\n  \"b\" 2\n}\n")
         XCTAssertTrue(pane.visibleRows.isEmpty, "the last good tree is not kept")
-        XCTAssertEqual(pane.shownErrorMessage, "Not valid JSON: line 3 — Expected `:`")
+        XCTAssertEqual(pane.shownErrorMessage, "Not valid JSON\nLine 3 — Expected `:`")
         XCTAssertEqual(pane.shownParseError,
                        StructuredParseError(line: 3, message: "Expected `:`"))
     }
@@ -673,7 +673,7 @@ final class StructuredPreviewTests: XCTestCase {
     @MainActor
     func testTheMessageNamesTheFormatTheFileIsSpelledAs() throws {
         let pane = try makePane(showing: "<root>\n  <a>\n</root>\n", named: "feed.xml")
-        XCTAssertEqual(pane.shownErrorMessage?.hasPrefix("Not valid XML: line 3 — "), true,
+        XCTAssertEqual(pane.shownErrorMessage?.hasPrefix("Not valid XML\nLine 3 — "), true,
                        "got \(pane.shownErrorMessage ?? "nothing")")
     }
 

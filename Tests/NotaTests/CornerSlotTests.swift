@@ -7,7 +7,7 @@ import XCTest
 /// in it. A tab with a render gets the mode control; a `.json` or `.html` tab
 /// gets that same control with its format's Beautify / Compact action ahead
 /// of it; everything else gets nothing at all.
-final class CornerSlotTests: XCTestCase {
+final class CornerSlotTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
     override func tearDownWithError() throws {
@@ -292,6 +292,21 @@ final class CornerSlotTests: XCTestCase {
         XCTAssertEqual(overlay.formatState, .invalid(line: 1), "on the beat after it")
         XCTAssertFalse(overlay.modeControl.isEnabled(forSegment: 0))
     }
+
+    // MARK: - The Editor segment's drawing
+
+    /// The Editor segment is a page with a pencil on it, one drawing in the
+    /// light and in the dark alike; the other two are one shape each too.
+    func testTheEditorSegmentIsAPageAndAPencil() {
+        XCTAssertEqual(PreviewMode.off.symbolName, "long.text.page.and.pencil")
+        XCTAssertEqual(PreviewMode.split.symbolName, "rectangle.split.2x1")
+        XCTAssertEqual(PreviewMode.reading.symbolName, "book")
+        for name in [PreviewMode.off, .split, .reading].map(\.symbolName) {
+            XCTAssertNotNil(NSImage(systemSymbolName: name, accessibilityDescription: nil),
+                            "\(name) is a symbol this Mac has")
+        }
+    }
+
 
     // MARK: - Helpers
 

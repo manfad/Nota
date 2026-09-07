@@ -22,9 +22,14 @@ import WebKit
 /// file's own path as its base — under a scheme of Nota's own, for the reason
 /// `PageFiles` gives.
 ///
-/// Nothing here is a map back into the source. A DOM is not a list of source
-/// ranges, so there are no blocks to click and no band to light. There is a
-/// find bar, in the same corner every other column keeps one — but the search
+/// A DOM is still not a list of source ranges, so there are no blocks and no
+/// band — but a press on an element does its best: the page reports where in
+/// its own document order the element sits, and `HTMLSourceMap` lines that up
+/// against the tags the file actually writes to reveal the start tag in the
+/// editor (done 2026-09-07). It reveals rather than jumps, the way a tree row
+/// and a grid cell do: the caret moves and the page keeps the keyboard. There
+/// is a find bar, in the same corner every other column keeps one — but the
+/// search
 /// itself is a script in the page, since a page is the one thing Nota reads
 /// without ever holding. The other thing it keeps is where the reader had
 /// scrolled to, so a keystroke in the editor does not throw the page back to
@@ -126,6 +131,33 @@ final class HTMLPreviewView: NSView, PreviewContent {
     /// here. The script that reports it never swallows the key, so a page
     /// with nobody listening scrolls exactly as it always did.
     var onChapterKey: ((Int) -> Void)?
+
+    /// Run when the reader presses an element in the page and the source map
+    /// can say where that element is written: the editor selects the tag and
+    /// brings it into view, and the page keeps the keyboard it had. Never a
+    /// block click — the page is not a render, and nobody asked to leave it.
+    var onSourceReveal: ((NSRange) -> Void)?
+
+    /// Where the page on screen is written in the note beside it, when the
+    /// page *is* the note beside it. Built once per load, from the same text
+    /// the page was loaded from, and `nil` for everything that is not that: a
+    /// book's chapter, the message a broken drawing gets, and a page the
+    /// tokeniser will not read.
+    private var sourceMap: HTMLSourceMap?
+
+    /// The map the pane is holding, for the tests.
+    var sourceMapForTesting: HTMLSourceMap? { sourceMap }
+
+    /// Whether something in the page is being typed into — a field, a text
+    /// area, a `contenteditable` — which is the one thing that takes the
+    /// keyboard away from the editor in split (done 2026-09-07). See
+    /// `editableFocusReporter`.
+    private var pageHoldsEditableFocus = false
+
+    /// Run when that changes, with whether the page now holds a field. For
+    /// the tests: the page's answer crosses a process boundary, and nothing
+    /// else says when it has landed.
+    var onEditableFocusChange: ((Bool) -> Void)?
 
     var isFindBarVisible: Bool { findSession.isVisible }
 
@@ -230,6 +262,17 @@ final class HTMLPreviewView: NSView, PreviewContent {
             source: Self.chapterKeys, injectionTime: .atDocumentEnd,
             forMainFrameOnly: true, in: .defaultClient
         ))
+        // And the half of the source reveal that lives in the page, in the
+        // same world and for the same reason as the other two.
+        controller.addUserScript(WKUserScript(
+            source: Self.elementReporter, injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true, in: .defaultClient
+        ))
+        // And the one that says a field in the page is being typed into.
+        controller.addUserScript(WKUserScript(
+            source: Self.editableFocusReporter, injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true, in: .defaultClient
+        ))
         // A book is read in Nota's own light or dark, the way a note is (see
         // `readerTheme`); a `.html` file is the author's page and keeps its
         // own colours.
@@ -243,10 +286,18 @@ final class HTMLPreviewView: NSView, PreviewContent {
                        name: Self.scrollHandlerName)
         controller.add(ChapterKeyReporter(view: self), contentWorld: .defaultClient,
                        name: Self.chapterHandlerName)
+        controller.add(ElementReporter(view: self), contentWorld: .defaultClient,
+                       name: Self.elementHandlerName)
+        controller.add(EditableFocusReporter(view: self), contentWorld: .defaultClient,
+                       name: Self.editableHandlerName)
 
         let page = HTMLPageView(frame: bounds, configuration: configuration)
         page.findSession = findSession
         page.onDropFiles = onDropFiles
+        // The keyboard going back to the editor ends the field's exception,
+        // whatever the DOM still believes is focused: the next click in the
+        // page must not take the caret again.
+        page.onKeyboardResigned = { [weak self] in self?.pageLostTheKeyboard() }
         // Pinned edge to edge, unlike the Markdown render's own margins, and
         // for the same reason a PDF is: a page lays out to the viewport it is
         // given, and its own body margin is already the margin its author
@@ -325,7 +376,9 @@ final class HTMLPreviewView: NSView, PreviewContent {
                           isSVG: note.previewKind == .svg)
         guard loadedKey != key else { return }
         loadedKey = key
-        load(key)
+        // The page is the note's own text, so a press in it can be answered
+        // with a range in the editor.
+        load(key, mapsToSource: true)
     }
 
     /// Puts a file on screen as the page, rather than the text of the note in
@@ -367,7 +420,9 @@ final class HTMLPreviewView: NSView, PreviewContent {
         } else {
             pendingLanding = .fraction(0)
         }
-        load(key)
+        // A chapter is a file in the book's own folder and the tab holding it
+        // is the book: there is no source beside it for a press to reveal.
+        load(key, mapsToSource: false)
         return true
     }
 
@@ -376,7 +431,7 @@ final class HTMLPreviewView: NSView, PreviewContent {
         loadedKey = nil
     }
 
-    private func load(_ key: LoadKey) {
+    private func load(_ key: LoadKey, mapsToSource: Bool) {
         generation += 1
         loadCount += 1
         // The ranges the bands are painted on belong to the document being
@@ -394,13 +449,51 @@ final class HTMLPreviewView: NSView, PreviewContent {
         // file says would be read as something else. Given its own type, the
         // drawing is the document.
         let page = makeWebView()
+        // Rebuilt with the page, and only with the page: the "same text, no
+        // reload" check above is what keeps it in step with what is on screen.
+        sourceMap = mapsToSource ? HTMLSourceMap(source: key.text) : nil
+        // A page still arriving has nothing focused in it yet.
+        pageHoldsEditableFocus = false
+        page.editableFocus = false
         guard key.isSVG else {
             page.loadHTMLString(key.text, baseURL: shownBaseURL)
+            return
+        }
+        // A drawing that will not parse gets Nota's own page rather than
+        // WebKit's: that one is black type in a pink box whatever the
+        // appearance, unreadable over a dark column, and it prints the find
+        // bar's injected stylesheet as text under the box.
+        if let problem = SVGCheck.problem(in: key.text) {
+            // Nota's own page, not the reader's file: nothing in it is
+            // written anywhere the editor could go.
+            sourceMap = nil
+            page.loadHTMLString(Self.svgProblemPage(problem), baseURL: nil)
             return
         }
         page.load(Data(key.text.utf8), mimeType: "image/svg+xml",
                   characterEncodingName: "utf-8",
                   baseURL: shownBaseURL ?? URL(fileURLWithPath: "/"))
+    }
+
+    /// The page shown for a drawing that will not parse: the message in the
+    /// column's own colours, light or dark.
+    static func svgProblemPage(_ problem: String) -> String {
+        let title = L10n.text("This drawing cannot be shown")
+        return """
+        <!doctype html><html><head><meta charset="utf-8"><style>
+        :root { color-scheme: light dark; }
+        body { font: 14px -apple-system, system-ui, sans-serif; color: CanvasText; margin: 24px; }
+        .box { background: rgba(220, 60, 60, 0.10); border-radius: 6px; padding: 12px 16px; }
+        h1 { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+        p { margin: 0; font: 12px ui-monospace, Menlo, monospace; opacity: 0.8; }
+        </style></head><body><div class="box"><h1>\(escaped(title))</h1><p>\(escaped(problem))</p></div></body></html>
+        """
+    }
+
+    private static func escaped(_ text: String) -> String {
+        text.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
     }
 
     /// What the page on screen was made from. The file's path is in it
@@ -556,6 +649,122 @@ final class HTMLPreviewView: NSView, PreviewContent {
         onChapterKey?(step)
     }
 
+    // MARK: - Which element was pressed
+
+    private static let elementHandlerName = "notaElement"
+
+    /// The page's half of the source reveal: which element was pressed, and
+    /// what every element up to it is called.
+    ///
+    /// Document order — `querySelectorAll('*')` — is the one ruler both sides
+    /// can count by. The names ride along because a DOM holds elements no
+    /// file ever wrote (an implied `html`, `head`, `body` or `tbody`, and
+    /// anything a script added) and `HTMLSourceMap` cannot skip what it
+    /// cannot see. Only the names up to the pressed element are sent; nothing
+    /// after it is ever looked at.
+    ///
+    /// It listens and never acts: capture phase, no `preventDefault`, so a
+    /// link still opens, a control still takes the press, and a page with
+    /// handlers of its own behaves exactly as it did. A press inside a link
+    /// is left alone altogether — following it is what the reader asked for.
+    private static let elementReporter = """
+    (function () {
+        document.addEventListener('mousedown', function (event) {
+            if (event.button !== 0) { return; }
+            var target = event.target;
+            while (target && target.nodeType !== 1) { target = target.parentNode; }
+            if (!target) { return; }
+            if (target.closest && target.closest('a[href]')) { return; }
+            var all = document.querySelectorAll('*');
+            var names = [];
+            for (var i = 0; i < all.length; i++) {
+                names.push((all[i].tagName || '').toLowerCase());
+                if (all[i] === target) {
+                    window.webkit.messageHandlers.\(elementHandlerName).postMessage(
+                        { index: i, tags: names }
+                    );
+                    return;
+                }
+            }
+        }, true);
+    })();
+    """
+
+    /// A press landed on an element. Best effort by design: a page whose DOM
+    /// the map cannot line up against its own source says nothing at all,
+    /// rather than sending the caret to the wrong tag.
+    fileprivate func readerPressed(elementAt index: Int, tagNames: [String]) {
+        guard let onSourceReveal, let sourceMap,
+              let range = sourceMap.range(ofElementAt: index, tagNames: tagNames)
+        else { return }
+        onSourceReveal(range)
+    }
+
+    // MARK: - A field in the page
+
+    private static let editableHandlerName = "notaEditable"
+
+    /// The one exception to "a click in split must not steal the caret".
+    ///
+    /// A page is not always something to read. It can carry a field, a text
+    /// area or a `contenteditable`, and clicking one of those focused it in
+    /// the DOM while the keystrokes went on landing in the editor beside it —
+    /// the page looked as though it were taking typing and took none. So the
+    /// page says when something in it is being typed into, and for as long as
+    /// that is true the view accepts first responder and is given it.
+    ///
+    /// Only a *field* is the exception; a click anywhere else in the page
+    /// still leaves the caret where it was. And the keyboard is never thrown
+    /// back: losing the field ends the exception, and the reader's next click
+    /// decides where the keys go, exactly as it does everywhere else.
+    private static let editableFocusReporter = """
+    (function () {
+        function editable(node) {
+            if (!node || node.nodeType !== 1) { return false; }
+            var name = (node.tagName || '').toLowerCase();
+            return name === 'input' || name === 'textarea' || name === 'select'
+                || node.isContentEditable === true;
+        }
+        function report(state) {
+            window.webkit.messageHandlers.\(editableHandlerName).postMessage(
+                { editable: state }
+            );
+        }
+        document.addEventListener('focusin', function (event) {
+            if (editable(event.target)) { report(true); }
+        }, true);
+        document.addEventListener('focusout', function (event) {
+            if (editable(event.target)) { report(false); }
+        }, true);
+    })();
+    """
+
+    /// Something in the page took the focus, or gave it up.
+    fileprivate func pageEditableFocusChanged(_ focused: Bool) {
+        guard pageHoldsEditableFocus != focused else { return }
+        pageHoldsEditableFocus = focused
+        webView?.editableFocus = focused
+        // Focus in: the page is given the keyboard, since WebKit delivers key
+        // events only to a first responder. Focus out: it is left exactly
+        // where it is — snatching it back to the editor mid-sentence would be
+        // the same rudeness in the other direction.
+        if focused, let webView, let window = webView.window,
+           window.firstResponder !== webView {
+            window.makeFirstResponder(webView)
+        }
+        onEditableFocusChange?(focused)
+    }
+
+    /// The keyboard has gone somewhere else — a click in the editor beside
+    /// the page. Whatever the DOM still thinks is focused, the exception is
+    /// over.
+    fileprivate func pageLostTheKeyboard() {
+        guard pageHoldsEditableFocus else { return }
+        pageHoldsEditableFocus = false
+        webView?.editableFocus = false
+        onEditableFocusChange?(false)
+    }
+
     /// Where a tab was left in its page. The one number a reload puts back,
     /// and what the tests read to say it was put back.
     func rememberedScroll(ofTab id: UUID) -> CGPoint {
@@ -593,6 +802,39 @@ final class HTMLPreviewView: NSView, PreviewContent {
                   let step = body["step"] as? Double
             else { return }
             view?.readerTurnedPage(Int(step))
+        }
+    }
+
+    /// And for a field in the page taking the focus or giving it up.
+    private final class EditableFocusReporter: NSObject, WKScriptMessageHandler {
+        private weak var view: HTMLPreviewView?
+
+        init(view: HTMLPreviewView) { self.view = view }
+
+        func userContentController(
+            _ controller: WKUserContentController, didReceive message: WKScriptMessage
+        ) {
+            guard let body = message.body as? [String: Any],
+                  let focused = body["editable"] as? Bool
+            else { return }
+            view?.pageEditableFocusChanged(focused)
+        }
+    }
+
+    /// And for the element a press landed on.
+    private final class ElementReporter: NSObject, WKScriptMessageHandler {
+        private weak var view: HTMLPreviewView?
+
+        init(view: HTMLPreviewView) { self.view = view }
+
+        func userContentController(
+            _ controller: WKUserContentController, didReceive message: WKScriptMessage
+        ) {
+            guard let body = message.body as? [String: Any],
+                  let index = body["index"] as? Double,
+                  let tags = body["tags"] as? [String]
+            else { return }
+            view?.readerPressed(elementAt: Int(index), tagNames: tags)
         }
     }
 
@@ -820,8 +1062,26 @@ final class PageFiles: NSObject, WKURLSchemeHandler {
 /// word — must leave the caret where it was. Refusing first responder is what
 /// says so; the click itself still reaches the page, because a mouse event
 /// does not need the keyboard.
+///
+/// The exception is a field: `editableFocus` is true for as long as the page
+/// holds a focused `input`, `textarea`, `select` or `contenteditable`, and a
+/// page that is being typed into has to have the keys (done 2026-09-07).
+/// Losing the field ends it, and losing the keyboard ends it too — the pane
+/// is told, so the next click in the page is an ordinary click again.
 final class HTMLPageView: WKWebView {
     var takesKeyboard = false
+
+    /// Whether something in the page is being typed into. The one thing
+    /// besides reading mode that makes this view take the keyboard: a field
+    /// the reader has clicked into gets the keys, or the page is a form
+    /// nobody can fill in (done 2026-09-07). Set by the pane, from the page's
+    /// own `focusin` / `focusout`.
+    var editableFocus = false
+
+    /// Run when the keyboard leaves this view for something else. The pane
+    /// takes the field's exception down on it, so the next click in the page
+    /// is an ordinary click again.
+    var onKeyboardResigned: (() -> Void)?
 
     /// Files let go on the page, which open as tabs the way they do anywhere
     /// else over the column.
@@ -855,10 +1115,16 @@ final class HTMLPageView: WKWebView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    override var acceptsFirstResponder: Bool { takesKeyboard }
+    override var acceptsFirstResponder: Bool { takesKeyboard || editableFocus }
 
     override func becomeFirstResponder() -> Bool {
-        takesKeyboard && super.becomeFirstResponder()
+        (takesKeyboard || editableFocus) && super.becomeFirstResponder()
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onKeyboardResigned?() }
+        return resigned
     }
 
     // MARK: - Dropped files
@@ -894,5 +1160,24 @@ final class HTMLPageView: WKWebView {
         }
         guard let action = NSTextFinder.Action(rawValue: item.tag) else { return false }
         return HTMLFindSession.handles(action)
+    }
+}
+
+
+/// Whether a drawing's text is XML WebKit could draw, answered before it is
+/// handed over, so a broken one gets a readable page instead of WebKit's.
+enum SVGCheck {
+    /// `nil` for a drawing that parses; otherwise one line saying what is
+    /// wrong and where.
+    static func problem(in text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return L10n.text("The document is empty.") }
+        let parser = XMLParser(data: Data(text.utf8))
+        guard !parser.parse() else { return nil }
+        let code = (parser.parserError as NSError?)?.code ?? 0
+        return String(
+            format: L10n.text("Line %d, column %d: the drawing could not be parsed (XML error %d)."),
+            parser.lineNumber, parser.columnNumber, code
+        )
     }
 }

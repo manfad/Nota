@@ -142,8 +142,8 @@ final class ModeControlOverlay: NSView {
         /// either one says what the other would do.
         var symbolName: String {
             switch self {
-            case .beautify: "arrow.up.left.and.arrow.down.right"
-            case .compact: "arrow.down.right.and.arrow.up.left"
+            case .beautify: "rectangle.expand.vertical"
+            case .compact: "rectangle.compress.vertical"
             }
         }
     }
