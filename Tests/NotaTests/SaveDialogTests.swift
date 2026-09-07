@@ -222,6 +222,41 @@ final class SaveDialogTests: XCTestCase {
         XCTAssertEqual(dialog.saveButton.title, "Simpan")
     }
 
+    /// The list is not the end of it: `Other…` opens a field for an extension
+    /// the popup does not carry, and `None` writes the name bare.
+    @MainActor
+    func testOtherAndNoneReachPastTheList() throws {
+        let folder = try makeTemporaryDirectory()
+        let dialog = SaveDialog(
+            suggestedName: "notes.md", existingFileURL: nil,
+            lastDirectory: folder, lastExtension: "md"
+        )
+        XCTAssertTrue(dialog.otherExtensionField.isHidden, "the field waits behind Other…")
+        XCTAssertNotNil(dialog.formatPopUp.menu?.item(withTag: SaveDialog.noneTag))
+        XCTAssertNotNil(dialog.formatPopUp.menu?.item(withTag: SaveDialog.otherTag))
+
+        dialog.chooseOtherExtension("")
+        XCTAssertFalse(dialog.otherExtensionField.isHidden, "Other… brings the field out")
+        XCTAssertFalse(dialog.saveButton.isEnabled, "and Save waits for the extension")
+
+        dialog.otherExtensionField.stringValue = "mdx"
+        dialog.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+        XCTAssertTrue(dialog.saveButton.isEnabled)
+        XCTAssertEqual(dialog.composedURL.lastPathComponent, "notes.mdx")
+
+        dialog.chooseOtherExtension(".TeXt ")
+        XCTAssertEqual(dialog.composedURL.lastPathComponent, "notes.TeXt",
+                       "a leading dot and stray whitespace are trimmed, the case is the reader's")
+
+        dialog.selectNoExtension()
+        XCTAssertTrue(dialog.otherExtensionField.isHidden, "a listed pick puts the field away")
+        XCTAssertTrue(dialog.saveButton.isEnabled)
+        XCTAssertEqual(dialog.composedURL.lastPathComponent, "notes", "None writes the name bare")
+
+        dialog.formatPopUp.selectItem(withTitle: "txt")
+        XCTAssertEqual(dialog.composedURL.lastPathComponent, "notes.txt")
+    }
+
     // MARK: - Helpers
 
     private func makeTemporaryDirectory() throws -> URL {

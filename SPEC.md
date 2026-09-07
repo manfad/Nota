@@ -37,7 +37,10 @@
   typed with an extension of its own still wins over the popup (`SaveNameComposer`). A named file opens on its own
   name, extension and folder; a new note on the last extension chosen (`Preferences.lastSaveExtension`, default
   `md`, listed even when it is none of Nota's known ones) and the last folder saved into
-  (`Preferences.lastSaveDirectory`), or Documents. Location is read only — `Choose…` opens the system's folder
+  (`Preferences.lastSaveDirectory`), or Documents. The list is not the end of it (2026-09-07): under a separator
+  the popup carries **None**, which writes the name bare, and **Other…**, which brings a small field out beside
+  the popup, focused, for any extension at all — `.mdx`, `.text`, a `.txt` spelled some other way — and Save waits
+  while that field is empty; a listed pick puts the field away again. Location is read only — `Choose…` opens the system's folder
   picker over the dialog (a nested modal, the form AppKit documents for a panel raised from a modal window), the
   one part worth keeping — and shows the folder's own icon and name with the
   whole path behind its tooltip. Saving over a file that is not the note's own asks first. The dialog is relabelled
@@ -1450,7 +1453,8 @@
     seam still stands the whole thing down for the tests. Save composes the URL with `SaveNameComposer` (a typed
     `notes.txt` still beating the popup), is unavailable while the name is blank, asks `confirmReplace` before
     writing over somebody else's file and stays put when the answer is no, and writes `lastSaveDirectory` /
-    `lastSaveExtension` on the way out. Every word goes through `L10n` and the dialog relabels itself on
+    `lastSaveExtension` on the way out. Past the list, `None` saves the name bare and `Other…` opens a field for
+    a typed extension (added the same day: the popup alone shut out a format it did not list). Every word goes through `L10n` and the dialog relabels itself on
     `Preferences.didChange`, so a language changed while it is open takes effect at once. `SavePanelReplaceValidator`,
     `saveFormatAccessory` and the `SavePanelForm` offsets are deleted. Pinned by `SaveDialogTests`.
 

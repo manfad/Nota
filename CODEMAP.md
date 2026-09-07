@@ -129,7 +129,8 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `SaveDialog.swift` (~380) — Nota's own Save dialog in place of `NSSavePanel`: the sheet's two rows (name with the
   Format popup at its end, read-only location with `Choose…`), Cancel and a default Save, `runSheet(on:)` pumping
   `NSApp.runModal` so the window still sees one synchronous `URL?`, the replace question handed back to the window,
-  and the `Preferences.didChange` relabelling that lets a language change land while it is open.
+  the `Preferences.didChange` relabelling that lets a language change land while it is open, and the popup's
+  `None` and `Other…` tail (a field for an extension the list does not carry).
 - `FileWatcher.swift` (~230) — `FileStamp`, watching a path for change.
 - `Bookmarks.swift` (~120) — pinned paths store. `BookmarksMenu.swift` (~130) — the File submenu + ⇧⌘D toggle.
 - `RecentDocumentsMenu.swift` (~55) — File › Open Recent.
@@ -421,11 +422,11 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   `.txt` going dirty and opening the panel on `md`, the pick put back, ⌘S asking once and not twice, the combo's
   own extension winning either way, the close confirmation, and the session round trip.
 - `SaveNameComposerTests.swift` (16) — the Save dialog's name logic: splitting a known extension off, a typed name winning over the popup, dotfiles, trimming, the composed URL, what the Format popup lists, and the last extension round-tripping through Preferences.
-- `SaveDialogTests.swift` (10) — the dialog itself, built and read without a modal session: what a named file and an
+- `SaveDialogTests.swift` (11) — the dialog itself, built and read without a modal session: what a named file and an
   untitled note open on, Documents as the last resort, a remembered extension the known list has never heard of,
   the URL composed from the name and the popup (and from a name spelling its own extension), Save unavailable on a
   blank name, the replace question asked once and not asked when the file is the note's own, and a language change
-  relabelling it where it stands.
+  relabelling it where it stands, and `Other…` / `None` reaching past the list.
 - `TabHoverTests.swift` (3) — the strip's three greys: selected fill, the pointer's wash on an unselected tab, nothing at rest.
 - `WindowChromeTests.swift` (11) — Settings › Tab bar: the strip, the traffic lights and the strip's three trailing buttons each switched off and back.
 - `BookmarksTests.swift` (also the ⇧⌘J picker tests), `OpenRecentTests.swift`, `ShortcutsTests.swift`, `MultiWindowTests.swift`, `ExternalChangeTests.swift`, `ZoomTests.swift`, `TabStripLayoutTests.swift`, `DropOnStripTests.swift`, `SidecarTests.swift`, `BigFileTests.swift`, `NoteBigFileTests.swift`, `SpellCheckPolicyTests.swift`.

@@ -52,6 +52,10 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
     let locationLabel = NSTextField(labelWithString: "")
     let nameField = NSTextField()
     let formatPopUp = NSPopUpButton()
+    /// The extension typed by hand once the popup is on `Other…` — the one
+    /// way to a format the list does not carry, or a `.txt` spelled some other
+    /// way. Hidden until then, and hidden again when a listed one is picked.
+    let otherExtensionField = NSTextField()
     let locationField = NSTextField(labelWithString: "")
     let chooseButton = NSButton()
     let cancelButton = NSButton()
@@ -80,8 +84,41 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
         SaveNameComposer.composedURL(
             directory: locationURL,
             name: nameField.stringValue,
-            extension: formatPopUp.titleOfSelectedItem ?? ""
+            extension: chosenExtension
         )
+    }
+
+    /// The popup's two items that are not extensions, told apart by tag so
+    /// that neither the language nor the list's contents matter: `None`
+    /// saves the name bare, `Other…` reads the extension off the field.
+    static let noneTag = 1
+    static let otherTag = 2
+
+    /// What the popup and, behind `Other…`, the field say the extension is.
+    var chosenExtension: String {
+        switch formatPopUp.selectedItem?.tag {
+        case Self.noneTag: return ""
+        case Self.otherTag: return otherExtensionField.stringValue
+        default: return formatPopUp.titleOfSelectedItem ?? ""
+        }
+    }
+
+    /// Whether the popup stands on `Other…`, with the field beside it.
+    var isOtherExtensionChosen: Bool {
+        formatPopUp.selectedItem?.tag == Self.otherTag
+    }
+
+    /// Puts the popup on `Other…` with `ext` in the field, as a pick of that
+    /// item and typing would. `None` is `selectNoExtension()`.
+    func chooseOtherExtension(_ ext: String) {
+        formatPopUp.selectItem(withTag: Self.otherTag)
+        otherExtensionField.stringValue = ext
+        formatChanged()
+    }
+
+    func selectNoExtension() {
+        formatPopUp.selectItem(withTag: Self.noneTag)
+        formatChanged()
     }
 
     // MARK: - Building
@@ -139,11 +176,19 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
             preferredExtension: preferredExtension
         )
         formatPopUp.addItems(withTitles: SaveNameComposer.formatOptions(including: chosen))
+        formatPopUp.menu?.addItem(.separator())
+        let none = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        none.tag = Self.noneTag
+        let other = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        other.tag = Self.otherTag
+        formatPopUp.menu?.addItem(none)
+        formatPopUp.menu?.addItem(other)
         if let match = formatPopUp.itemTitles.first(where: {
             $0.caseInsensitiveCompare(chosen) == .orderedSame
         }) {
             formatPopUp.selectItem(withTitle: match)
         }
+        otherExtensionField.isHidden = true
         showLocation()
         relabel()
         updateSaveEnabled()
@@ -171,6 +216,17 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
 
         formatPopUp.pullsDown = false
         formatPopUp.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        formatPopUp.target = self
+        formatPopUp.action = #selector(formatPicked)
+
+        otherExtensionField.isEditable = true
+        otherExtensionField.isBezeled = true
+        otherExtensionField.bezelStyle = .roundedBezel
+        otherExtensionField.delegate = self
+        otherExtensionField.usesSingleLineMode = true
+        otherExtensionField.cell?.wraps = false
+        otherExtensionField.cell?.isScrollable = true
+        otherExtensionField.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
         // Read only: the folder is picked through `Choose…`, never typed, so
         // the field is here to be read — the folder's own icon, its name, and
@@ -200,11 +256,12 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
         // The name and its format are one thing — the file's name — so they
         // share the row: the field takes the width, the popup sits at its
         // end, and the extension reads as the tail of the name it is.
-        let nameRow = NSStackView(views: [nameField, formatPopUp])
+        let nameRow = NSStackView(views: [nameField, otherExtensionField, formatPopUp])
         nameRow.orientation = .horizontal
         nameRow.spacing = 8
         nameRow.distribution = .fill
         formatPopUp.widthAnchor.constraint(equalToConstant: Self.formatWidth).isActive = true
+        otherExtensionField.widthAnchor.constraint(equalToConstant: Self.formatWidth).isActive = true
         nameField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         nameField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -287,6 +344,12 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
         chooseButton.title = L10n.text("Choose…", chinese: "选择…")
         cancelButton.title = L10n.text("Cancel", chinese: "取消")
         saveButton.title = title
+        formatPopUp.menu?.item(withTag: Self.noneTag)?.title = L10n.text("None", chinese: "无")
+        formatPopUp.menu?.item(withTag: Self.otherTag)?.title = L10n.text("Other…", chinese: "其他…")
+        otherExtensionField.placeholderString = L10n.text("Extension", chinese: "扩展名")
+        otherExtensionField.toolTip = L10n.text(
+            "The file's extension, typed by hand", chinese: "手动输入的文件扩展名"
+        )
         // The label column is exactly as wide as its widest word: a column
         // left to size itself is handed a share of the grid's spare width
         // too, and the fields would lose it.
@@ -374,10 +437,30 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
     // MARK: - Buttons
 
     /// Save with nothing typed would write a file called `.md`; the button is
-    /// simply not available until there is a name.
+    /// simply not available until there is a name. `Other…` with nothing in
+    /// its field is the same wait: the reader asked for an extension and has
+    /// not said which yet.
     private func updateSaveEnabled() {
-        saveButton.isEnabled = !nameField.stringValue
+        let hasName = !nameField.stringValue
             .trimmingCharacters(in: .whitespaces).isEmpty
+        let hasExtension = !isOtherExtensionChosen
+            || !chosenExtension
+                .trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: ".")).isEmpty
+        saveButton.isEnabled = hasName && hasExtension
+    }
+
+    @objc private func formatPicked() { formatChanged() }
+
+    /// The field steps in beside the popup on `Other…`, takes the keyboard so
+    /// the extension can be typed at once, and steps out on anything else.
+    private func formatChanged() {
+        let other = isOtherExtensionChosen
+        otherExtensionField.isHidden = !other
+        if other, panel.isVisible {
+            panel.makeFirstResponder(otherExtensionField)
+        }
+        updateSaveEnabled()
     }
 
     func controlTextDidChange(_ notification: Notification) {
