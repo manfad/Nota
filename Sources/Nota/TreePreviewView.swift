@@ -144,7 +144,7 @@ final class TreePreviewView: NSView, PreviewContent {
     /// Where the clicked node is written in the file. Split only, which is
     /// what `sendsBlockClicks` says: in reading there is no editor on screen
     /// to point at.
-    var onSourceReveal: ((NSRange) -> Void)?
+    var onSourceReveal: (([NSRange]) -> Void)?
     /// Mirrors the render's own: true in split, where the tree is a way into
     /// the text beside it, and false in reading, where it is simply what is
     /// being read.
@@ -732,7 +732,7 @@ final class TreePreviewView: NSView, PreviewContent {
         // The whole member, key and value (decided 2026-09-06, after a day of
         // the value alone): what the row names is what the click selects.
         let source = node.range ?? note.lineIndex.range(ofLine: node.line)
-        onSourceReveal(source)
+        onSourceReveal([source])
     }
 
     /// Lights the deepest node the caret is standing in, and brings it into
@@ -894,7 +894,7 @@ final class TreePreviewView: NSView, PreviewContent {
         guard !rowsAreStale, let onSourceReveal, let note else { return }
         let node = row.node
         let fallback = node.range ?? note.lineIndex.range(ofLine: node.line)
-        onSourceReveal(kind == .value ? (node.valueRange ?? fallback) : fallback)
+        onSourceReveal([kind == .value ? (node.valueRange ?? fallback) : fallback])
     }
 
     /// Draws the given rows again, for the bands they have just gained or

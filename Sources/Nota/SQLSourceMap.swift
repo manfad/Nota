@@ -26,6 +26,18 @@ struct SQLSourceMap {
 
     /// One statement of the file, as it was run.
     struct Statement: Equatable {
+        /// How the row is written on the line, which is not always as SQL.
+        ///
+        /// A `pg_dump`'s `COPY … FROM stdin` block writes its rows as tab
+        /// separated lines with no parentheses, no quotes and no column list
+        /// anywhere near them, so the tuple reader below has nothing to read:
+        /// such a row says so, and carries the header's own column list —
+        /// lowercased, `nil` for a header that named none, which is the
+        /// table's own order.
+        enum Form: Equatable {
+            case statement
+            case copyRow(columns: [String]?)
+        }
         /// The statement's own characters in the file, from its first letter
         /// through its semicolon. UTF-16, so it is a range the editor's text
         /// storage understands without translation.
@@ -44,6 +56,18 @@ struct SQLSourceMap {
         /// before it is used, and a statement whose tuples do not add up is
         /// pointed at as a whole instead.
         let rowids: ClosedRange<Int64>?
+        /// Which of the two shapes above this one is written in.
+        let form: Form
+
+        init(
+            range: NSRange, table: String?, rowids: ClosedRange<Int64>?,
+            form: Form = .statement
+        ) {
+            self.range = range
+            self.table = table
+            self.rowids = rowids
+            self.form = form
+        }
     }
 
     private(set) var statements: [Statement]
@@ -51,10 +75,18 @@ struct SQLSourceMap {
     /// statement without the file being handed back in. Held as `NSString`
     /// because every range here is one.
     private let source: NSString
+    /// Whether a backslash inside a string literal escapes what follows it,
+    /// the way MySQL means `'Daniel O\'Brien'`. Standard SQL — SQLite's own,
+    /// and PostgreSQL's with `standard_conforming_strings` on — does not, so
+    /// this is off unless the file has shown itself to be a MySQL dump. Read
+    /// it the wrong way round and every value after the first `\'` in a tuple
+    /// is placed somewhere it is not.
+    private let backslashEscapes: Bool
 
-    init(source: String = "", statements: [Statement] = []) {
+    init(source: String = "", statements: [Statement] = [], backslashEscapes: Bool = false) {
         self.source = source as NSString
         self.statements = statements
+        self.backslashEscapes = backslashEscapes
     }
 
     var isEmpty: Bool { statements.isEmpty }
@@ -93,11 +125,19 @@ struct SQLSourceMap {
     /// never to nothing: a name in neither list, a tuple that will not read, a
     /// value position past the end of it. A reader who clicked a cell is
     /// asking where the row is, and the tuple is always at least that.
+    ///
+    /// A `COPY` block's row is not written as SQL at all, so it is placed by
+    /// the tabs that separate its fields rather than by the tuple reader —
+    /// see `copyField`.
     func range(
         ofRowid rowid: Int64, inTable table: String,
         column name: String, tableColumns: [String]
     ) -> NSRange? {
         guard let found = statement(claiming: rowid, inTable: table) else { return nil }
+        if case .copyRow(let columns) = found.statement.form {
+            return copyField(named: name, on: found.statement.range,
+                             columns: columns, tableColumns: tableColumns)
+        }
         let row = found.rowids.count > 1
             ? (tuple(of: rowid, in: found) ?? found.statement.range)
             : found.statement.range
@@ -106,10 +146,37 @@ struct SQLSourceMap {
                   of: name, in: found.statement.range, tableColumns: tableColumns
               ),
               let value = SQLSourceMap.valueRange(
-                  at: position, inTuple: source.substring(with: tupleRange)
+                  at: position, inTuple: source.substring(with: tupleRange),
+                  backslashEscapes: backslashEscapes
               )
         else { return row }
         return NSRange(location: tupleRange.location + value.location, length: value.length)
+    }
+
+    /// Where one field of a `COPY` block's row is written: the characters
+    /// between the tabs on either side of it, and exactly those. Nothing is
+    /// trimmed — a `COPY` field is whatever sits between its separators, an
+    /// empty one included, and `\N` is the two characters `\N` and not a
+    /// nothing to skip past.
+    ///
+    /// Which field it is comes from the header's own list when it gave one,
+    /// and from the table's own columns when it did not — the same rule an
+    /// `INSERT`'s column list follows, and the same one it is asked in: the
+    /// header decides alone where there is one, since a column it left out
+    /// was never written on the line at all. A name in neither, or a line too
+    /// short for the position it asks for, falls back to the whole row.
+    private func copyField(
+        named name: String, on row: NSRange, columns: [String]?, tableColumns: [String]
+    ) -> NSRange {
+        guard row.location >= 0, row.upperBound <= source.length else { return row }
+        let wanted = name.lowercased()
+        let named = columns.map { $0.firstIndex(of: wanted) }
+            ?? tableColumns.firstIndex { $0.lowercased() == wanted }
+        guard let position = named else { return row }
+        let fields = SQLSourceMap.copyFields(in: source.substring(with: row))
+        guard position >= 0, position < fields.count else { return row }
+        return NSRange(location: row.location + fields[position].location,
+                       length: fields[position].length)
     }
 
     /// The statement that wrote this row, and the run of rowids it made. The
@@ -132,7 +199,9 @@ struct SQLSourceMap {
     ) -> NSRange? {
         let range = found.statement.range
         guard range.location >= 0, range.upperBound <= source.length else { return nil }
-        let tuples = SQLSourceMap.valueTuples(in: source.substring(with: range))
+        let tuples = SQLSourceMap.valueTuples(
+            in: source.substring(with: range), backslashEscapes: backslashEscapes
+        )
         let index = Int(rowid - found.rowids.lowerBound)
         guard tuples.count == found.rowids.count, index >= 0, index < tuples.count else {
             return nil
@@ -149,7 +218,9 @@ struct SQLSourceMap {
     ) -> Int? {
         let wanted = name.lowercased()
         if statement.location >= 0, statement.upperBound <= source.length,
-           let named = SQLSourceMap.insertColumns(in: source.substring(with: statement)) {
+           let named = SQLSourceMap.insertColumns(
+               in: source.substring(with: statement), backslashEscapes: backslashEscapes
+           ) {
             return named.firstIndex(of: wanted)
         }
         return tableColumns.firstIndex { $0.lowercased() == wanted }
@@ -165,7 +236,7 @@ struct SQLSourceMap {
     /// column list of `INSERT INTO t (a, b) VALUES (…)` is before the keyword
     /// and is not one of these; the keyword itself is only taken at depth
     /// zero, so a column called `values` is not mistaken for it.
-    static func valueTuples(in statement: String) -> [NSRange] {
+    static func valueTuples(in statement: String, backslashEscapes: Bool = false) -> [NSRange] {
         let units = Array(statement.utf16)
         var index = 0
         var afterValues = false
@@ -173,7 +244,7 @@ struct SQLSourceMap {
         var start = 0
         var tuples: [NSRange] = []
         while index < units.count {
-            if let skipped = skipping(units, from: index) {
+            if let skipped = skipping(units, from: index, backslashEscapes: backslashEscapes) {
                 index = skipped
                 continue
             }
@@ -210,7 +281,9 @@ struct SQLSourceMap {
     /// `nil` for a tuple that never closes, and for a position past the end
     /// of one — a caller with nothing to point at is told so rather than
     /// handed the wrong value.
-    static func valueRange(at position: Int, inTuple tuple: String) -> NSRange? {
+    static func valueRange(
+        at position: Int, inTuple tuple: String, backslashEscapes: Bool = false
+    ) -> NSRange? {
         let units = Array(tuple.utf16)
         guard let open = units.firstIndex(of: Ascii.openParen) else { return nil }
         var index = open + 1
@@ -219,7 +292,8 @@ struct SQLSourceMap {
         var values: [NSRange] = []
         var closed = false
         while index < units.count {
-            if let skipped = skipping(units, from: index), skipped > index {
+            if let skipped = skipping(units, from: index, backslashEscapes: backslashEscapes),
+               skipped > index {
                 index = skipped
                 continue
             }
@@ -264,35 +338,56 @@ struct SQLSourceMap {
         return NSRange(location: start, length: end - start)
     }
 
+    /// One `COPY` data line split at the tabs that separate its fields, in
+    /// the line's own coordinates.
+    ///
+    /// Nothing is trimmed and nothing is unescaped: a `COPY` field is
+    /// exactly what stands between its tabs — an empty one is an empty
+    /// range, and the `\N` that means NULL is those two characters, which
+    /// is what a reader who clicked that cell is being shown. A line with no
+    /// tab at all is one field, the whole of it.
+    static func copyFields(in line: String) -> [NSRange] {
+        let units = Array(line.utf16)
+        var fields: [NSRange] = []
+        var start = 0
+        for (index, unit) in units.enumerated() where unit == Ascii.tab {
+            fields.append(NSRange(location: start, length: index - start))
+            start = index + 1
+        }
+        fields.append(NSRange(location: start, length: units.count - start))
+        return fields
+    }
+
     /// The columns an `INSERT INTO t (a, b) VALUES …` names, unquoted and
     /// folded to lower case, or `nil` for an insert that named none — which
     /// is the one that writes the table's own columns in the table's own
     /// order.
-    static func insertColumns(in statement: String) -> [String]? {
+    static func insertColumns(in statement: String, backslashEscapes: Bool = false) -> [String]? {
         let units = Array(statement.utf16)
         var index = 0
-        guard let verb = nextToken(units, &index), verb.kind == .word,
+        func scan() -> Token? { nextToken(units, &index, backslashEscapes: backslashEscapes) }
+        guard let verb = scan(), verb.kind == .word,
               verb.text.lowercased() == "insert" || verb.text.lowercased() == "replace"
         else { return nil }
-        var token = nextToken(units, &index)
+        var token = scan()
         if let word = token, word.kind == .word, word.text.lowercased() == "or" {
-            _ = nextToken(units, &index)  // ABORT · FAIL · IGNORE · REPLACE · ROLLBACK
-            token = nextToken(units, &index)
+            _ = scan()  // ABORT · FAIL · IGNORE · REPLACE · ROLLBACK
+            token = scan()
         }
         guard let into = token, into.kind == .word, into.text.lowercased() == "into"
         else { return nil }
-        guard let name = nextToken(units, &index), name.kind != .punctuation else { return nil }
-        var next = nextToken(units, &index)
+        guard let name = scan(), name.kind != .punctuation else { return nil }
+        var next = scan()
         // `schema.table`: the list, if there is one, is after the second half.
         if let dot = next, dot.kind == .punctuation, dot.text == "." {
-            guard let second = nextToken(units, &index), second.kind != .punctuation else {
+            guard let second = scan(), second.kind != .punctuation else {
                 return nil
             }
-            next = nextToken(units, &index)
+            next = scan()
         }
         guard let open = next, open.kind == .punctuation, open.text == "(" else { return nil }
         var names: [String] = []
-        while let token = nextToken(units, &index) {
+        while let token = scan() {
             if token.kind == .punctuation {
                 if token.text == ")" { return names }
                 if token.text == "," { continue }
@@ -356,6 +451,7 @@ struct SQLSourceMap {
         static let dash: UInt16 = 45
         static let slash: UInt16 = 47
         static let star: UInt16 = 42
+        static let backslash: UInt16 = 92
         static let underscore: UInt16 = 95
         static let dollar: UInt16 = 36
     }
@@ -373,14 +469,22 @@ struct SQLSourceMap {
     /// Whatever at `index` is not code — blanks, a `--` line comment, a
     /// `/* */` block, a string literal, a quoted identifier — and where it
     /// ends. `nil` when what is there is code.
-    private static func skipping(_ units: [UInt16], from index: Int) -> Int? {
+    private static func skipping(
+        _ units: [UInt16], from index: Int, backslashEscapes: Bool = false
+    ) -> Int? {
         let unit = units[index]
         switch unit {
         case Ascii.space, Ascii.tab, Ascii.newline, Ascii.carriageReturn:
             var end = index
             while end < units.count, isBlank(units[end]) { end += 1 }
             return end
-        case Ascii.quote, Ascii.doubleQuote, Ascii.backtick:
+        case Ascii.quote, Ascii.doubleQuote:
+            // A string literal, and the one place a dialect's backslashes
+            // are read: `'` and `"` are MySQL's two string quotes, and a
+            // backtick is a name and never a string, so it is never one.
+            return endOfQuoted(units, from: index, closing: unit,
+                               backslashEscapes: backslashEscapes)
+        case Ascii.backtick:
             return endOfQuoted(units, from: index, closing: unit)
         case Ascii.openBracket:
             return endOfQuoted(units, from: index, closing: Ascii.closeBracket)
@@ -404,11 +508,18 @@ struct SQLSourceMap {
     /// character of the text rather than as the end — `'it''s'` is one string.
     /// `[…]` has no doubling and closes on its bracket.
     private static func endOfQuoted(
-        _ units: [UInt16], from index: Int, closing: UInt16
+        _ units: [UInt16], from index: Int, closing: UInt16, backslashEscapes: Bool = false
     ) -> Int {
         let doubles = closing != Ascii.closeBracket
         var end = index + 1
         while end < units.count {
+            // MySQL writes `'Daniel O\'Brien'`: the backslash takes the
+            // quote after it with it, and the literal goes on. Standard SQL
+            // has no such rule, which is why this is asked and not assumed.
+            if backslashEscapes, units[end] == Ascii.backslash, end + 1 < units.count {
+                end += 2
+                continue
+            }
             if units[end] == closing {
                 if doubles, end + 1 < units.count, units[end + 1] == closing {
                     end += 2
@@ -453,11 +564,14 @@ struct SQLSourceMap {
     /// The next thing along: a word, a quoted name with its quotes taken off,
     /// or one character of punctuation. Blanks and comments are stepped over
     /// on the way.
-    static func nextToken(_ units: [UInt16], _ index: inout Int) -> Token? {
+    static func nextToken(
+        _ units: [UInt16], _ index: inout Int, backslashEscapes: Bool = false
+    ) -> Token? {
         while index < units.count {
             let unit = units[index]
             if isBlank(unit) || unit == Ascii.dash || unit == Ascii.slash,
-               let skipped = skipping(units, from: index), skipped > index {
+               let skipped = skipping(units, from: index, backslashEscapes: backslashEscapes),
+               skipped > index {
                 index = skipped
                 continue
             }
@@ -468,7 +582,9 @@ struct SQLSourceMap {
         if unit == Ascii.quote || unit == Ascii.doubleQuote || unit == Ascii.backtick
             || unit == Ascii.openBracket {
             let closing = unit == Ascii.openBracket ? Ascii.closeBracket : unit
-            let end = endOfQuoted(units, from: index, closing: closing)
+            let end = endOfQuoted(units, from: index, closing: closing,
+                                  backslashEscapes: backslashEscapes
+                                      && (closing == Ascii.quote || closing == Ascii.doubleQuote))
             let inner = Array(units[(index + 1)..<max(index + 1, end - 1)])
             index = end
             let text = String(decoding: inner, as: UTF16.self)

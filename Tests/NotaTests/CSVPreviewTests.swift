@@ -537,7 +537,7 @@ final class CSVPreviewTests: AppKitTestCase {
         let (pane, window) = try makePane()
         try show(makeNote(named: "rows.csv", text: "a,b\n1,2\n3,4\n"), in: pane)
         pane.layoutSubtreeIfNeeded()
-        var reveals: [NSRange] = []
+        var reveals: [[NSRange]] = []
         pane.onSourceReveal = { reveals.append($0) }
 
         pane.sendsBlockClicks = false
@@ -551,7 +551,7 @@ final class CSVPreviewTests: AppKitTestCase {
             with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
                                           row: 1, column: 2)))
         XCTAssertEqual(reveals.count, 1, "and in split it says exactly once")
-        XCTAssertEqual(reveals.first?.location, ("a,b\n1,2\n" as NSString).length + 2,
+        XCTAssertEqual(reveals.first?.first?.location, ("a,b\n1,2\n" as NSString).length + 2,
                        "the second row's second field, where that field is written")
     }
 
@@ -560,21 +560,69 @@ final class CSVPreviewTests: AppKitTestCase {
         let (pane, window) = try makePane()
         try show(makeNote(named: "ragged.csv", text: "a,b,c\n1,2\n"), in: pane)
         pane.layoutSubtreeIfNeeded()
-        var reveals: [NSRange] = []
+        var reveals: [[NSRange]] = []
         pane.onSourceReveal = { reveals.append($0) }
         pane.sendsBlockClicks = true
 
         pane.gridForTesting.mouseDown(
             with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
                                           row: 0, column: 3)))
-        XCTAssertEqual(reveals.last, NSRange(location: 6, length: 3),
+        XCTAssertEqual(reveals.last, [NSRange(location: 6, length: 3)],
                        "the row never wrote a third field, so the record is what there is")
 
         pane.gridForTesting.mouseDown(
             with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
                                           row: 0, column: 2)))
-        XCTAssertEqual(reveals.last, NSRange(location: 8, length: 1),
+        XCTAssertEqual(reveals.last, [NSRange(location: 8, length: 1)],
                        "and a field it did write is that field")
+    }
+
+    /// A rectangle over one column across several rows is that column: one
+    /// range per row, each exactly that row's own field — never one span
+    /// stretching from the first row to the last, which would light every
+    /// line in between it as well as the column itself.
+    @MainActor
+    func testADragOverOneColumnAcrossManyRowsRevealsOneRangePerRow() throws {
+        let text = "id,name,city\n1,Ada,Paris\n2,Bo,Berlin\n3,Cara,Paris\n"
+        let (pane, window) = try makePane()
+        try show(makeNote(named: "people.csv", text: text), in: pane)
+        pane.layoutSubtreeIfNeeded()
+        var reveals: [[NSRange]] = []
+        pane.onSourceReveal = { reveals.append($0) }
+        let grid = pane.gridForTesting
+
+        grid.mouseDown(with: try XCTUnwrap(
+            cellEvent(.leftMouseDown, in: pane, window: window, row: 0, column: 2)))
+        grid.mouseDragged(with: try XCTUnwrap(
+            cellEvent(.leftMouseDragged, in: pane, window: window, row: 2, column: 2)))
+
+        let page = try XCTUnwrap(pane.shownPage)
+        let expected = (0...2).map { page.fieldSources[$0][1] }
+        XCTAssertEqual(reveals.last, expected,
+                       "the name column, one range per row — not one span over the rows between")
+        XCTAssertEqual(reveals.last?.count, 3)
+    }
+
+    /// A rectangle over two adjacent columns on one row is still one range,
+    /// the way it always was: the two fields and the separator between them.
+    @MainActor
+    func testARectangleOverTwoColumnsOnOneRowStaysOneRange() throws {
+        let text = "id,name,city\n1,Ada,Paris\n2,Bo,Berlin\n"
+        let (pane, window) = try makePane()
+        try show(makeNote(named: "people.csv", text: text), in: pane)
+        pane.layoutSubtreeIfNeeded()
+        var reveals: [[NSRange]] = []
+        pane.onSourceReveal = { reveals.append($0) }
+        let grid = pane.gridForTesting
+
+        grid.mouseDown(with: try XCTUnwrap(
+            cellEvent(.leftMouseDown, in: pane, window: window, row: 0, column: 2)))
+        grid.mouseDragged(with: try XCTUnwrap(
+            cellEvent(.leftMouseDragged, in: pane, window: window, row: 0, column: 3)))
+
+        let source = text as NSString
+        XCTAssertEqual(reveals.last, [source.range(of: "Ada,Paris")],
+                       "adjacent columns on one row are still one range, separator included")
     }
 
     // MARK: - The demo file

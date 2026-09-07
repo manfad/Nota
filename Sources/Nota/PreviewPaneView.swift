@@ -79,8 +79,9 @@ final class PreviewPaneView: NSView {
     var onWidthChange: (() -> Void)?
     var onBlockClick: ((NSRange) -> Void)?
     /// A place in the source the content is pointing at without asking for
-    /// the keyboard — a dump's row click.
-    var onSourceReveal: ((NSRange) -> Void)?
+    /// the keyboard — a dump's row click. One range per row of a column
+    /// picked out of a grid, and one range otherwise.
+    var onSourceReveal: (([NSRange]) -> Void)?
     var onTaskToggle: ((NSRange) -> Void)?
     var onFindBarVisibilityChange: ((Bool) -> Void)?
     var onPositionChange: ((Int) -> Void)?

@@ -1209,8 +1209,8 @@ final class HTMLPreviewTests: AppKitTestCase {
         let revealed = expectation(description: "the page reported the element pressed")
         revealed.assertForOverFulfill = false
         var range: NSRange?
-        pane.onSourceReveal = { source in
-            range = source
+        pane.onSourceReveal = { sources in
+            range = sources.first
             revealed.fulfill()
         }
         try evaluate("""

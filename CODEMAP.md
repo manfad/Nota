@@ -177,7 +177,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   being interrupted.
 
 ### Preview column and renderers
-- `PreviewContent.swift` (~430) — `PreviewContentKind` (markdown/latex/html/pdf/image/epub/sql/csv/rtf/tree), `ContentsEntry` (one line of a table of contents), `PageListSource` (a document read page by page: count, page in front, go to one, draw one), the `PreviewContent` protocol every content view adopts (`show`, zoom, find, `rememberedPosition`, `rememberedScroll`, `footerStatus`, `contentsEntries` / `currentContentsLine` / `goToContentsLine`, `pageList`, `onStateChange`, `onBlockClick` and `onSourceReveal` — a click that takes the caret with it and one that only moves it — `onDropFiles`), and `PreviewFileDrop` — the drop from the Finder every view in the column answers the same way.
+- `PreviewContent.swift` (~430) — `PreviewContentKind` (markdown/latex/html/pdf/image/epub/sql/csv/rtf/tree), `ContentsEntry` (one line of a table of contents), `PageListSource` (a document read page by page: count, page in front, go to one, draw one), the `PreviewContent` protocol every content view adopts (`show`, zoom, find, `rememberedPosition`, `rememberedScroll`, `footerStatus`, `contentsEntries` / `currentContentsLine` / `goToContentsLine`, `pageList`, `onStateChange`, `onBlockClick` and `onSourceReveal` — a click that takes the caret with it and one that only moves it, one range per row of a rectangle picked out of a grid and one range otherwise — `onDropFiles`), and `PreviewFileDrop` — the drop from the Finder every view in the column answers the same way.
 - `PreviewPaneView.swift` (~315) — holds one content view at a time; `panes` for tests; `onDropFiles` goes to every content view and to zen's drag band, so the whole column is a tab target.
 - `RenderedPreviewView.swift` (~710) — base class for rendered text panes (blocks, band, click-back, find, frozen
   wrap width). `PreviewTextView.mouseDown` is where a press is told from a drag: `super` runs AppKit's tracking loop
@@ -224,8 +224,10 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `RTFPreviewView.swift` (~430) — the rich-text viewer tab: `NSAttributedString(url:…)` into a read-only, selectable
   `NSTextView` at the editor's margin, the document's own fonts and colours kept (black body text swapped for
   `labelColor`), `TextFindSession` for ⌘F, and a zoom that scales every font, paragraph measurement and attachment.
-- `SQLDump.swift` (~715) — a `.sql` file run into an in-memory SQLite (`import SQLite3`, no dependency): the
-  prepare/tail loop and the first failure's own statement, the `SQLSourceMap` it takes down as it goes, `tables`,
+- `SQLDump.swift` (~1120) — a `.sql` file run into an in-memory SQLite (`import SQLite3`, no dependency): the
+  prepare/tail loop and the first failure's own statement, the `SQLSourceMap` it takes down as it goes (one `Span`
+  per statement — a rewritten `mysqldump` insert included, through `insertRecord`, and one per row of a `COPY`
+  block), `tables`,
   `page(ofTable:offset:sort:)` / `page(ofQuery:…)` (`LIMIT 100 OFFSET`, `COUNT(*)`, and the rowids a page carries
   beside its values with the table they belong to), `declaredTypes(ofTable:)`, `hasRowid(_:in:)`, and the read-only
   authorizer the query box runs under; also turns a `mysqldump`/phpMyAdmin/`pg_dump` export into something SQLite's
@@ -238,8 +240,9 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   picker, the one `arrow.clockwise` button that runs the file again (and is a big dump's only way in), page bar, the grid's data source, the sort a header click asks for (`tableView(_:didClick:)`, on the
   release — see the header's own note), the alerts a failing query or a failing file put up (once per message, with
   `alertOverrideForTesting` for the tests), runs on its own queue with a token, and the per-tab table and query it
-  writes onto the note, `sourceRange(of:)` — the grid's `Selection` as one span of the file, tuples for whole rows
-  and values for a rectangle — and `GridFindSource`: ⌘F over the whole table, or over the query's result, through
+  writes onto the note, `sourceRanges(of:)` — the grid's `Selection` as an array of ranges: whole rows one span of
+  tuples, a rectangle one span of values per row, so a column is that column and not the lines between its rows —
+  and `GridFindSource`: ⌘F over the whole table, or over the query's result, through
   `SQLDump.hits` on the pane's own queue.
 - `SQLGridView.swift` (~530) — the grid itself: the spreadsheet cell cursor (click one, drag a rectangle, arrows and
   ⇧-arrows, ⌘C as tab-separated text), whole rows from the `#` gutter, ⇧ and Space, the cell click it reports
@@ -251,11 +254,15 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   nil-targeted items are handed to, `SQLCellView` drawing the accent wash, the rectangle's hairline and the find
   bands under both (and the black it spells the current match's text in), and `SQLHeaderView` / `SQLHeaderCell` —
   the flat header with its own sort chevron.
-- `SQLSourceMap.swift` (~490) — where each row of a dump is written: the statements `SQLDump` took down as it ran
-  (each one's own characters, and the rowids an insert made), the two lookups a clicked cell is answered from — the
-  row's tuple, and the one *value* inside it the clicked column stands for, quotes included — and the scanners they
-  need: the table an `INSERT` names, the column list it named, the `(…)` tuples after `VALUES`, and the values
-  inside one tuple, all counted outside string literals, quoted identifiers and comments. Pure text and no SQLite.
+- `SQLSourceMap.swift` (~605) — where each row of a dump is written: the statements `SQLDump` took down as it ran
+  (each one's own characters, the rowids an insert made, and its `Statement.Form` — an ordinary statement, or a
+  `COPY` row carrying the header's own column list), the two lookups a clicked cell is answered from — the row's
+  tuple, and the one *value* inside it the clicked column stands for, quotes included — and the scanners they need:
+  the table an `INSERT` names, the column list it named, the `(…)` tuples after `VALUES`, the values inside one
+  tuple, and the tab-separated fields of a `COPY` line, all counted outside string literals, quoted identifiers and
+  comments. `backslashEscapes` says whether a `\` inside a literal escapes what follows it, which is MySQL's rule
+  and not SQLite's or a `pg_dump`'s, so `'Daniel O\'Brien'` is read as its dialect means it. Pure text and no
+  SQLite.
 - `SQLQueryRewrite.swift` (~175) — the loose read of a query that says whether it is plainly one table's rows, and
   the same query with that table's rowid spliced in after the `SELECT` keyword, so a cell of a query's result walks
   the editor to its `INSERT` the way a table's does. What it refuses — a join, a `GROUP BY`, an aggregate, a
@@ -273,8 +280,9 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   and by the reader's own collation where it does not. Pure; knows nothing of AppKit.
 - `CSVPreviewView.swift` (~810) — the pane that draws it: the dump's pane with the database taken out — one bar of
   `Refresh` and the page arrows under the corner slot's hover band, `SQLGridView` below it unchanged, the sort a
-  header click asks for, the `onSourceReveal` a click, a gutter click or a drag sends (`sourceRange(of:)` — the
-  grid's `Selection` as one span, records for whole rows and fields for a rectangle), `GridFindSource` — ⌘F over the
+  header click asks for, the `onSourceReveal` a click, a gutter click or a drag sends (`sourceRanges(of:)` — the
+  grid's `Selection` as an array of ranges: one span of records for whole rows, one span of fields per row for a
+  rectangle, so a column is that column and not the lines between its rows), `GridFindSource` — ⌘F over the
   whole table in `CSVTable.ordering`'s order, with the bar row dropping while the pill is up — and the read it runs
   on its own queue with a token (a big file only ever on the button).
 - `StructuredDocument.swift` (~200) — what a `.json`, `.yaml`, `.toml` or `.xml` file *is* once read: one

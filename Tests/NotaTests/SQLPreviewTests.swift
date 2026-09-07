@@ -366,6 +366,18 @@ final class SQLPreviewTests: AppKitTestCase {
             return XCTFail("row 7's notes should be text")
         }
         XCTAssertTrue(ironGallNotes.contains("\"blue-black\""), ironGallNotes)
+
+        // Its inserts are rewritten on the way in, and a rewritten insert is
+        // still on the map: the city of the row whose name carries the escape
+        // is that city and not the row, and the two rows of Chinese above it
+        // do not shift it either — the offsets are the file's own UTF-16.
+        let text = try exampleText("sql/MySQL.sql")
+        let columns = dump.declaredTypes(ofTable: "customers").map(\.name)
+        XCTAssertEqual(
+            dump.sourceMap.range(ofRowid: 3, inTable: "customers",
+                                 column: "city", tableColumns: columns),
+            (text as NSString).range(of: "'Dublin'")
+        )
     }
 
     /// The same shop as a real `pg_dump` (plain SQL) export, read from
@@ -396,6 +408,18 @@ final class SQLPreviewTests: AppKitTestCase {
             return XCTFail("row 10's notes should be text")
         }
         XCTAssertTrue(penRollNotes.contains("\t"), "the escaped tab decoded to a real one")
+
+        // A COPY row's own field, in a real block: the third row's name, the
+        // characters between its tabs and no quotes anywhere near it, with
+        // two rows of Chinese above it to move the UTF-16 offsets off the
+        // UTF-8 ones.
+        let text = try exampleText("sql/PostgreSQL.sql")
+        let customerColumns = dump.declaredTypes(ofTable: "customers").map(\.name)
+        XCTAssertEqual(
+            dump.sourceMap.range(ofRowid: 3, inTable: "customers",
+                                 column: "name", tableColumns: customerColumns),
+            (text as NSString).range(of: "Daniel O'Brien")
+        )
 
         let orders = try page(of: dump, table: "orders")
         XCTAssertEqual(orders.rows[0][5], .text("{gift}"), "an array literal, left as text")
@@ -1332,7 +1356,7 @@ final class SQLPreviewTests: AppKitTestCase {
         try show(makeNote(named: "notes.sql", text: text), in: pane)
         pane.layoutSubtreeIfNeeded()
         let source = text as NSString
-        var reveals: [NSRange] = []
+        var reveals: [[NSRange]] = []
         pane.onSourceReveal = { reveals.append($0) }
         pane.sendsBlockClicks = true
 
@@ -1341,7 +1365,7 @@ final class SQLPreviewTests: AppKitTestCase {
         pane.gridForTesting.mouseDown(
             with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
                                           row: 1, column: 1)))
-        XCTAssertEqual(reveals.last.map { source.substring(with: $0) }, "'second'",
+        XCTAssertEqual(reveals.last?.first.map { source.substring(with: $0) }, "'second'",
                        "the query's own first column is the table's second value")
 
         try settle(pane) { pane.setQueryForTesting("SELECT id * 2 FROM notes") }
@@ -1349,8 +1373,106 @@ final class SQLPreviewTests: AppKitTestCase {
         pane.gridForTesting.mouseDown(
             with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
                                           row: 2, column: 1)))
-        XCTAssertEqual(reveals.last, source.range(of: "(3, 'third')"),
+        XCTAssertEqual(reveals.last, [source.range(of: "(3, 'third')")],
                        "a computed column is no column of the table, so the tuple is the answer")
+    }
+
+    /// A `pg_dump`'s `COPY` block writes its rows as tab separated lines and
+    /// not as SQL, so a cell of one is placed by the tabs on either side of
+    /// it: the field is exactly what stands between them, `\N` and all.
+    func testACopyBlocksFieldsArePlacedByTheTabsThatSeparateThem() throws {
+        let text = """
+        CREATE TABLE orders (id integer, customer text, placed_at text, status text);
+        COPY public.orders (id, customer, placed_at, status) FROM stdin;
+        1\tAlice\t2026-01-01\tpaid
+        2\tBo\t\\N\tpending
+        \\.
+        """
+        let dump = SQLDump(sql: text)
+        XCTAssertNil(dump.failure, dump.failure?.message ?? "")
+        let source = text as NSString
+        let columns = dump.declaredTypes(ofTable: "orders").map(\.name)
+        func range(_ rowid: Int64, _ column: String) throws -> NSRange {
+            try XCTUnwrap(dump.sourceMap.range(
+                ofRowid: rowid, inTable: "orders", column: column, tableColumns: columns
+            ))
+        }
+        XCTAssertEqual(try range(1, "customer"), source.range(of: "Alice"))
+        XCTAssertEqual(try range(1, "id"),
+                       NSRange(location: source.range(of: "1\tAlice").location, length: 1),
+                       "the first field starts the line and ends at its tab")
+        XCTAssertEqual(try range(1, "status"), source.range(of: "paid"),
+                       "and the last one ends at the end of the line")
+        XCTAssertEqual(try range(2, "placed_at"), source.range(of: "\\N"),
+                       "a NULL is the two characters COPY wrote, not a nothing")
+        XCTAssertEqual(try range(2, "STATUS"), source.range(of: "pending"),
+                       "the header's names are no more case sensitive than any other")
+        XCTAssertEqual(try range(2, "nowhere"), source.range(of: "2\tBo\t\\N\tpending"),
+                       "a name in neither list is the whole row, never nothing")
+    }
+
+    /// The header's list says which field is which; a header that named none
+    /// leaves the table's own order to say it. A line too short for the
+    /// position asked for is the row, the same fallback everything else takes.
+    func testACopyRowIsPlacedByItsHeaderOrByTheTablesOwnOrder() throws {
+        let line = "7\tAda\tParis"
+        func map(_ columns: [String]?, source: String = line) -> SQLSourceMap {
+            SQLSourceMap(source: source, statements: [SQLSourceMap.Statement(
+                range: NSRange(location: 0, length: (source as NSString).length),
+                table: "people", rowids: 7...7, form: .copyRow(columns: columns)
+            )])
+        }
+        let tableColumns = ["id", "name", "city"]
+        func field(_ map: SQLSourceMap, _ column: String, in source: String = line) throws -> String {
+            (source as NSString).substring(with: try XCTUnwrap(map.range(
+                ofRowid: 7, inTable: "people", column: column, tableColumns: tableColumns
+            )))
+        }
+        let named = map(["city", "name", "id"])
+        XCTAssertEqual(try field(named, "city"), "7", "the header's own order, not the table's")
+        XCTAssertEqual(try field(named, "id"), "Paris")
+
+        let headerless = map(nil)
+        XCTAssertEqual(try field(headerless, "name"), "Ada",
+                       "a header that named no columns writes the table's own order")
+        XCTAssertEqual(try field(headerless, "city"), "Paris")
+
+        let short = map(["id", "name", "city"], source: "7\tAda")
+        XCTAssertEqual(try field(short, "city", in: "7\tAda"), "7\tAda",
+                       "a line that never wrote that field is the whole row")
+
+        let subset = map(["id", "name"])
+        XCTAssertEqual(try field(subset, "city"), line,
+                       "a header that left a column out never wrote it: the row, not the "
+                           + "field the table's own order would have pointed at")
+    }
+
+    /// MySQL writes `'Daniel O\'Brien'`, where the backslash takes the quote
+    /// after it with it. Standard SQL has no such rule, so the reader is told
+    /// which dialect it is reading rather than guessing — read it the wrong
+    /// way round and every value after the escape lands somewhere it is not.
+    func testABackslashEscapeIsMySQLsAndNotStandardSQLs() throws {
+        let mysql = "(2, 'Daniel O\\'Brien', 'Dublin')"
+        func value(_ position: Int, of tuple: String, backslashEscapes: Bool) -> String? {
+            SQLSourceMap.valueRange(
+                at: position, inTuple: tuple, backslashEscapes: backslashEscapes
+            ).map { (tuple as NSString).substring(with: $0) }
+        }
+        XCTAssertEqual(value(1, of: mysql, backslashEscapes: true), "'Daniel O\\'Brien'",
+                       "the escaped quote is text and does not end the literal")
+        XCTAssertEqual(value(2, of: mysql, backslashEscapes: true), "'Dublin'",
+                       "so the value after it is still where it says it is")
+        XCTAssertNotEqual(value(2, of: mysql, backslashEscapes: false), "'Dublin'",
+                          "and read as standard SQL it is not — which is the bug")
+
+        // Standard SQL's own reading is untouched: a backslash there is a
+        // character of the string like any other, and the quote after it ends
+        // the literal.
+        let standard = "('C:\\', 'Dublin')"
+        XCTAssertEqual(value(0, of: standard, backslashEscapes: false), "'C:\\'")
+        XCTAssertEqual(value(1, of: standard, backslashEscapes: false), "'Dublin'")
+        XCTAssertEqual(value(1, of: "(1, 'it''s, really', NULL)", backslashEscapes: false),
+                       "'it''s, really'", "a doubled quote is what it always was")
     }
 
     func testTheTableNameIsReadOffTheInsertHoweverItIsSpelled() throws {
@@ -1586,7 +1708,7 @@ final class SQLPreviewTests: AppKitTestCase {
             INSERT INTO notes VALUES (1, 'first'), (2, 'second');
             """), in: pane)
         pane.layoutSubtreeIfNeeded()
-        var reveals: [NSRange] = []
+        var reveals: [[NSRange]] = []
         pane.onSourceReveal = { reveals.append($0) }
 
         pane.sendsBlockClicks = false
@@ -1614,7 +1736,7 @@ final class SQLPreviewTests: AppKitTestCase {
                 """)
         }
         pane.layoutSubtreeIfNeeded()
-        var reveals: [NSRange] = []
+        var reveals: [[NSRange]] = []
         pane.onSourceReveal = { reveals.append($0) }
         pane.gridForTesting.mouseDown(
             with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
@@ -1725,6 +1847,92 @@ final class SQLPreviewTests: AppKitTestCase {
                        (text as NSString).range(of: "'second'"),
                        "and the editor holds the clicked value of the row's own insert")
     }
+
+    /// A `pg_dump`'s rows are `COPY` lines rather than tuples, and a column
+    /// picked out of them across several rows is that column: one range per
+    /// row, each exactly the field between its own tabs — never one span from
+    /// the first row to the last, which would light the fields beside it too.
+    @MainActor
+    func testARectangleOverACopyBlocksColumnRevealsEachRowsOwnField() throws {
+        let text = """
+        CREATE TABLE orders (id integer, placed text, status text);
+        COPY public.orders (id, placed, status) FROM stdin;
+        1\t2026-01-01\tpaid
+        2\t2026-01-02\tpending
+        3\t2026-01-03\tpaid
+        \\.
+        """
+        let (pane, window) = try makePane()
+        try show(makeNote(named: "orders.sql", text: text), in: pane)
+        pane.layoutSubtreeIfNeeded()
+        var reveals: [[NSRange]] = []
+        pane.onSourceReveal = { reveals.append($0) }
+        let grid = pane.gridForTesting
+        XCTAssertEqual(grid.numberOfRows, 3, "the block's three rows")
+
+        grid.mouseDown(with: try XCTUnwrap(
+            cellEvent(.leftMouseDown, in: pane, window: window, row: 0, column: 2)))
+        grid.mouseDragged(with: try XCTUnwrap(
+            cellEvent(.leftMouseDragged, in: pane, window: window, row: 2, column: 2)))
+
+        let source = text as NSString
+        XCTAssertEqual(reveals.last, ["2026-01-01", "2026-01-02", "2026-01-03"]
+            .map { source.range(of: $0) },
+                       "the placed column, one range per line and nothing of the tabs")
+    }
+
+    /// A `mysqldump`'s inserts are rewritten on their way into SQLite, and a
+    /// rewritten insert is an insert: its rows are on the map like anybody
+    /// else's. Its `\'` is MySQL's own escape too, so the value after one is
+    /// still where it says it is.
+    @MainActor
+    func testAMySQLDumpsRewrittenInsertIsOnTheMapAndItsEscapesAreRead() throws {
+        let text = Self.mySQLPeopleDump
+        let (pane, window) = try makePane()
+        try show(makeNote(named: "people.sql", text: text), in: pane)
+        pane.layoutSubtreeIfNeeded()
+        var reveals: [[NSRange]] = []
+        pane.onSourceReveal = { reveals.append($0) }
+        let grid = pane.gridForTesting
+        XCTAssertEqual(grid.numberOfRows, 3)
+        let source = text as NSString
+
+        grid.mouseDown(with: try XCTUnwrap(
+            cellEvent(.leftMouseDown, in: pane, window: window, row: 1, column: 3)))
+        XCTAssertEqual(reveals.last, [source.range(of: "'Dublin'")],
+                       "the clicked value, found past the backslash-escaped quote before it")
+
+        grid.mouseDown(with: try XCTUnwrap(
+            cellEvent(.leftMouseDown, in: pane, window: window, row: 0, column: 2)))
+        grid.mouseDragged(with: try XCTUnwrap(
+            cellEvent(.leftMouseDragged, in: pane, window: window, row: 2, column: 2)))
+        XCTAssertEqual(reveals.last, ["'Ada'", "'Daniel O\\'Brien'", "'Cara'"]
+            .map { source.range(of: $0) },
+                       "the name column across the three rows, one range per row")
+    }
+
+    /// A `mysqldump` of three people, its `INSERT` in MySQL's own spellings:
+    /// backticks around every name, one `VALUES` list for the three rows, and
+    /// `Daniel O\'Brien`'s backslash-escaped quote among them — which is what
+    /// sends the statement through `SQLDumpDialect`'s rewrite at all.
+    private static let mySQLPeopleDump = """
+    -- MySQL dump 10.13
+    /*!40101 SET NAMES utf8mb4 */;
+
+    CREATE TABLE `people` (
+      `id` int(11) NOT NULL AUTO_INCREMENT,
+      `name` varchar(100) NOT NULL,
+      `city` varchar(100) NOT NULL,
+      PRIMARY KEY (`id`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    LOCK TABLES `people` WRITE;
+    INSERT INTO `people` (`id`, `name`, `city`) VALUES
+    (1, 'Ada', 'Paris'),
+    (2, 'Daniel O\\'Brien', 'Dublin'),
+    (3, 'Cara', 'Berlin');
+    UNLOCK TABLES;
+    """
 
     // MARK: - The grid with nothing in it, drawn
 
