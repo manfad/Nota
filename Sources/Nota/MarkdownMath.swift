@@ -11,6 +11,12 @@ import Foundation
 /// exactly the way a picture does. `MarkdownRenderer` puts the formula back
 /// where the token lands.
 ///
+/// A ```` ```mermaid ```` fence is lifted out on the same path and for the
+/// same reason — its `-->` and `|text|` are markup to a Markdown parser — and
+/// comes back as `MermaidAttachment`. It is the only other thing this pass
+/// takes out, which is why it happens here rather than in a second walk over
+/// the note.
+///
 /// The finding is deliberately timid. A `$` that never closes on its own line,
 /// one with whitespace against it, one inside a code span or a fenced block:
 /// every one of them stays the text it is. A note being typed into is full of
@@ -35,24 +41,51 @@ enum MarkdownMath {
         var isOwnBlock: Bool
     }
 
-    /// A note with its formulas taken out, and the formulas.
+    /// One ```` ```mermaid ```` fence lifted out of the note. It rides through
+    /// the parser as an image token for exactly the reason a formula does: a
+    /// diagram's `-->` and `|text|` are markup to anyone reading Markdown, and
+    /// by the time the runs came back there would be no diagram left. Only a
+    /// fence `Mermaid` says it can draw is lifted — one in another grammar, or
+    /// one half way through being typed, is left alone and renders as the code
+    /// block it is.
+    struct Diagram {
+        /// The fence's body, verbatim — what `Mermaid.layout` is handed.
+        let source: String
+    }
+
+    /// A note with its formulas and diagrams taken out, and both of them.
     struct Extraction {
-        /// The source with every formula replaced by its token.
+        /// The source with every formula and diagram replaced by its token.
         let markdown: String
         /// The formulas, in the order their tokens are numbered.
         let spans: [Span]
+        /// The diagrams, in the order their tokens are numbered.
+        let diagrams: [Diagram]
     }
 
     /// The info strings that make a fence a formula rather than code.
     static let fenceLanguages: Set<String> = ["math", "latex", "tex"]
 
+    /// And the one that makes a fence a diagram.
+    static let diagramFenceLanguages: Set<String> = ["mermaid"]
+
     /// A scheme of Nota's own, the way `nota://` is: it exists so a formula
     /// can ride through the parser as an image and be recognised on the way
     /// out. Nothing ever fetches one.
     private static let scheme = "math://"
+    private static let diagramScheme = "mermaid://"
 
     /// Which span an image token stands for, or `nil` for an ordinary picture.
     static func spanIndex(from url: URL) -> Int? {
+        index(of: url, in: scheme)
+    }
+
+    /// Which diagram an image token stands for, or `nil` for anything else.
+    static func diagramIndex(from url: URL) -> Int? {
+        index(of: url, in: diagramScheme)
+    }
+
+    private static func index(of url: URL, in scheme: String) -> Int? {
         let text = url.absoluteString
         guard text.hasPrefix(scheme) else { return nil }
         return Int(text.dropFirst(scheme.count))
@@ -64,7 +97,16 @@ enum MarkdownMath {
         Fence(opening: line)?.isMath ?? false
     }
 
+    /// And whether one opens a ```` ```mermaid ```` fence, which the source
+    /// map finds a diagram block by the same way.
+    static func isDiagramFence(_ line: String) -> Bool {
+        Fence(opening: line)?.isDiagram ?? false
+    }
+
     private static func token(_ index: Int) -> String { "![](\(scheme)\(index))" }
+    private static func diagramToken(_ index: Int) -> String {
+        "![](\(diagramScheme)\(index))"
+    }
 
     // MARK: - The pass
 
@@ -72,11 +114,12 @@ enum MarkdownMath {
     /// replacing every formula it finds elsewhere with its token.
     static func extract(from markdown: String) -> Extraction {
         guard markdown.contains("$") || markdown.contains("```") || markdown.contains("~~~")
-        else { return Extraction(markdown: markdown, spans: []) }
+        else { return Extraction(markdown: markdown, spans: [], diagrams: []) }
 
         let lines = markdown.components(separatedBy: "\n")
         var output: [String] = []
         var spans: [Span] = []
+        var diagrams: [Diagram] = []
         var index = 0
         // Whether an indented block could start here at all, and whether a
         // list is open — four spaces under a list item are its continuation,
@@ -98,16 +141,19 @@ enum MarkdownMath {
                 var end = index + 1
                 while end < lines.count, !fence.closes(lines[end]) { end += 1 }
                 let bodyEnd = min(end, lines.count)
+                let body = index + 1 < bodyEnd
+                    ? lines[(index + 1) ..< bodyEnd].joined(separator: "\n")
+                    : ""
                 if fence.isMath {
-                    let body = index + 1 < bodyEnd
-                        ? lines[(index + 1) ..< bodyEnd].joined(separator: "\n")
-                        : ""
                     spans.append(Span(
                         tex: trimmed(body), raw: body, isDisplay: true, isOwnBlock: true
                     ))
                     // Blank lines around the token so the paragraph it becomes
                     // is its own, whatever the fence was sitting against.
                     output.append(contentsOf: ["", token(spans.count - 1), ""])
+                } else if fence.isDiagram, Mermaid.canDraw(body) {
+                    diagrams.append(Diagram(source: body))
+                    output.append(contentsOf: ["", diagramToken(diagrams.count - 1), ""])
                 } else {
                     output.append(contentsOf: lines[index ..< min(end + 1, lines.count)])
                 }
@@ -141,7 +187,9 @@ enum MarkdownMath {
             afterBlank = false
         }
 
-        return Extraction(markdown: output.joined(separator: "\n"), spans: spans)
+        return Extraction(
+            markdown: output.joined(separator: "\n"), spans: spans, diagrams: diagrams
+        )
     }
 
     /// One paragraph's worth of text with its formulas replaced.
@@ -382,6 +430,7 @@ enum MarkdownMath {
         let marker: Character
         let length: Int
         let isMath: Bool
+        let isDiagram: Bool
 
         init?(opening line: String) {
             guard line.prefix(while: { $0 == " " }).count < 4 else { return nil }
@@ -394,6 +443,7 @@ enum MarkdownMath {
             marker = first
             self.length = length
             isMath = MarkdownMath.fenceLanguages.contains(info.lowercased())
+            isDiagram = MarkdownMath.diagramFenceLanguages.contains(info.lowercased())
         }
 
         func closes(_ line: String) -> Bool {

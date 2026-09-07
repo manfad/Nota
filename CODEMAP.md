@@ -27,6 +27,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | What a file *is* (sniff), encodings, line endings | `TextFile.swift` (`FileSniff`, `TextFile`) |
 | A tab's model: kind, dirty, file, session record | `Note.swift`, `Session.swift` |
 | Markdown render look | `MarkdownRenderer.swift`, `RenderStyle.swift`; maths `MarkdownMath.swift` |
+| A ```` ```mermaid ```` fence's diagram | `Mermaid.swift` (which grammar, and the one door), `MermaidFlowchart.swift` / `MermaidSequence.swift` (a grammar each: parser, layout, drawing), `MermaidAttachment.swift` (the block it becomes); the fence is lifted out of the source in `MarkdownMath.swift` |
 | LaTeX render | `LaTeXParser.swift` → `LaTeXRenderer.swift`; formulas `MathParser.swift` + `MathLayout.swift` |
 | Preview column plumbing (which view shows, zoom, scroll memory) | `PreviewPaneView.swift`, `PreviewContent.swift`, `RenderedPreviewView.swift` |
 | PDF / picture / HTML / EPUB / RTF viewer tabs | `PDFPreviewView.swift`, `ImagePreviewView.swift`, `HTMLPreviewView.swift`, `EPUBPreviewView.swift` + `EPUBBook.swift`, `RTFPreviewView.swift` |
@@ -158,7 +159,27 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `MarkdownRenderer.swift` (~590) — Markdown → attributed string, `MarkdownImageAttachment`.
 - `MarkdownSourceMap.swift` (~330) — rendered block → source range.
 - `MarkdownHeadings.swift` (~130) — headings for `@` in ⌘P.
-- `MarkdownMath.swift` (~400) — `$…$` lifted out before parsing. `MathParser.swift` (~575), `MathLayout.swift` (~720), `MathAttachment.swift` (~40) — Nota's own formula layout.
+- `MarkdownMath.swift` (~455) — `$…$` and a ```` ```mermaid ```` fence lifted out before parsing, each riding through as its own image token. `MathParser.swift` (~575), `MathLayout.swift` (~720), `MathAttachment.swift` (~40) — Nota's own formula layout.
+- `Mermaid.swift` (~100) — the one door a ```` ```mermaid ```` fence comes through: `Mermaid.kind` names the grammar
+  off the first meaningful line, `layout` hands the source to that grammar's own file, `canDraw` answers the
+  question the Markdown pass asks *before* it lifts a fence out. Also `MermaidDiagram` (a box of `size` that draws
+  itself into a flipped context) and `MermaidPalette` (five semantic colours, resolved at draw time). No WebView and
+  no dependency.
+- `MermaidFlowchart.swift` (~1640) — `flowchart` / `graph`: the whole grammar (every bracket pair, every arrow and
+  end cap, the four label forms, chains, `&` fans, nested `subgraph`s, and the styling directives it parses only to
+  ignore), then a Sugiyama layout over it — cycles broken by reversing back edges, longest-path ranks, barycenter
+  sweeps for the order, a dummy node in every rank a long edge crosses — and the drawing. `parse` is pure and takes
+  no font; anything it cannot read comes back `nil` and the fence stays code.
+- `MermaidSequence.swift` (~1290) — `sequenceDiagram`: `participant` / `actor` with aliases and the ones a message
+  declares by using them, all eight arrow forms (solid or dotted, open, filled, cross or async head), `+` / `-`
+  activation suffixes and `activate` / `deactivate` stacking bars on the lifeline, self-messages, `Note left of` /
+  `right of` / `over` one or two lifelines, `loop` / `alt`-`else` / `opt` / `par`-`and` / `critical` / `break` /
+  `rect` frames nested freely, `autonumber`, and `title` / `accTitle` / `box` / `link` parsed and never failed on;
+  then the lane layout (headers top and bottom, lifelines spaced so every label between neighbours fits, one row per
+  message) and the drawing. `parse` is pure; junk comes back `nil` and the fence stays code.
+- `MermaidAttachment.swift` (~55) — one diagram as one character in the render, on `MathAttachment`'s pattern: an
+  image drawn through a handler so the palette resolves at draw time, scaled down when the diagram is wider than
+  the column.
 - `LaTeXParser.swift` (~1360) — `.tex` → blocks. `LaTeXRenderer.swift` (~480) — blocks → attributed string.
 - `HTMLPreviewView.swift` (~820) — WebKit page under `nota-file://`, scroll memory (pixels and fraction), `showPage(ofTab:at:…)` for EPUB chapters, chapter-key script, and the dark-mode reader theme a book asks for (`appliesReaderTheme`, `readerThemeCSS`).
 - `PDFPreviewView.swift` (~600) — PDFKit viewer tab, `reveal(page:range:query:)` for a ⇧⌘F hit, and `PDFPageThumbnails` (pages drawn small on one serial queue, from a second `PDFDocument` of the file, cached per document for the sidebar's page list). No outline: a PDF's sidebar is its pages. `ImagePreviewView.swift` (~240) — picture tab.
@@ -279,6 +300,19 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   editor's caret without taking its keyboard — from a table's page and from a query the rowid was got into, and the
   cell cursor still answering the first click after a run, a refresh and a page turn — the query rewrite and what it
   refuses, and the table and query through the session.
+- `MermaidFlowchartTests.swift` (35) — the flowchart engine: every node shape and edge form, chains and fans,
+  subgraphs and nesting, comments and semicolons, the directives that are ignored, junk and a fuzz run that refuses
+  without falling over; then the layout (frames that do not overlap, the direction each way round, an edge that
+  starts and ends on the right borders, a labelled edge's box on its line, a cycle, a self loop) and a draw into a
+  bitmap that has to leave ink.
+- `MermaidSequenceTests.swift` (30) — the sequence engine: every arrow form, aliases, actors, implicit participants
+  in order of first use, activations both ways, notes of each placement, every frame kind with `else` / `and` and
+  nesting, `autonumber`, comments, ignored lines, junk; the layout (participants left to right as declared, messages
+  descending in order, a message spanning its two lifelines, a self-message right of its own) and a draw that has
+  to leave ink in both appearances.
+- `MarkdownMermaidTests.swift` (15) — the seam: a fence that becomes one centred `MermaidAttachment`, one scaled to
+  a narrow column, `gantt` and a malformed or half-typed flowchart staying code blocks, the source map finding each
+  fence back, and the maths beside them untouched.
 - `LaTeXTests.swift`, `MathTests.swift`, `MarkdownMathTests.swift`, `MarkdownHeadingsTests.swift`, `TaskListTests.swift` — renderers.
 - `TextFileTests.swift`, `FileSniffTests.swift`, `FileKindIconTests.swift`, `LineIndexTests.swift`, `LineOperationsTests.swift`, `ListContinuationTests.swift` — files and editor logic.
 - `LocalizationTests.swift` (~170) — the tables against each other, `.system` resolution, the Settings language popup.

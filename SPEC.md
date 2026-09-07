@@ -353,6 +353,46 @@
   `$$` or its fence in the source, and a caret in that source lights it. A `$$…$$` inside a sentence stays in the
   sentence, set in display style where it stands.
 
+## Mermaid diagrams in Markdown (done 2026-09-07, Todo 6)
+- A ```` ```mermaid ```` fence in a `.md` note draws as a diagram in the preview, in reading and in split. Nota reads
+  and draws it itself — no WebView, no mermaid.js, no dependency of any kind — on exactly the footing the maths is
+  on: the fence is lifted out of the source before Foundation's parser sees it (its `-->` and `|text|` are markup to
+  a Markdown reader), rides through as an image token, and comes back as one block attachment.
+- **The grammar.** `flowchart TD|TB|BT|LR|RL` and `graph …`. Nodes: a bare id, `A[rect]`, `A(rounded)`,
+  `A([stadium])`, `A[[subroutine]]`, `A[(cylinder)]`, `A((circle))`, `A{diamond}`, `A{{hexagon}}`, `A>flag]`, with
+  `A["quoted, so it may hold [brackets]"]` and `<br>` as a line break. A node keeps the shape and label it was first
+  given; an id that only ever appears on the end of an arrow is a rectangle labelled with itself. Edges: `-->`,
+  `---`, `-.->`, `-.-`, `==>`, `===`, `--x`, `--o`, `<-->`, with labels written `-- text -->`, `-. text .->`,
+  `== text ==>` or `-->|text|`; chains `A --> B --> C` and fans `A & B --> C & D`. `subgraph id [Title]` /
+  `subgraph Title` … `end`, nested as deep as it likes. `%%` comments, `;` between statements, and
+  `click` / `style` / `classDef` / `class` / `linkStyle` / `direction` / `:::class` parsed and ignored.
+  `sequenceDiagram`: `participant A`, `participant A as Alice`, `actor A` (a stick figure), and any name a message
+  uses first, in order of first use; messages `->`, `-->`, `->>`, `-->>`, `-x`, `--x`, `-)`, `--)` (solid or dotted,
+  open, filled, cross or async head), `+` / `-` activation suffixes and `activate` / `deactivate` (bars on the
+  lifeline, nesting stacks them), self-messages as a loop off the lifeline, `Note left of` / `right of` / `over A`
+  / `over A,B` with `<br/>`, frames `loop` / `alt`-`else` / `opt` / `par`-`and` / `critical`-`option` / `break` /
+  `rect` nested freely, `autonumber` (each message numbered), and `title` / `accTitle` / `accDescr` / `box … end` /
+  `link` / `links` / `create` / `destroy` read and never failed on. Headers stand at the top and again at the bottom
+  as Mermaid draws them.
+- **The layout** is Sugiyama's, in points measured against the render's own font: cycles broken by reversing the
+  edges that close them, longest-path ranks along the direction, barycenter sweeps for the order inside each rank, a
+  dummy node standing in every rank a long edge crosses so it is routed rather than drawn through what is in the
+  way, then coordinates — rank gap 2.2em (wider when an edge label has to fit between two ranks), sibling gap 1.2em,
+  boxes sized to their words with about 0.8em of air. Edges are drawn as smooth curves from one node's border to the
+  other's, arrowheads as filled triangles, and a labelled edge carries its words on a small box with the line
+  cleared out from under it. A subgraph frame is a rounded box around its nodes with its title along the top.
+- **The fallback is today's behaviour.** A fence in a grammar Nota does not read — `gantt`, `classDiagram`, a stray
+  sentence — and one it cannot parse — a bracket that never closes, an arrow with nothing on the end of it, a
+  subgraph with no `end` — renders as the code block it already was, with no caption and no complaint. The question
+  is asked *before* the fence is lifted out (`Mermaid.canDraw`), so nothing is ever taken out of the note and lost.
+  A note being typed into is code until the moment it is a diagram, and never a blank.
+- **Theming.** Nothing about a laid-out diagram is a colour: it is drawn through `MermaidPalette`, five semantic
+  system colours resolved at draw time, so light and dark follow without a second layout — the same rule the maths
+  draws by. Labels are set at the render's size × 0.9, in the system family unless the render is monospaced.
+- The block is centred with the air a display formula is given, scaled down to the column with its aspect kept when
+  it is wider than one, and has a block of its own for block sync: clicking it selects its fence in the source, and a
+  caret in that fence lights it.
+
 ## The corner slot (done 2026-09-05, Todo 4; four options 2026-09-06, Todo 30)
 - One band per column, and the front tab says what stands in it. The band, the hover, the fade, the hit testing and
   the drop out of ⌘F's way are exactly as the mode control's above; only the thing in the corner changes.
@@ -1198,6 +1238,27 @@
    trailing edge listing the tabs the window is not showing, in strip order, the selected one ticked.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+43. **Mermaid diagrams inside Markdown (done 2026-09-07).** A ```` ```mermaid ```` fence draws as a diagram in the
+    preview, read and laid out and drawn by Nota itself — the honest option (a) from the note, native parse plus
+    native layout, no WebView and no mermaid.js. `Mermaid.swift` is the one door: it names the grammar off the
+    first meaningful line and hands the source to that grammar's own file, so `flowchart` / `graph` and
+    `sequenceDiagram` are built and tested apart and neither knows the other exists. `MermaidFlowchart.swift` is
+    the flowchart: every bracket pair, every arrow and end cap, the four ways an edge label is written, chains,
+    `&` fans, nested subgraphs, and the styling directives it parses only so it can ignore them; then a Sugiyama
+    layout — back edges reversed, longest-path ranks, barycenter sweeps, a dummy node in every rank a long edge
+    crosses; then drawing through `MermaidPalette`, whose colours are resolved at draw time so one layout is right
+    in both appearances. The fence is lifted out of the note in `MarkdownMath`'s one pass, beside the maths and for
+    the same reason, and comes back as `MermaidAttachment` — centred with a display formula's air, scaled down to
+    a narrow column. `MermaidSequence.swift` is the sequence diagram, written the same afternoon in a parallel
+    worktree against the same door: participants and actors, the eight arrow forms, activations, self-messages,
+    notes, every frame kind with its dividers, `autonumber`; the lane layout spaces lifelines so every label between
+    two neighbours fits, and headers stand top and bottom. Both files build their labels with
+    `kCTForegroundColorFromContext`, so a label is the palette's colour and not CoreText's default black — the dark
+    render was unreadable until it was. Nothing is lifted out unless `Mermaid.canDraw` says it can be drawn, so a
+    `gantt`, a bracket that never closes and a half-typed arrow all stay the code block they already were. Pinned by
+    `MermaidFlowchartTests` (the grammar, the layout, a fuzz run, a draw that has to leave ink),
+    `MermaidSequenceTests` (the grammar, the lanes, ink in both appearances) and `MarkdownMermaidTests` (the seam,
+    the fallbacks, the source map, the maths beside it).
 42. **Nota's own Save dialog (done 2026-09-07).** `NSSavePanel` is gone from Save and Save As. `SaveDialog` is a
     sheet on the window with two rows — "Save As:" (the base name, selected and first responder, with the Format
     popup at the field's end: `SaveNameComposer.knownExtensions()`, carrying a remembered extension the list does
