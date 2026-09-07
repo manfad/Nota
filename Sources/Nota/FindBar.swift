@@ -280,7 +280,7 @@ final class ReplaceBarView: PillView, NSTextFieldDelegate, PillActionResponder {
             "Replace", tooltip: "Hide Replace", action: #selector(collapse)
         )
         replaceButton = wordButton(
-            title: "Replace", tooltip: "Replace this match (Return)",
+            title: "One", tooltip: "Replace this match (Return)",
             action: #selector(replaceOne)
         )
         replaceAllButton = wordButton(
