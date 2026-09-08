@@ -18,6 +18,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | A menu item, its key, or app launch / windows / summon | `AppDelegate.swift`, keys in `Shortcuts.swift` |
 | Anything in the main window: footer, split, modes, tabs, opening files, saving | `MainWindowController.swift` (see its sections below) |
 | The Save dialog: its rows, its Format popup, or the extensions it offers | `SaveDialog.swift` (the dialog itself), `SaveNameComposer.swift` (pure logic), `MainWindowController.presentSavePanel` (which puts it up) |
+| File › Export…: what a tab can be exported to, the sheet that asks, the pages themselves | `Export.swift` (the targets and the hooks other exporters plug into), `ExportDialog.swift` (the sheet), `PDFPaginator.swift` (text and plates onto pages), `MainWindowController` "Export" |
 | The tab strip (drawing, drag, close, +, tear-off) | `TabBarView.swift`, geometry in `TabStripLayout.swift` |
 | ⇧⌘J switcher, `@` headings (text notes only), bookmarks dialog, ⇧⌘F search dialog, hover/arrow selection | `TabPickerPanel.swift` (also `refocusIfShowing`: the caret back in the field when Nota returns from another app or space), ranking in `FuzzyMatch.swift` |
 | Settings window (live apply, no Save; sidebar pages) | `SettingsWindowController.swift`, values in `Preferences.swift` |
@@ -70,7 +71,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `AppDelegate.swift` (~500) — menu bar (`buildMenu`, rebuilt on language or shortcut change), launch, theme apply, summon, window registry, `application(_:open:)`.
 - `WindowRegistry.swift` (~210) — every open window, which is in front, where closing tabs go.
 - `Preferences.swift` (~570) — every setting (`UserDefaults` + `Preferences.didChange`), enums `EditorFontFamily`, `LineSpacingOption`, `SidebarSide`, `PlainTextImageStyle`, `EditorPaddingOption`, `AppLanguage`, `AppTheme`; `shortcuts` table, `hotKey`; window chrome (`hidesTabBar`, `autoHidesTabBar`, `hidesTrafficLights`, `hidesBookmarkToggleButton`, `hidesBookmarkButton` — the older key, which means the *dialog* button, `hidesSettingsButton`); `highlightsCurrentLine` (the cursorline band, default off).
-- `Shortcuts.swift` (~200) — `KeyCombo`, `ShortcutAction` (every adjustable menu key, defaults, groups, reserved combos), `NSMenuItem.applyShortcut`. ⌘D bookmarks the tab, ⇧⌘D shows the bookmarks; Jump to Tab… ⇧⌘J, Mode Toggle ⌘P, Reading Mode ⇧⌘P, Find and Replace ⌘R (fixed); duplicating a line is ⇧⌥↓ only.
+- `Shortcuts.swift` (~200) — `KeyCombo`, `ShortcutAction` (every adjustable menu key, defaults, groups, reserved combos), `NSMenuItem.applyShortcut`. ⌘D bookmarks the tab, ⇧⌘D shows the bookmarks; Jump to Tab… ⇧⌘J, Mode Toggle ⌘P, Reading Mode ⇧⌘P, Find and Replace ⌘R (fixed); duplicating a line is ⇧⌥↓ only. Export… is ⇧⌘E (⌘E stays the Mac's Use Selection for Find).
 - `LaunchTiming.swift` (~80) — where a launch's time goes: `mark(_:)` at each phase from `main` to the window becoming key, printed to stderr a second after launch when the binary runs with `NOTA_LAUNCH_TIMING=1` (the binary itself, not `open`, which drops the environment); the first line is the kernel's exec time, so dyld and the runtime show as the gap to `main`. A `Bool` read and nothing else without the variable.
 - `Version.swift` — `AppVersion.current`; bumped with `Info.plist` by `.githooks/pre-commit` on every commit (`git config core.hooksPath .githooks`).
 - `UpdateCheck.swift` (~190) — the About page's "Check for Updates": one anonymous request to GitHub's `releases/latest`, `Release` (tag without its `v`, page URL, name, date), `compare` over dotted integers, `Result` / `Reason` (offline, rate-limited, another status, unreadable, a tag that is not a version), and `installedWithHomebrew` — a `/Caskroom/` in the bundle path, or a `Caskroom/nota` under a Homebrew prefix. The transport is a closure, so no test reaches the network.
@@ -132,6 +133,23 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   `NSApp.runModal` so the window still sees one synchronous `URL?`, the replace question handed back to the window,
   the `Preferences.didChange` relabelling that lets a language change land while it is open, and the popup's
   `None` and `Other…` tail (a field for an extension the list does not carry).
+- `Export.swift` (~360) — File › Export…'s core (SPEC "## Export"): `ExportTarget` (what a tab can be
+  exported to) and `Exporter` — the targets each kind offers in the sheet's own order, the two PDFs Nota
+  writes itself (the render, the document or the picture as shown; the editor's source listing, with its
+  gutter's numbers and its pictures inline or as plates), and the empty hooks the other exporters plug into
+  (`bookPDF`, `pdfToEPUB`, `csv`, `texPDF`, and `htmlPagePDF` for a page as WebKit draws it — a target whose
+  hook is nil is never listed). A hook is `(Note, URL, Context)`, and the context carries the live pane for an
+  exporter whose answer is on screen rather than in the note. `ExportImagePlacement` is the sheet's second row
+  and `Preferences.exportEditorImages`.
+- `ExportDialog.swift` (~280) — the export sheet: `SaveDialog`'s form with one row of targets and, only while
+  `Editor as PDF` is selected, a second row of `Inline` / `Plates at the end`; run the same synchronous way,
+  and it hands back an `ExportChoice`. `MainWindowController.exportSheetProvider` is the seam a test answers
+  it through, as `savePanelProvider` is for the dialog after it.
+- `PDFPaginator.swift` (~310) — the only place Nota makes a PDF: an attributed string paginated by a silent
+  `NSPrintOperation` (`jobDisposition = .save`, the file in `jobSavingURL`), plates drawn one picture to a
+  page (`knowsPageRange`) and joined onto the text with PDFKit, Letter or A4 from `NSPrintInfo.shared`,
+  margins from the render's inset, and the whole run under the light appearance with the text's dynamic
+  colours resolved first.
 - `FileWatcher.swift` (~230) — `FileStamp`, watching a path for change.
 - `Bookmarks.swift` (~120) — pinned paths store. `BookmarksMenu.swift` (~130) — the File submenu + ⇧⌘D toggle.
 - `RecentDocumentsMenu.swift` (~55) — File › Open Recent.
@@ -436,6 +454,11 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   the URL composed from the name and the popup (and from a name spelling its own extension), Save unavailable on a
   blank name, the replace question asked once and not asked when the file is the note's own, and a language change
   relabelling it where it stands, and `Other…` / `None` reaching past the list.
+- `ExportTests.swift` (13) — File › Export…: the targets each kind offers and the hook a target waits on, a
+  Markdown note's heading on its first page, a long note over more than one page, the listing's line numbers
+  with the gutter on and off, plates after the last page of text against the same pictures inline, an `.rtf`
+  and a picture (one page, exactly), the sheet's Images row showing only for the listing, and the whole path
+  through the window — sheet and Save dialog answered through their seams — opening the written PDF in a tab.
 - `TabHoverTests.swift` (3) — the strip's three greys: selected fill, the pointer's wash on an unselected tab, nothing at rest.
 - `WindowChromeTests.swift` (11) — Settings › Tab bar: the strip, the traffic lights and the strip's three trailing buttons each switched off and back.
 - `BookmarksTests.swift` (also the ⇧⌘J picker tests), `OpenRecentTests.swift`, `ShortcutsTests.swift`, `MultiWindowTests.swift`, `ExternalChangeTests.swift`, `ZoomTests.swift`, `TabStripLayoutTests.swift`, `DropOnStripTests.swift`, `SidecarTests.swift`, `BigFileTests.swift`, `NoteBigFileTests.swift`, `SpellCheckPolicyTests.swift`.
