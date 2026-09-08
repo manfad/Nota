@@ -186,7 +186,7 @@ final class NotaTests: AppKitTestCase {
             controller.rows(on: page).map(\.title)
         }
         XCTAssertEqual(titles(on: 0), ["Language", "Theme", "Open supported files in"])
-        XCTAssertEqual(titles(on: 1), ["Font", "Size", "Line spacing", "Sidebar side"])
+        XCTAssertEqual(titles(on: 1), ["Font family", "Font size", "Line spacing", "Sidebar side"])
         XCTAssertEqual(titles(on: 2), ["Word wrap", "Line numbers", "Gutter separator",
                                        "Highlight current line", "Vim mode", "Line numbers",
                                        "Gutter separator", "Highlight current line"])

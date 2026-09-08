@@ -511,8 +511,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         sizeStack.spacing = 6
 
         let text = [
-            row("Font", control: fontPopUp),
-            row("Size", control: sizeField, trailing: sizeStack),
+            row("Font family", control: fontPopUp),
+            row("Font size", control: sizeField, trailing: sizeStack),
             row("Line spacing", control: spacingPopUp),
             row("Sidebar side", control: sidebarSidePopUp),
         ]
@@ -1133,7 +1133,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         for page in pages {
             for row in page.rows { row.control.setAccessibilityLabel(row.label.stringValue) }
         }
-        sizeStepper.setAccessibilityLabel(L10n.text("Size"))
+        sizeStepper.setAccessibilityLabel(L10n.text("Font size"))
 
         fill(spacingPopUp, with: LineSpacingOption.allCases.map { ($0.title, $0.rawValue) },
              action: #selector(lineSpacingChanged))
