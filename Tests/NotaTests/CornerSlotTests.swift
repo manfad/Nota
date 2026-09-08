@@ -4,9 +4,11 @@ import XCTest
 @testable import Nota
 
 /// The corner slot: one band per column, and the front tab saying what stands
-/// in it. A tab with a render gets the mode control; a `.json` or `.html` tab
-/// gets that same control with its format's Beautify / Compact action ahead
-/// of it; everything else gets nothing at all.
+/// in it. A tab with a render gets the mode control; a `.json` or `.html`
+/// tab's *editor* slot gets that same control with its format's Beautify /
+/// Compact action ahead of it; a tree's or a page's *preview* slot gets the
+/// view's own action — Expand All / Collapse All, or Reload — in the same
+/// place; everything else gets nothing at all.
 final class CornerSlotTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
 
@@ -32,28 +34,38 @@ final class CornerSlotTests: AppKitTestCase {
                        "Markdown has no second shape to be laid out in")
     }
 
+    /// Both columns of a `.json` tab carry a fourth segment, and it is not the
+    /// same segment: the editor's acts on the source, the preview's on the
+    /// tree beside it.
     @MainActor
-    func testAJSONTabGetsAFourthSegmentInBothColumns() throws {
+    func testAJSONTabGetsAFourthSegmentInEachColumnAndTheyDiffer() throws {
         let controller = try makeController()
         try open("data.json", holding: #"{"a":1}"#, in: controller)
         controller.setPreviewMode(.split)
         controller.window?.layoutIfNeeded()
 
         XCTAssertEqual(controller.cornerSlotContents.editor, .modeControlWithFormat(.json))
-        XCTAssertEqual(controller.cornerSlotContents.preview, .modeControlWithFormat(.json))
+        XCTAssertEqual(controller.cornerSlotContents.preview,
+                       .modeControlWithPreviewAction(.tree),
+                       "the preview's action is the tree's own, not the source's")
         for overlay in [controller.modeControlOverlays.editor,
                         controller.modeControlOverlays.preview] {
             XCTAssertFalse(overlay.isHidden)
             XCTAssertEqual(overlay.modeControl.segmentCount, 4,
-                           "the three modes, and the file's own action ahead of them")
+                           "the three modes, and that column's own action ahead of them")
             XCTAssertTrue(overlay.modeControl.isEnabled(forSegment: 0))
         }
+        XCTAssertEqual(controller.modeControlOverlays.editor.modeControl.toolTip(forSegment: 0),
+                       "Beautify JSON")
+        XCTAssertEqual(controller.modeControlOverlays.preview.modeControl.toolTip(forSegment: 0),
+                       "Collapse All", "a small file opens with every branch already open")
     }
 
     /// A page is laid out two ways too, and says so in the word its own tools
-    /// use: Minify, not Compact.
+    /// use: Minify, not Compact. That is the editor column's segment; the
+    /// preview's is the page's own Reload.
     @MainActor
-    func testAnHTMLTabGetsTheSameFourthSegmentWithItsOwnWords() throws {
+    func testAnHTMLTabsEditorSegmentUsesItsOwnWords() throws {
         let controller = try makeController()
         try open("page.html", holding: Self.minifiedPage, in: controller)
         XCTAssertEqual(controller.cornerSlotContents.editor, .modeControlWithFormat(.html))

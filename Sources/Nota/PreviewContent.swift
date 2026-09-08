@@ -190,6 +190,13 @@ protocol PreviewContent: NSView {
     /// too: a checkbox is a control, not a jump.
     var onTaskToggle: ((NSRange) -> Void)? { get set }
 
+    /// Run when what the content has open has changed — the tree's branches,
+    /// which is the only thing a reader opens and closes. The corner slot's
+    /// own segment offers Expand All or Collapse All by the answer, so it has
+    /// to hear a triangle clicked by hand. Every other content view has
+    /// nothing that opens and never fires it.
+    var onExpansionChange: (() -> Void)? { get set }
+
     /// Run when the content points at a piece of the source *without* asking
     /// for the keyboard: the editor selects it and brings it into view, and
     /// the content keeps the focus it has. A range with no length is a caret,
@@ -391,6 +398,11 @@ extension PreviewContent {
     }
 
     var onTaskToggle: ((NSRange) -> Void)? {
+        get { nil }
+        set { }
+    }
+
+    var onExpansionChange: (() -> Void)? {
         get { nil }
         set { }
     }

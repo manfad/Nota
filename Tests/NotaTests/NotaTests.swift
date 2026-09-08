@@ -175,7 +175,7 @@ final class NotaTests: AppKitTestCase {
         XCTAssertEqual(
             controller.pageTitles,
             ["General", "Appearance", "Editor", "Preview", "Tab bar", "Status bar",
-             "Shortcuts", "About"]
+             "Shortcuts", "File types", "About"]
         )
 
         func allViews(in root: NSView) -> [NSView] {

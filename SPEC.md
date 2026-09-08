@@ -136,8 +136,8 @@
   touches vim's own.
 - Settings toggle "Word wrap" (default on). Off: a long line runs on and the editor scrolls sideways; the gutter stays
   pinned at the left edge. The Markdown render always wraps.
-- Settings (⌘,): a source list of eight pages down the left — General, Appearance, Editor, Preview,
-  Tab bar, Status bar, Shortcuts, About. There is no Save button: every control writes its own
+- Settings (⌘,): a source list of nine pages down the left — General, Appearance, Editor, Preview,
+  Tab bar, Status bar, Shortcuts, File types, About. There is no Save button: every control writes its own
   preference the moment it changes and the app follows at once — a switch on the flip, a popup on the
   pick, the size field on Return or on the focus leaving it, a shortcut on the key being recorded.
   Language and theme rebuild the dialog after writing, so the new wording is on screen without closing
@@ -171,7 +171,7 @@
   first, then the menu commands under the menu each lives in; the sentence explaining Summon ("Summon
   brings Nota to the front from any app, even while it is hidden.") is not a footnote under the group but
   sits behind a `?` after the row's label, in a transient popover a click opens and a click anywhere else
-  closes. **About** — the app
+  closes. **File types** (below). **About** — the app
   icon at 96pt, "Nota", `Version N.N.N`, one line saying what Nota is, and a **Check for Updates**
   button under it. The check is manual and remembered nowhere: pressing the button greys it and says
   "Checking…", then one line replaces that, centred and wrapped at 360pt at most (it folded to a word a
@@ -269,6 +269,57 @@
   at whatever view holds the keyboard and grey out over a rendered page, a PDF, a picture, the find field and in every
   vim mode but insert, where the same keys are vim's own.
 
+## Settings › File types — the default app per kind (done 2026-09-07, Done 54)
+
+- A Settings page, between Shortcuts and About, wearing `doc.badge.gearshape`. It is where the reader
+  makes Nota the app the Mac opens a kind of file in, without going through the Finder's Get Info for
+  each one. One sentence at the top ("A ticked row means the Mac opens that kind of file in Nota.
+  Unticking one hands it back to the app that had it before."), then two buttons, a `?` beside each —
+  **Use Nota for all text types** and **Restore previous apps** — then the four groups, each a caption
+  over an inset rounded card of 44pt rows, the same card every other page uses.
+- The groups, and the whole list, live in one table — `DefaultAppTypes.groups` in `DefaultApp.swift` —
+  so adding an extension is one line and the row, its icon and the button all follow. **Text**: txt, md,
+  markdown, log, rtf. **Data**: json, yaml, yml, toml, ini, csv, tsv, sql, xml. **Code**: html, htm, css,
+  js, ts, py, sh, swift, go, rs, rb, java, c, h, cpp, tex. **Documents and pictures**: pdf, epub, png,
+  jpg, jpeg, gif, webp, heic, tiff, svg.
+- A row is the kind icon (`FileKindIcon`, the same art the tabs wear), the extension with its dot, the
+  name of the app that opens it today in the muted colour at the trailing side — `None` where nothing
+  claims it — and a checkbox at the trailing edge. Ticked means Nota is the handler.
+- The first button claims the first three groups only. Documents and pictures stay per-row, so Nota never
+  takes over a PDF or a photograph unasked; the button's `?` says exactly that.
+- **Restore previous apps** is the way out of the whole page in one press: every extension with something
+  written down goes back to the app named there and is forgotten, and the rows refresh once the last set
+  has landed. Twins naming one type are one release, not two. A row with nothing written down — a type
+  Nota already owned before the page was opened — is left alone, since there is nothing to put back; the
+  button's `?` says so and points at the Finder's Get Info. Greyed while the table is empty.
+- Behind it all is `DefaultAppRegistry`, the one door to Launch Services: what opens this type now
+  (`NSWorkspace.urlForApplication(toOpen:)`), and hand this type to that app
+  (`NSWorkspace.setDefaultApplication(at:toOpen:)`, asynchronous, answered on the main queue). An
+  extension becomes a `UTType` through `UTType(filenameExtension:)`, dynamic types included — Launch
+  Services accepts a default for a type the app's `Info.plist` never declared, which was probed by hand
+  on a throwaway `.notaprobe` before any of this was built, so nothing had to be added to
+  `CFBundleDocumentTypes`. The rows read live when the page comes forward and again after every set
+  lands. The tests hand the page a fake registry and the real one refuses to run under XCTest at all:
+  a default app is the reader's own machine, the clipboard rule one shelf up.
+- Launch Services has a setter and no unsetter, and everything about unticking follows from that.
+  Ticking writes down whichever app was default first, per extension, in `Preferences.previousDefaultApps`
+  (extension → bundle identifier, or a path where a bundle has none). Unticking hands the type back to
+  that app and forgets it. A row that is ticked with nothing written down — Nota was already the default
+  when the page opened — keeps its tick, greys, and carries a `?` (and a tool tip) saying to change it in
+  the Finder instead: select a file, ⌘I, another app under "Open with", "Change All…". No way to unset is
+  invented.
+- Launch Services can refuse, and a refusal is said out loud rather than swallowed. The tick goes back to
+  whatever the Mac actually reports and the trailing label carries the reason in red until the row is
+  tried again, with the full sentence and the way round it on the checkbox's tool tip. `public.html` is
+  the one that always refuses: macOS reserves it for whatever it calls the browser and answers
+  `NSCocoaErrorDomain 256` over `permErr` (-54) to *everyone* — setting Safari, which already holds it,
+  fails the same way — so no `Info.plist` entry can buy it and `.html` / `.htm` can only be changed
+  through the Finder's Get Info. That case is worded "Not allowed by macOS" rather than Cocoa's own
+  "The file couldn't be opened.", which explains nothing.
+- One default per *type*, not per extension, so `.md` and `.markdown` are one setting wearing two rows —
+  and `.yaml` / `.yml`, `.html` / `.htm`, `.jpg` / `.jpeg` likewise. Both rows move together and both
+  remember the same app to hand back (`DefaultAppTypes.extensions(sharingTypeWith:)`).
+
 ## Markdown preview — three modes (⌘P cycles, View menu; per tab, remembered in the session)
 - **Editor** (default), **Split**, **Reading**. ⌘P walks editor → split → reading → split → editor: split is the
   middle, and from it the key moves on from wherever the tab came, so one press undoes the last and the render never
@@ -354,9 +405,12 @@
   source map, rewrites the one character between its brackets on the editor's `shouldChangeText` / `didChangeText`
   path so ⌘Z puts it back, and leaves the caret and the editor's scroll exactly where they were; it lights no band,
   selects nothing and starts no drag, and the render comes back changed the way it does after any keystroke. The
-  footer adds `3 / 7 done` after the counts, in the footer's own `·`, for a `.md` with at least one task item and for
-  nothing else — counted on the spot with the words for an ordinary note, and on the background word-count pass for a
-  big one, never on the main thread.
+  page it was pressed on does not move either, in split or in reading: the caret the edit runs through is wherever
+  the reader left it, and the band that follows an edit would otherwise carry the page off to it, so a tick lights
+  where it stands and the reader is left looking at the box they pressed. The next caret they move themselves takes
+  the page along again, the way any caret move does. The footer adds `3 / 7 done` after the counts, in the footer's
+  own `·`, for a `.md` with at least one task item and for nothing else — counted on the spot with the words for an
+  ordinary note, and on the background word-count pass for a big one, never on the main thread.
 
 ### LaTeX
 - `$…$` inline, `$$…$$`, and a ```` ```math ```` fence (`latex` and `tex` open one too) are laid out by Nota itself: a
@@ -473,7 +527,11 @@
   way, then coordinates — rank gap 2.2em (wider when an edge label has to fit between two ranks), sibling gap 1.2em,
   boxes sized to their words with about 0.8em of air. Edges are drawn as smooth curves from one node's border to the
   other's, arrowheads as filled triangles, and a labelled edge carries its words on a small box with the line
-  cleared out from under it. A subgraph frame is a rounded box around its nodes with its title along the top.
+  cleared out from under it. Two or more edges joining the same pair of nodes — `C --> E` with `E --> C`, or the
+  same way round twice — are spread across the flow instead of sharing one corridor, centred on where a single edge
+  would have run and given a lane each wide enough for the words on it, so a pair reads as two lines and not as one
+  line wearing a cap at either end. No line and no arrowhead is ever drawn through a label's box, whichever edge it
+  belongs to. A subgraph frame is a rounded box around its nodes with its title along the top.
 - **The fallback is today's behaviour.** A fence in a grammar Nota does not read — `gantt`, `classDiagram`, a stray
   sentence — and one it cannot parse — a bracket that never closes, an arrow with nothing on the end of it, a
   subgraph with no `end` — renders as the code block it already was, with no caption and no complaint. The question
@@ -500,9 +558,23 @@
   back to the mode segment it was on, since nothing about a file's layout is a mode.
 - Keyed on the note, never on a list of extensions kept in the overlay, so a new kind of render is offered the mode
   control the moment `RenderedPreviewKind` learns to spell it.
-- The slot is per column: the editor's in editor and split, the preview's in split and reading. Both carry the
-  action segment where they carry the modes, and both are kept in the same state — a segment that said "Beautify"
-  in one column and "Compact" in the other would be a bug you could see.
+- The slot is per column: the editor's in editor and split, the preview's in split and reading. **The two carry
+  different actions**, because the two columns are showing different things (Todo 59, 2026-09-08). The editor's
+  fourth segment acts on the *source* — Beautify / Compact / Minify, above. The preview's acts on the *view*:
+  - A **tree** — a `.json`, `.yaml`, `.toml` or `.xml` tab — gets **Expand All / Collapse All**, the same pair of
+    symbols the source action wears (`rectangle.expand.vertical` while any branch is still closed, and it opens
+    every one; `rectangle.compress.vertical` once they are all open, and it closes every one). It is read off the
+    tree rather than remembered, so a reader clicking the last closed triangle by hand turns the segment over, and
+    so does a branch typed into being. A document with no branches at all counts as open.
+  - A **page** — an `.html` tab — gets **Reload Page** (`arrow.clockwise`): the remembered render is thrown away
+    and the page is loaded again from the text as it stands, pictures beside the file included.
+  - Every other preview — Markdown, LaTeX, a grid, a picture, a document, a book — keeps its three modes and no
+    fourth segment.
+- So a `.yaml`, `.toml` or `.xml` tab's preview slot has four segments while its editor slot has three: the offer
+  belongs to the view, and all four grammars are read through the one tree. A `.json` tab has four in each corner,
+  saying two different things on purpose; an `.html` tab likewise. Nothing about the capsule otherwise changes —
+  one control, the action first, `.selectOne` with the click bouncing the selection back to the mode, the same
+  28pt segment, the same hover, fade and ⌘F clearance, and zen still empties both slots.
 
 ## Beautify / Compact — JSON and HTML (done 2026-09-05, Todo 5; HTML and the fourth segment 2026-09-06, Todo 30)
 - The action segment shows `rectangle.expand.vertical` "Beautify JSON" / "Beautify HTML" when the file is pulled
@@ -957,18 +1029,39 @@
   offers, over Nota's own walker (`HTMLFormat`) rather than any HTML parser. Beautify indents by nesting, two spaces
   a level: each block-level element starts a line of its own, inline elements stay in the line with their text, and
   a block whose content is nothing but text and inline markup — `<li><a href="/">Home</a></li>`, `<td>1</td>`, an
-  empty `<div></div>` — is that one line. Minify puts the page on one line with no whitespace between the tags.
+  empty `<div></div>` — is that one line. Minify puts the page on one line with no whitespace between the tags,
+  and takes the whitespace and the comments out of the CSS and the JavaScript the page carries with it.
   Both change the whitespace between and around tags and nothing else: tag names, attribute names, attribute order,
   attribute quoting, entity spelling and the words of the page all go back down as the exact bytes they were, and
   Beautify followed by Minify gives what Minify alone gives. Text is re-flowed only as far as collapsing runs of
   whitespace to one space and trimming a run where it meets a block tag; whitespace inside an inline element stays,
   since `<span>a </span><span>b</span>` renders a space and `<span>a</span><span>b</span>` does not. `script`,
-  `style`, `pre`, `textarea` and `title` keep their content byte for byte, `</div>` inside a script included, and are
-  never re-indented. HTML is forgiving and so is the walker: a stray end tag is emitted where it stands, an element
+  `style`, `pre`, `textarea` and `title` are never re-indented, `</div>` inside a script included: their content is
+  bytes, and Beautify writes every one of them back exactly as it was.
+- Minify goes one step further into two of them, through `InlineCodeMinify`: a `<style>` is minified as CSS and a
+  `<script>` as JavaScript. A script counts as JavaScript when it has no `type`, an empty one, or one of
+  `text/javascript`, `application/javascript`, `module`, `text/ecmascript`, `application/ecmascript`, `text/jscript`,
+  `application/x-javascript` (trimmed, case folded); anything else — `application/ld+json`, `importmap`,
+  `speculationrules`, a template — is data and keeps every byte, as `pre`, `textarea` and `title` always do. Neither
+  minifier is a parser and neither renames, reorders or drops anything: all they take out is whitespace and comments.
+  CSS collapses runs of whitespace to one space and then drops it around `{`, `}`, `;`, `,` and after `:` — never
+  before a `:`, since `a :hover` and `a:hover` are different selectors — leaves the spaces around `+ - * / > ~` and
+  the parentheses alone (`calc(100% - 2rem)`), drops the `;` before a `}`, and copies strings, the inside of a
+  `url(…)` and a `/*! … */` licence out as written. JavaScript keeps strings, template literals (`${ … }` nesting and
+  all) and regular expressions byte for byte, drops `//` and `/* */` comments unless the block one opens `/*!` or
+  names `@license` or `@preserve`, and is careful with newlines, because a newline there is sometimes a semicolon: a
+  line break is dropped wherever the grammar could not have inserted one — after `;` `{` `,` `(` `[` or an operator,
+  and in front of `}` `)` `]` `;` `(` `[` or anything that can only carry an expression on (an operator, a `.`, a
+  `,`) — and kept in front of something that could begin a statement (`let a = {}` over `let b`, `return` over `x`,
+  `foo()` over `bar()`) and around a `++` or `--` at a line's edge, so a page of ordinary semicolon-terminated code
+  comes out on the one line and a script that leans on semicolon insertion keeps the few breaks it needs. Whatever either of them cannot follow — an
+  unterminated string, template, regular expression or comment — hands the block back untouched. HTML is forgiving and so is the walker: a stray end tag is emitted where it stands, an element
   whose end tag the author left out is written back without one, and nothing is ever added — no optional end tags
   are inferred, so `<ul><li>a<li>b</ul>` nests. The file's trailing newline is kept. The button points the other way
-  — Minify — when the page has a newline anywhere outside a tag, a comment and a raw-text element, the file's own
-  trailing newline not counted. The button is disabled, with the line in its tool tip, for what the walker cannot
+  — Minify — when the page has a newline anywhere outside a tag, a comment and a raw-text element (the file's own
+  trailing newline not counted), or when a `<style>` or a JavaScript `<script>` still has something to minify: a page
+  on one line with four hundred lines of stylesheet inside it is not a minified page. Both minifiers are idempotent,
+  so "is there anything left?" is answered by running one and comparing. The button is disabled, with the line in its tool tip, for what the walker cannot
   read at all: an unterminated comment, a tag or a quoted attribute value that runs off the end of the file, a
   raw-text element that never closes, or nesting past 256.
 - Shipped: `HTMLPreviewView` is the column's third content view. The editor's text is loaded under `nota-file://`, whose
@@ -1449,6 +1542,100 @@
    as shells and read on selection or in an idle pass.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+59. **The preview column's corner action is the preview's own (done 2026-09-08).** A `.json` tab's two corners
+    carried the same capsule, so the preview's fourth segment said "Beautify JSON" and reformatted the source —
+    the editor's button, standing over a tree it had nothing to do with. The two columns show different things and
+    now offer different things: the editor keeps Beautify / Compact / Minify, and the preview gets the view's own
+    action. A tree — `.json`, `.yaml`, `.toml`, `.xml` — is offered Expand All or Collapse All, whichever it is not
+    already, in the same pair of symbols the source action wears; a page is offered Reload Page. A `.yaml` tab's
+    preview slot therefore gains a fourth segment its editor slot does not have, which is the point: the offer
+    belongs to the view. `ModeControlOverlay.Content` grew a `.modeControlWithPreviewAction(PreviewActionKind)`
+    case beside the format one, and every index in the file now counts the action segment through
+    `Content.hasActionSegment` rather than asking after a format. `TreePreviewView` answers `isFullyExpanded` and
+    does `expandAll()` / `collapseAll()` through `expandedPaths`, so the shape survives the next parse, and reports
+    `onExpansionChange` — through `PreviewContent` and the column, the way a task toggle travels — so a triangle
+    clicked by hand turns the segment over under the pointer.
+58. **A tick stays where it was pressed (done 2026-09-08).** Ticking a checkbox in a render several screens down
+    threw the page back to the top. The tick rewrites one character of the note, and everything an edit sets off
+    followed: the render came back, and `highlightPreviewBlock` laid the band on the block the *editor's* caret was
+    in and scrolled the page to it — line 1, where the reader had left the caret, not the box they had just pressed.
+    `RenderedPreviewView` now knows a tick of its own is settling (`Settling`: pressed, then pressed-with-the-caret-
+    seen-at), and while it is, `highlightBlock(containingSource:)` lights the caret's block where it stands instead
+    of scrolling to it. The settling ends at the first band pointing somewhere else in the source — a caret the
+    reader moved themselves — so walking the note in the editor still walks the pane beside it. Nothing about the
+    caret changed: `toggleTask` puts it back on purpose, and the scroll the render already kept by fraction is
+    what leaves the page exactly where it was. Reading mode never scrolled for a band at all and did not have the
+    bug; it is pinned all the same. `scrollOffset` and `scroll(toFraction:)` are the seams the tests read and set.
+    Pinned by three tests in `TaskListTests`.
+
+57. **A line through the words on a flowchart edge (done 2026-09-08).** In a sync chart — `C{Online?}` branching
+    to `D` on `Yes` and `E` on `No`, with `E --> C` coming back — the "No" had a line drawn straight through it
+    while the "Yes" beside it was clean, and swapping the labels moved the fault to whichever edge shared its
+    corridor with the return line. Two things were wrong. The layout put `C --> E` and `E --> C` through the same
+    ranks at the same place across them, so they were one line on the page wearing an arrowhead at either end, and
+    the box the "No" sat on was centred on a line that another line ran down. And the drawing punched a hole for
+    each edge's *own* label only, so the line coming back knew nothing of the words it was crossing.
+    `MermaidFlowchart.crossOffsets` now spreads a bundle — two or more edges joining one pair of nodes, either way
+    round — across the direction of flow, centred on where a single edge would have run: 0.9em apart when there is
+    nothing written on them, and wide enough for the box when there is, counting the slant of the corridor, since
+    on a diagonal run the neighbouring line moves sideways as it goes down and reaches into a corner of a box only
+    as wide as its words. Never wider than the narrower of the two nodes can carry, because both ends still have to
+    leave and land on a border: `border(of:in:toward:offsetAcross:vertical:)` finds the point at the offset by
+    closing on the ray whose own answer comes back there, so a diamond's or a circle's border point moved sideways
+    is still on the diamond or the circle, at the different distance along that its shape puts it. Drawing then
+    clips *every* label's box out of *every* edge's stroke rather than each line's own, and the end caps are drawn
+    inside that same clip, so an arrowhead's base can no more show through a label than the line can. Self-loops
+    are untouched. `MermaidFlowchartTests` covers the spread both ways round in `TD` and in `LR`, two edges the
+    same way round each carrying their own words, the sync chart with nothing but its own line inside either box,
+    and the return line leaving the "No" box pixel for pixel as it found it.
+
+56. **The tree fills the pane it is drawn in (done 2026-09-08).** A big JSON pasted into an untitled tab and
+    called JSON in the footer came up squeezed the moment the tab went to split: the rows were there, and two or
+    three letters of each key were legible — "id", "nar", "ba:" — cut off a few points in, with the row's own
+    selection running the full width behind them. A big XML did the same. It was never about size. Entering
+    split renders the preview column *before* it slides the divider open, so a document's rows are made while
+    the pane is still shut and the column is the four points a closed preview leaves; AppKit gives a row's field
+    its frame once, when the row is made, and moves it for nothing afterwards, so those four points were what
+    every row kept in a pane eight hundred points wide. A short key simply survived it, which is why small
+    documents looked fine. Two things put it right, both in `TreePreviewView`: the column's width is now moved
+    through a value the column is not already at — the bounds are let go of before it is set and closed again
+    after, since pinning `minWidth` first moved `width` as a side effect and the assignment that followed told
+    the outline nothing, leaving it tiling against a four-point column — and `TreeOutlineView.layout()` gives
+    every row on screen the rest of its row after `super`, which is the last word on a frame AppKit will not
+    revisit. The outline is also held to its clip's width, since a row is laid out to the table and not to the
+    column, and seventeen points of every row were being written under the scroller. Nothing widened those rows
+    afterwards either: closing the split and opening it again, or dragging the window wider, left every row the
+    same sliver it was made at. Pinned by `TreeLayoutTests`, the mode toggle and the resize among them.
+55. **Minify takes the page's own CSS and JavaScript with it (done 2026-09-08).** Minify put the markup on one
+    line and left the content of every `<style>` and `<script>` byte for byte, so a page shipped as one line still
+    carried four hundred indented lines of stylesheet and the reader's verdict was that the button was unfinished.
+    `InlineCodeMinify.swift` is the two little minifiers it was missing — `css(_:)` and `javascript(_:)`, byte-level
+    state machines, no parser anywhere near them — and `HTMLFormat` runs them over a `<style>` and over a `<script>`
+    whose `type` says JavaScript or says nothing. Nothing is renamed, reordered or dropped; strings, templates,
+    regular expressions, `url(…)` and `/*!` licences are copied out as written; a `:` keeps the space before it and
+    `calc(1px + 2px)` keeps both of its own; a newline in a program is dropped only where the language could not have
+    inserted a semicolon — in front of a word that could start a statement, and at a `++` or `--` on a line's
+    edge — so ordinary code comes out on the one line. Anything either minifier cannot follow
+    hands its block back untouched. Beautify is unchanged — it re-indents no raw-text content, ever — and `pre`,
+    `textarea`, `title` and a `<script>` carrying JSON, an import map or a template still keep every byte.
+    `isPretty` asks the minifiers rather than counting newlines, so the corner button offers Minify while a page's
+    own code has anything left to take out. Pinned by `HTMLFormatTests` (75).
+
+54. **Settings → File types (done 2026-09-07).** A ninth Settings page, between Shortcuts and About,
+    where the reader makes Nota the default app for the kinds of file it opens — forty extensions in four
+    groups, a checkbox each, and one button that claims the three text-ish groups at once. Documents and
+    pictures are left per-row on purpose. The whole list is one table, `DefaultAppTypes.groups`, and the
+    one door to Launch Services is `DefaultAppRegistry`, which the tests replace with a fake and which
+    refuses to run for real under XCTest: a machine's default apps are the clipboard's sin one shelf up.
+    Launch Services has no unsetter, so ticking writes down whatever was default first
+    (`Preferences.previousDefaultApps`) and unticking puts that back; a row Nota already owned before the
+    page was ever opened keeps its tick, greys, and says to use the Finder's Get Info instead. Probed
+    first on a throwaway `.notaprobe` extension: Launch Services takes a default for a type the app never
+    declared, so `Info.plist` needed nothing. A refusal from Launch
+    Services is shown on the row instead of being swallowed — `public.html` refuses everyone, Safari
+    included, so `.html` is the Finder's to change and the row says so. `DefaultApp.swift`, the page in
+    `SettingsWindowController.fileTypesPage`, `FileTypesTests` (15). A second button, **Restore previous
+    apps**, hands every type the page took back in one press.
 53. **The pills say what they are (done 2026-09-07).** All three floating pills led with an SF Symbol — a
     magnifying glass wearing a chevron, two arrows wearing another, an arrow-to-line — and each field carried a
     placeholder saying the same thing again ("Find in note", "Find in page", "Replace", "Go to line"). Each now

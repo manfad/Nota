@@ -215,6 +215,7 @@ final class Preferences {
         static let shortcuts = "shortcuts"
         static let lastSaveDirectory = "lastSaveDirectory"
         static let lastSaveExtension = "lastSaveExtension"
+        static let previousDefaultApps = "previousDefaultApps"
     }
 
     private let defaults: UserDefaults
@@ -623,6 +624,24 @@ final class Preferences {
     var lastSaveExtension: String {
         get { defaults.string(forKey: Key.lastSaveExtension) ?? SuggestedName.defaultExtension }
         set { defaults.set(newValue, forKey: Key.lastSaveExtension) }
+    }
+
+    /// What was the default app for an extension before Nota took it, keyed by
+    /// extension and holding the app's bundle identifier — or its path, where
+    /// a bundle has none. Launch Services has a setter and no unsetter, so
+    /// this table is the only way Settings › File types can put a tick back:
+    /// unticking hands the type to the app named here and forgets it.
+    ///
+    /// An extension missing from the table and ticked all the same means Nota
+    /// was already the default before the page was ever opened; there is
+    /// nothing to restore and the row says so.
+    var previousDefaultApps: [String: String] {
+        get { defaults.dictionary(forKey: Key.previousDefaultApps) as? [String: String] ?? [:] }
+        set {
+            guard newValue != previousDefaultApps else { return }
+            defaults.set(newValue, forKey: Key.previousDefaultApps)
+            announce()
+        }
     }
 
     /// Picking a font in the font panel changes family and name together, so

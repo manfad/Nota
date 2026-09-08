@@ -412,6 +412,170 @@ final class MermaidFlowchartTests: XCTestCase {
         )
     }
 
+    /// The size the layout measures its spacings in.
+    private var unit: CGFloat { MermaidFlowchart.labelFont(for: font).pointSize }
+
+    /// The line an edge draws, walked at half a point a step, so a box can be
+    /// asked whether the line goes through it rather than whether the line's
+    /// bounding box does — a diagonal run's box is most of the page.
+    private func trail(of path: CGPath) -> [CGPoint] {
+        var walked: [CGPoint] = []
+        var cursor = CGPoint.zero
+        let steps = 400
+
+        func line(to end: CGPoint) {
+            for step in 1 ... steps {
+                let along = CGFloat(step) / CGFloat(steps)
+                walked.append(CGPoint(
+                    x: cursor.x + (end.x - cursor.x) * along,
+                    y: cursor.y + (end.y - cursor.y) * along
+                ))
+            }
+        }
+
+        func curve(_ first: CGPoint, _ second: CGPoint, to end: CGPoint) {
+            let from = cursor
+            for step in 1 ... steps {
+                let along = CGFloat(step) / CGFloat(steps)
+                let rest = 1 - along
+                let a = rest * rest * rest
+                let b = 3 * rest * rest * along
+                let c = 3 * rest * along * along
+                let d = along * along * along
+                walked.append(CGPoint(
+                    x: a * from.x + b * first.x + c * second.x + d * end.x,
+                    y: a * from.y + b * first.y + c * second.y + d * end.y
+                ))
+            }
+        }
+
+        path.applyWithBlock { element in
+            let points = element.pointee.points
+            switch element.pointee.type {
+            case .moveToPoint:
+                cursor = points[0]
+                walked.append(cursor)
+            case .addLineToPoint:
+                line(to: points[0])
+                cursor = points[0]
+            case .addCurveToPoint:
+                curve(points[0], points[1], to: points[2])
+                cursor = points[2]
+            case .addQuadCurveToPoint:
+                line(to: points[1])
+                cursor = points[1]
+            case .closeSubpath:
+                break
+            @unknown default:
+                break
+            }
+        }
+        return walked
+    }
+
+    func testTwoNodesJoinedBothWaysGetALineEach() throws {
+        let down = try diagram("flowchart TD\nA[Note] --> B[Queue]\nB --> A")
+        let there = try XCTUnwrap(down.edges.first { $0.from == "A" })
+        let back = try XCTUnwrap(down.edges.first { $0.from == "B" })
+        for one in there.points {
+            for other in back.points {
+                XCTAssertGreaterThanOrEqual(
+                    abs(one.x - other.x), unit * 0.6,
+                    "the two lines share a corridor going down"
+                )
+            }
+        }
+        // And each one still leaves and lands on a border.
+        for edge in down.edges {
+            let from = try XCTUnwrap(down.node(edge.from))
+            let to = try XCTUnwrap(down.node(edge.to))
+            XCTAssertTrue(
+                from.frame.insetBy(dx: -1, dy: -1).contains(edge.tailPoint),
+                "\(edge.from)→\(edge.to) does not start on \(edge.from)"
+            )
+            XCTAssertTrue(
+                to.frame.insetBy(dx: -1, dy: -1).contains(edge.headPoint),
+                "\(edge.from)→\(edge.to) does not end on \(edge.to)"
+            )
+        }
+
+        let across = try diagram("flowchart LR\nA{Online?} --> B((Hold))\nB --> A")
+        let out = try XCTUnwrap(across.edges.first { $0.from == "A" })
+        let home = try XCTUnwrap(across.edges.first { $0.from == "B" })
+        for one in out.points {
+            for other in home.points {
+                XCTAssertGreaterThanOrEqual(
+                    abs(one.y - other.y), unit * 0.6,
+                    "the two lines share a corridor going across"
+                )
+            }
+        }
+        for edge in across.edges {
+            let from = try XCTUnwrap(across.node(edge.from))
+            let to = try XCTUnwrap(across.node(edge.to))
+            XCTAssertTrue(
+                from.frame.insetBy(dx: -1, dy: -1).contains(edge.tailPoint),
+                "a diamond's border point moved sideways is off the diamond"
+            )
+            XCTAssertTrue(
+                to.frame.insetBy(dx: -1, dy: -1).contains(edge.headPoint),
+                "a circle's border point moved sideways is off the circle"
+            )
+        }
+    }
+
+    func testTwoEdgesTheSameWayRoundEachCarryTheirOwnWords() throws {
+        let laid = try diagram("flowchart TD\nA[Queue change] -->|one| B[Merge]\nA -->|two| B")
+        XCTAssertEqual(laid.edges.count, 2)
+        let first = laid.edges[0]
+        let second = laid.edges[1]
+        XCTAssertFalse(
+            first.labelRect.intersects(second.labelRect), "the two labels sit on top of each other"
+        )
+        XCTAssertTrue(
+            first.path.boundingBoxOfPath.insetBy(dx: -2, dy: -2).intersects(first.labelRect),
+            "the first box sits on its own line"
+        )
+        XCTAssertTrue(
+            second.path.boundingBoxOfPath.insetBy(dx: -2, dy: -2).intersects(second.labelRect),
+            "the second box sits on its own line"
+        )
+        XCTAssertFalse(
+            second.path.boundingBoxOfPath.intersects(first.labelRect),
+            "the first box reaches onto the second line"
+        )
+        XCTAssertFalse(
+            first.path.boundingBoxOfPath.intersects(second.labelRect),
+            "the second box reaches onto the first line"
+        )
+    }
+
+    func testTheQueueChartKeepsItsWordsOffEveryOtherLine() throws {
+        let laid = try diagram("""
+        flowchart TD
+          A[Note edited locally] --> B[Queue change]
+          B --> C{Online?}
+          C -->|Yes| D[Push to sync service]
+          C -->|No| E[Hold in local queue]
+          D --> F[Merge on server]
+          E --> C
+        """)
+        XCTAssertEqual(laid.edges.filter { !$0.labelRect.isEmpty }.count, 2)
+        for edge in laid.edges where !edge.labelRect.isEmpty {
+            let box = edge.labelRect
+            XCTAssertTrue(
+                trail(of: edge.path).contains { box.contains($0) },
+                "\(edge.from)→\(edge.to) does not carry its box on its line"
+            )
+            for other in laid.edges where other.from != edge.from || other.to != edge.to {
+                XCTAssertFalse(
+                    trail(of: other.path).contains { box.insetBy(dx: -1, dy: -1).contains($0) },
+                    "\(other.from)→\(other.to) runs through \(edge.from)→\(edge.to)'s words"
+                )
+            }
+        }
+    }
+
     func testASubgraphFrameEnclosesWhatItHolds() throws {
         let laid = try diagram("""
         flowchart LR
@@ -487,6 +651,58 @@ final class MermaidFlowchartTests: XCTestCase {
         for index in stride(from: 3, to: width * height * 4, by: 4)
         where pixels[index] > 0 { inked += 1 }
         return inked
+    }
+
+    /// The pixels inside one edge's label box, so two drawings can be asked
+    /// whether anything else was drawn through it.
+    private func pixels(in rect: CGRect, of diagram: MermaidDiagram) throws -> [UInt8] {
+        let width = Int(diagram.size.width.rounded(.up))
+        let height = Int(diagram.size.height.rounded(.up))
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        diagram.draw(in: context, palette: .standard)
+        let data = try XCTUnwrap(context.data)
+        let all = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
+        var out: [UInt8] = []
+        // The bitmap is drawn flipped, so a row of the diagram is a row of
+        // the bitmap counted from the top.
+        for y in Int(rect.minY) ..< Int(rect.maxY.rounded(.up)) where y >= 0 && y < height {
+            for x in Int(rect.minX) ..< Int(rect.maxX.rounded(.up)) where x >= 0 && x < width {
+                out.append(all[(y * width + x) * 4 + 3])
+            }
+        }
+        return out
+    }
+
+    func testALineComingBackTheOtherWayDoesNotRunThroughALabel() throws {
+        // C and E are joined both ways, so the two lines share one corridor
+        // and the "No" sits on it. The line coming back up must leave the
+        // label's box exactly as the line going down left it.
+        let oneWay = try diagram("""
+        flowchart TD
+        C{Online?} -->|No| E[Hold in local queue]
+        """)
+        let bothWays = try diagram("""
+        flowchart TD
+        C{Online?} -->|No| E[Hold in local queue]
+        E --> C
+        """)
+        let label = try XCTUnwrap(bothWays.edges.first { !$0.labelRect.isEmpty }).labelRect
+        let alone = try XCTUnwrap(oneWay.edges.first { !$0.labelRect.isEmpty }).labelRect
+        XCTAssertEqual(label.size, alone.size)
+        XCTAssertEqual(
+            try pixels(in: label, of: bothWays), try pixels(in: alone, of: oneWay),
+            "the return line drew through the label's box"
+        )
+        XCTAssertGreaterThan(
+            try inkedPixels(of: bothWays), try inkedPixels(of: oneWay),
+            "the return line is still drawn everywhere else"
+        )
     }
 
     func testDrawingAFlowchartLeavesInkOnThePage() throws {

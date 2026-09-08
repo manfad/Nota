@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// Settings, in the shape macOS System Settings uses: a source list of pages
 /// down the left, under the traffic lights, and one page at a time on the
@@ -29,6 +30,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         ("Tab bar", "rectangle.topthird.inset.filled"),
         ("Status bar", "rectangle.bottomthird.inset.filled"),
         ("Shortcuts", "keyboard"),
+        ("File types", "doc.badge.gearshape"),
         ("About", "info.circle"),
     ]
 
@@ -73,6 +75,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let hotKeyWarning = WrappingLabel(text: "")
     private let clearHotKeyButton = NSButton()
     private let resetShortcutsButton = NSButton()
+    private let useNotaForAllButton = NSButton()
+    private let restorePreviousAppsButton = NSButton()
     private let shortcutWarning = WrappingLabel(text: "")
     private let versionLabel = WrappingLabel(text: "")
     private let checkUpdatesButton = NSButton()
@@ -232,6 +236,9 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             content.bottomAnchor.constraint(equalTo: pageHost.bottomAnchor, constant: -20),
         ])
         pageHost.layoutSubtreeIfNeeded()
+        // The File types rows are the Mac's own state, not a preference, so
+        // they are read afresh every time the page comes forward.
+        if pages[index].key == Self.fileTypesKey { refreshFileTypeRows() }
     }
 
     /// Selects the page with this title, English key or translation. False if
@@ -439,7 +446,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private func buildPages() {
         pages = [
             generalPage(), appearancePage(), editorPage(), previewPage(),
-            tabBarPage(), statusBarPage(), shortcutsPage(), aboutPage(),
+            tabBarPage(), statusBarPage(), shortcutsPage(), fileTypesPage(), aboutPage(),
         ]
     }
 
@@ -568,6 +575,298 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         blocks.append(shortcutWarning)
         blocks.append(resetRow)
         return page("Shortcuts", blocks: blocks, rows: rows)
+    }
+
+    // MARK: - File types
+
+    /// The page's own key, so the two places that ask "is this it?" spell it once.
+    private static let fileTypesKey = "File types"
+
+    /// What a row says when Nota is already the default and there is nothing
+    /// written down to put back — the one state the checkbox cannot leave.
+    private static let alreadyDefaultHelpKey =
+        "Nota was already opening this kind of file, so there is nothing to hand it back to. "
+        + "To change it, select a file in the Finder, press \u{2318}I, then pick another app "
+        + "under \u{201C}Open with\u{201D} and click \u{201C}Change All\u{2026}\u{201D}."
+
+    /// The way round a refusal, which is the same door: the Finder's Get Info.
+    private static let finderInsteadKey =
+        "Change it in the Finder instead: select a file, press \u{2318}I, then pick another app "
+        + "under \u{201C}Open with\u{201D} and click \u{201C}Change All\u{2026}\u{201D}."
+
+    /// Where the page reads and writes the Mac's default apps. A test hands
+    /// this a fake and the real one refuses to run under XCTest: a default app
+    /// is the reader's own machine, and a suite that rewrote it every run
+    /// would be the clipboard's old sin one shelf up.
+    var defaultAppRegistry: DefaultAppRegistry = SystemDefaultAppRegistry()
+
+    /// One row of the page and the pieces of it that change as the Mac does.
+    private struct FileTypeRow {
+        let ext: String
+        let row: SettingsRowView
+        let checkbox: NSButton
+        let name: NSTextField
+        /// The `?` that appears only on a row Nota already owned.
+        let help: NSButton
+    }
+
+    private var fileTypeRows: [FileTypeRow] = []
+
+    /// Why the last set for this extension did not take. Launch Services can
+    /// refuse — `public.html` is reserved for whatever the Mac calls its
+    /// browser, and answers `permErr` to everyone, Safari included — and a
+    /// refusal that only put the tick back would look like a page that does
+    /// not work. The row says what happened instead, until the next attempt.
+    private var fileTypeFailures: [String: String] = [:]
+
+    /// The rows as a test reads them: the extension, the app named beside it,
+    /// whether it is ticked and whether the tick can still be taken off.
+    var fileTypeRowsForTesting: [(ext: String, app: String, ticked: Bool, enabled: Bool)] {
+        fileTypeRows.map {
+            ($0.ext, $0.name.stringValue, $0.checkbox.state == .on, $0.row.isEnabled)
+        }
+    }
+
+    /// The button that claims the first three groups at once.
+    var useNotaForAllButtonForTesting: NSButton { useNotaForAllButton }
+
+    /// The button that hands every type this page took back again.
+    var restorePreviousAppsButtonForTesting: NSButton { restorePreviousAppsButton }
+
+    /// The checkbox of one row, which is where a refusal's full sentence hangs.
+    func fileTypeCheckboxForTesting(_ ext: String) -> NSButton? {
+        fileTypeRows.first { $0.ext == ext }?.checkbox
+    }
+
+    private func fileTypesPage() -> Page {
+        fileTypeRows = []
+        var blocks: [NSView] = [footnote(
+            "A ticked row means the Mac opens that kind of file in Nota. "
+                + "Unticking one hands it back to the app that had it before."
+        )]
+
+        useNotaForAllButton.title = L10n.text("Use Nota for all text types")
+        useNotaForAllButton.bezelStyle = .rounded
+        useNotaForAllButton.target = self
+        useNotaForAllButton.action = #selector(useNotaForAllTextTypes)
+        let allHelp = helpButton(explaining:
+            "This claims every extension under Text, Data and Code. Documents and pictures are "
+                + "left alone, so Nota never takes over PDFs or photographs unasked \u{2014} tick "
+                + "those one at a time."
+        )
+        restorePreviousAppsButton.title = L10n.text("Restore previous apps")
+        restorePreviousAppsButton.bezelStyle = .rounded
+        restorePreviousAppsButton.target = self
+        restorePreviousAppsButton.action = #selector(restorePreviousApps)
+        let restoreHelp = helpButton(explaining:
+            "This hands every type Nota took through this page back to the app that had it. A type "
+                + "Nota already owned before the page was opened is not one of them \u{2014} there is "
+                + "nothing written down for it, and it is changed in the Finder\u{2019}s Get Info."
+        )
+        let allRow = NSStackView(views: [
+            useNotaForAllButton, allHelp, restorePreviousAppsButton, restoreHelp, NSView(),
+        ])
+        allRow.orientation = .horizontal
+        allRow.spacing = 8
+        allRow.setCustomSpacing(16, after: allHelp)
+        blocks.append(allRow)
+
+        var rows: [SettingsRowView] = []
+        for group in DefaultAppTypes.groups {
+            let built = group.extensions.map { fileTypeRow(for: $0) }
+            blocks.append(sectionHeading(group.titleKey))
+            blocks.append(groupBox(built))
+            rows.append(contentsOf: built)
+        }
+        return page(Self.fileTypesKey, blocks: blocks, rows: rows)
+    }
+
+    /// One extension: its kind icon, the extension itself with its dot, the
+    /// app that opens it today, and the tick that hands it to Nota.
+    private func fileTypeRow(for ext: String) -> SettingsRowView {
+        let icon = NSImageView()
+        icon.image = FileKindIcon.image(
+            named: FileKindIcon.symbolName(forTitle: "file." + ext), pointSize: 13
+        )
+        icon.contentTintColor = .secondaryLabelColor
+        icon.imageScaling = .scaleNone
+
+        let label = NSTextField(labelWithString: "." + ext)
+        label.lineBreakMode = .byTruncatingTail
+
+        let name = NSTextField(labelWithString: "")
+        name.font = .systemFont(ofSize: 12)
+        name.textColor = .secondaryLabelColor
+        name.lineBreakMode = .byTruncatingTail
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let checkbox = NSButton(
+            checkboxWithTitle: "", target: self, action: #selector(fileTypeCheckboxChanged(_:))
+        )
+        let trailing = NSStackView(views: [name, checkbox])
+        trailing.orientation = .horizontal
+        trailing.spacing = 8
+
+        let help = helpButton(explaining: Self.alreadyDefaultHelpKey)
+        help.isHidden = true
+
+        let row = SettingsRowView(
+            label: label, control: checkbox, trailing: trailing, accessory: help, icon: icon
+        )
+        fileTypeRows.append(
+            FileTypeRow(ext: ext, row: row, checkbox: checkbox, name: name, help: help)
+        )
+        return row
+    }
+
+    /// Reads the Mac live: what opens each of these types today, and whether
+    /// there is anything to put back should the reader untick it.
+    private func refreshFileTypeRows() {
+        let nota = defaultAppRegistry.nota
+        let remembered = preferences.previousDefaultApps
+        for entry in fileTypeRows {
+            let current = DefaultAppTypes.type(forExtension: entry.ext)
+                .flatMap { defaultAppRegistry.defaultApplication(toOpen: $0) }
+            let isNota = current != nil && current?.identifier == nota?.identifier
+            entry.checkbox.state = isNota ? .on : .off
+            // A refusal is what the row has to say until it is tried again;
+            // the app that still owns the type is second to that.
+            let failure = fileTypeFailures[entry.ext]
+            entry.name.stringValue = failure ?? (current?.name ?? L10n.text("None"))
+            entry.name.textColor = failure == nil ? .secondaryLabelColor : .systemRed
+            // Ticked with nothing written down: Nota was already the default
+            // before the page was ever opened, and Launch Services has no
+            // unsetter to invent one from.
+            let locked = isNota && remembered[entry.ext] == nil
+            entry.row.isEnabled = !locked
+            entry.help.isHidden = !locked
+            if let failure {
+                entry.checkbox.toolTip = String(
+                    format: L10n.text("Nota could not take .%@ over: %@"), entry.ext, failure
+                ) + " " + L10n.text(Self.finderInsteadKey)
+            } else {
+                entry.checkbox.toolTip = locked ? L10n.text(Self.alreadyDefaultHelpKey) : nil
+            }
+        }
+        useNotaForAllButton.isEnabled = nota != nil
+        // Nothing written down, nothing to put back.
+        restorePreviousAppsButton.isEnabled = !remembered.isEmpty
+    }
+
+    @objc private func fileTypeCheckboxChanged(_ sender: NSButton) {
+        guard let entry = fileTypeRows.first(where: { $0.checkbox === sender }) else { return }
+        if sender.state == .on {
+            claimFileType(entry.ext) { [weak self] in self?.refreshFileTypeRows() }
+        } else {
+            releaseFileType(entry.ext)
+        }
+    }
+
+    /// Hands the extension to Nota, writing down whatever had it first so the
+    /// tick can come off again.
+    private func claimFileType(_ ext: String, completion: @escaping () -> Void) {
+        guard let type = DefaultAppTypes.type(forExtension: ext),
+              let nota = defaultAppRegistry.nota
+        else { completion(); return }
+        for alias in DefaultAppTypes.extensions(sharingTypeWith: ext) {
+            fileTypeFailures[alias] = nil
+        }
+        if let current = defaultAppRegistry.defaultApplication(toOpen: type),
+           current.identifier != nota.identifier {
+            var table = preferences.previousDefaultApps
+            for alias in DefaultAppTypes.extensions(sharingTypeWith: ext) where table[alias] == nil {
+                table[alias] = current.identifier
+            }
+            apply { preferences.previousDefaultApps = table }
+        }
+        defaultAppRegistry.setDefaultApplication(at: nota.url, toOpen: type) {
+            [weak self] error in
+            if let error { self?.recordFailure(error, forExtension: ext) }
+            completion()
+        }
+    }
+
+    /// One refusal, in the words the row will wear. `permErr` is Launch
+    /// Services saying the type is not ours to give — the Finder's own Get
+    /// Info is the only door left — and its stock "The file couldn't be
+    /// opened." explains nothing, so that one case is worded here.
+    private func recordFailure(_ error: Error, forExtension ext: String) {
+        let error = error as NSError
+        let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError
+        let refused = underlying?.domain == NSOSStatusErrorDomain && underlying?.code == -54
+        let text = refused ? L10n.text("Not allowed by macOS") : error.localizedDescription
+        for alias in DefaultAppTypes.extensions(sharingTypeWith: ext) {
+            fileTypeFailures[alias] = text
+        }
+    }
+
+    /// Puts back the app that had the extension before Nota. Nothing written
+    /// down means it was never Nota's to give away, and the row says so
+    /// instead: `refreshFileTypeRows` puts the tick straight back.
+    private func releaseFileType(_ ext: String, completion: (() -> Void)? = nil) {
+        guard let type = DefaultAppTypes.type(forExtension: ext),
+              let identifier = preferences.previousDefaultApps[ext],
+              let previous = defaultAppRegistry.application(forIdentifier: identifier)
+        else {
+            if let completion { completion() } else { refreshFileTypeRows() }
+            return
+        }
+        for alias in DefaultAppTypes.extensions(sharingTypeWith: ext) {
+            fileTypeFailures[alias] = nil
+        }
+        defaultAppRegistry.setDefaultApplication(at: previous.url, toOpen: type) {
+            [weak self] error in
+            guard let self else { return }
+            if let error { self.recordFailure(error, forExtension: ext) }
+            if error == nil {
+                var table = self.preferences.previousDefaultApps
+                for alias in DefaultAppTypes.extensions(sharingTypeWith: ext) {
+                    table[alias] = nil
+                }
+                self.apply { self.preferences.previousDefaultApps = table }
+            }
+            if let completion { completion() } else { self.refreshFileTypeRows() }
+        }
+    }
+
+    /// Every type this page took, handed back in one press. A row with
+    /// nothing written down is not one of them: Nota was already the default
+    /// before the page was opened, and there is nothing to put back.
+    @objc private func restorePreviousApps() {
+        // Twins naming one type are one release, not two: `releaseFileType`
+        // forgets the whole set, so asking again for the second would find
+        // nothing written down and quietly do nothing.
+        var extensions: [String] = []
+        var seen: Set<String> = []
+        for ext in DefaultAppTypes.allExtensions
+        where preferences.previousDefaultApps[ext] != nil {
+            guard let type = DefaultAppTypes.type(forExtension: ext),
+                  seen.insert(type.identifier).inserted
+            else { continue }
+            extensions.append(ext)
+        }
+        guard !extensions.isEmpty else { return }
+
+        var pending = extensions.count
+        for ext in extensions {
+            releaseFileType(ext) { [weak self] in
+                pending -= 1
+                if pending == 0 { self?.refreshFileTypeRows() }
+            }
+        }
+    }
+
+    /// The three text-ish groups in one press. The fourth is left out on
+    /// purpose; the button's `?` says so.
+    @objc private func useNotaForAllTextTypes() {
+        let extensions = DefaultAppTypes.textLikeExtensions
+        var pending = extensions.count
+        for ext in extensions {
+            claimFileType(ext) { [weak self] in
+                pending -= 1
+                if pending == 0 { self?.refreshFileTypeRows() }
+            }
+        }
     }
 
     private func aboutPage() -> Page {
@@ -753,6 +1052,11 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
         clearHotKeyButton.title = L10n.text("Clear")
         resetShortcutsButton.title = L10n.text("Reset to Defaults")
+        useNotaForAllButton.title = L10n.text("Use Nota for all text types")
+        restorePreviousAppsButton.title = L10n.text("Restore previous apps")
+        if pages.indices.contains(selectedPage), pages[selectedPage].key == Self.fileTypesKey {
+            refreshFileTypeRows()
+        }
         // A switch has no title of its own, so its row's label is its name —
         // for VoiceOver and for the tests alike.
         for page in pages {
@@ -1204,6 +1508,8 @@ private final class SettingsRowView: NSView {
     let control: NSControl
     /// What follows the label, if anything — the `?` a row's help sits behind.
     let accessory: NSView?
+    /// What comes before it: the kind icon a File types row wears.
+    let icon: NSView?
 
     /// Greys the label with the control, so a row switched off by another row
     /// reads as off rather than merely unresponsive.
@@ -1211,13 +1517,16 @@ private final class SettingsRowView: NSView {
         didSet {
             control.isEnabled = isEnabled
             label.textColor = isEnabled ? .labelColor : .tertiaryLabelColor
+            icon?.alphaValue = isEnabled ? 1 : 0.4
         }
     }
 
-    init(label: NSTextField, control: NSControl, trailing: NSView, accessory: NSView? = nil) {
+    init(label: NSTextField, control: NSControl, trailing: NSView, accessory: NSView? = nil,
+         icon: NSView? = nil) {
         self.label = label
         self.control = control
         self.accessory = accessory
+        self.icon = icon
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -1243,9 +1552,22 @@ private final class SettingsRowView: NSView {
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         trailing.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
+        if let icon {
+            icon.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(icon)
+            icon.setContentHuggingPriority(.required, for: .horizontal)
+            icon.setContentCompressionResistancePriority(.required, for: .horizontal)
+            NSLayoutConstraint.activate([
+                icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+                icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+                label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            ])
+        } else {
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16).isActive = true
+        }
+
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 44),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
             trailing.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             trailing.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -1470,4 +1792,5 @@ private enum SettingsPalette {
             ? NSColor(white: 1, alpha: 0.06)
             : .controlBackgroundColor
     }
+
 }

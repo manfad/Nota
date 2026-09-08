@@ -866,7 +866,10 @@ enum MermaidFlowchart {
             frame(subgraph, in: placed, font: labelFont, unit: unit, into: &frames)
         }
 
-        // 8. Edges, from border to border.
+        // 8. Edges, from border to border, a bundle between one pair of nodes
+        //    spread so that no two of its lines share a corridor.
+        let spread = crossOffsets(of: graph, nodes: placed, font: labelFont, unit: unit)
+        let vertical = graph.direction.isVertical
         var wires: [PlacedEdge] = []
         for (index, edge) in graph.edges.enumerated() {
             if edge.from == edge.to {
@@ -877,15 +880,25 @@ enum MermaidFlowchart {
             }
             let chain = chains[index]
             guard chain.count >= 2 else { continue }
+            let offset = spread[index]
             var points = chain.map { centres[$0] }
+            if offset != 0 {
+                for step in points.indices {
+                    if vertical { points[step].x += offset } else { points[step].y += offset }
+                }
+            }
             let head = placed.first { $0.id == edge.to }
             let tail = placed.first { $0.id == edge.from }
             if let tail {
-                points[0] = border(of: tail.shape, in: tail.frame, toward: points[1])
+                points[0] = border(
+                    of: tail.shape, in: tail.frame, toward: points[1],
+                    offsetAcross: offset, vertical: vertical
+                )
             }
             if let head {
                 points[points.count - 1] = border(
-                    of: head.shape, in: head.frame, toward: points[points.count - 2]
+                    of: head.shape, in: head.frame, toward: points[points.count - 2],
+                    offsetAcross: offset, vertical: vertical
                 )
             }
             wires.append(wire(edge, through: points, font: labelFont, unit: unit))
@@ -1136,6 +1149,70 @@ enum MermaidFlowchart {
         return positions
     }
 
+    /// How far across the flow each edge is moved so that a bundle joining
+    /// one pair of nodes runs side by side.
+    ///
+    /// Two edges between the same two nodes — `C --> E` and `E --> C`, or the
+    /// same way round twice with a word on each — are laid out through the
+    /// same ranks at the same place across them, so without this they are one
+    /// line on the page wearing a cap at either end, and the label belonging
+    /// to one sits on top of the other. Mermaid draws such a pair as two
+    /// clearly separate curves; so does this. The bundle is centred on where
+    /// the single edge would have run and spread by a spacing either side, so
+    /// a pair sits at ±0.45 of a unit and each line carries its own words.
+    /// A bundle carrying words is spread by at least the box those words sit
+    /// in, so a label never reaches across onto its neighbour's line. A
+    /// corridor that runs at a slant needs more than the box's width: the
+    /// neighbouring line moves across as it goes down, and over the depth of
+    /// the box it moves far enough to reach into a corner of it. The spread
+    /// is never wider than the narrower node can carry, since both ends still
+    /// have to leave and land on a border.
+    private static func crossOffsets(
+        of graph: Graph, nodes: [PlacedNode], font: NSFont, unit: CGFloat
+    ) -> [CGFloat] {
+        var offsets = [CGFloat](repeating: 0, count: graph.edges.count)
+        var bundles: [String: [Int]] = [:]
+        var order: [String] = []
+        for (index, edge) in graph.edges.enumerated() where edge.from != edge.to {
+            let pair = edge.from < edge.to
+                ? "\(edge.from)\u{1}\(edge.to)" : "\(edge.to)\u{1}\(edge.from)"
+            if bundles[pair] == nil { order.append(pair) }
+            bundles[pair, default: []].append(index)
+        }
+        let vertical = graph.direction.isVertical
+        for pair in order {
+            guard let bundle = bundles[pair], bundle.count > 1 else { continue }
+            let ends = [graph.edges[bundle[0]].from, graph.edges[bundle[0]].to]
+                .compactMap { id in nodes.first { $0.id == id } }
+            guard ends.count == 2 else { continue }
+            let room = ends
+                .map { vertical ? $0.frame.width : $0.frame.height }
+                .min() ?? 0
+            let dx = abs(ends[0].frame.midX - ends[1].frame.midX)
+            let dy = abs(ends[0].frame.midY - ends[1].frame.midY)
+            // The slant of the corridor: how far it moves across the flow for
+            // every step it takes along it.
+            let slant = vertical ? dx / max(dy, 1) : dy / max(dx, 1)
+            var words: CGFloat = 0
+            for index in bundle {
+                guard let text = graph.edges[index].label, !text.isEmpty else { continue }
+                let block = measure(text, font: font)
+                let width = block.width + unit * 0.7
+                let height = block.height + unit * 0.3
+                let wide = vertical ? width : height
+                let deep = vertical ? height : width
+                words = max(words, wide + deep * slant)
+            }
+            let spacing = min(
+                max(unit * 0.9, words + unit * 0.5), room * 0.7 / CGFloat(bundle.count - 1)
+            )
+            for (step, index) in bundle.enumerated() {
+                offsets[index] = (CGFloat(step) - CGFloat(bundle.count - 1) / 2) * spacing
+            }
+        }
+        return offsets
+    }
+
     // MARK: - Shapes and text
 
     private static func measure(_ label: String, font: NSFont) -> TextBlock {
@@ -1233,6 +1310,49 @@ enum MermaidFlowchart {
             scale = min(horizontal, vertical)
         }
         return CGPoint(x: centre.x + dx * scale, y: centre.y + dy * scale)
+    }
+
+    /// Where a run moved `offset` across the flow leaves a node's border.
+    ///
+    /// Sliding the border point sideways by the offset would take it off the
+    /// border: on a diamond or a circle the border a few points to the side
+    /// of the middle sits at a quite different distance along. So the answer
+    /// comes from the same `border` above, which casts a ray out of the
+    /// centre — the ray wanted is the one whose own answer comes back at the
+    /// offset asked for. That answer is the full half-width for a ray with no
+    /// tilt and shrinks to nothing as the ray is tipped along the flow, so
+    /// halving the tilt closes on it, and the point it closes on is a border
+    /// point of the shape, not an approximation of one.
+    static func border(
+        of shape: NodeShape, in rect: CGRect, toward point: CGPoint,
+        offsetAcross offset: CGFloat, vertical: Bool
+    ) -> CGPoint {
+        guard abs(offset) > 0.001 else { return border(of: shape, in: rect, toward: point) }
+        let centre = CGPoint(x: rect.midX, y: rect.midY)
+        let halfAcross = max((vertical ? rect.width : rect.height) / 2, 0.001)
+        let halfAlong = max((vertical ? rect.height : rect.width) / 2, 0.001)
+        let across = min(max(offset, -halfAcross * 0.95), halfAcross * 0.95)
+        let along: CGFloat = (vertical ? point.y - centre.y : point.x - centre.x) < 0 ? -1 : 1
+
+        func ray(_ tilt: CGFloat) -> CGPoint {
+            let toward = vertical
+                ? CGPoint(x: centre.x + across, y: centre.y + along * tilt)
+                : CGPoint(x: centre.x + along * tilt, y: centre.y + across)
+            return border(of: shape, in: rect, toward: toward)
+        }
+
+        var low: CGFloat = 0
+        var high = halfAlong * 64
+        for _ in 0 ..< 40 {
+            let middle = (low + high) / 2
+            let hit = ray(middle)
+            let reached = abs(vertical ? hit.x - centre.x : hit.y - centre.y)
+            if reached > abs(across) { low = middle } else { high = middle }
+        }
+        let hit = ray((low + high) / 2)
+        return vertical
+            ? CGPoint(x: centre.x + across, y: hit.y)
+            : CGPoint(x: hit.x, y: centre.y + across)
     }
 
     /// How deep a cylinder's end caps are.
@@ -1476,14 +1596,21 @@ enum MermaidFlowchart {
             }
         }
 
-        // Then the lines, with a hole punched where a label sits on one.
+        // Then the lines, with a hole punched where a label sits — every
+        // label's, not each line's own. Two nodes joined both ways share one
+        // corridor, and a hole cut for the "No" on the way down was drawn
+        // straight through by the line on the way back up, since that line
+        // knew nothing of the label it was crossing. A label is a box on the
+        // page, and no line goes through it whichever line it belongs to.
+        let labelHoles = diagram.edges.map(\.labelRect).filter { !$0.isEmpty }
         for edge in diagram.edges {
             context.saveGState()
-            if !edge.labelRect.isEmpty {
+            if !labelHoles.isEmpty {
                 context.addRect(bounds)
-                context.addRect(edge.labelRect.insetBy(dx: -1, dy: -1))
+                for hole in labelHoles { context.addRect(hole.insetBy(dx: -1, dy: -1)) }
                 context.clip(using: .evenOdd)
             }
+            context.saveGState()
             context.setStrokeColor(resolved(palette.stroke))
             context.setLineWidth(edge.style == .thick ? thin * 2.2 : thin)
             context.setLineCap(.round)
@@ -1493,11 +1620,15 @@ enum MermaidFlowchart {
             context.addPath(edge.path)
             context.strokePath()
             context.restoreGState()
-
+            // The caps inside the same clip as the line they finish: an
+            // arrowhead is as much a mark on the page as the line is, and
+            // its base showing through a label's box reads as a line drawn
+            // over the words just the same.
             cap(edge.head, at: edge.headPoint, angle: edge.headAngle,
                 unit: unit, thin: thin, palette: palette, in: context)
             cap(edge.tail, at: edge.tailPoint, angle: edge.tailAngle,
                 unit: unit, thin: thin, palette: palette, in: context)
+            context.restoreGState()
         }
 
         // Then the nodes, which sit over the lines that reach them.

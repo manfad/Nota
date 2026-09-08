@@ -125,6 +125,11 @@ final class TreePreviewView: NSView, PreviewContent {
     /// A fresh document opens by the rule above; a re-render of the same one
     /// keeps whatever the reader had opened.
     private var hasSeededExpansion = false
+    /// Whether the branches being opened right now are the pane's own doing
+    /// rather than the reader's. AppKit sends one notification per branch, so
+    /// a parse or an Expand All would otherwise report a hundred changes; the
+    /// caller tells the column once, when it is done.
+    private var isApplyingExpansion = false
     private var renderedKey: RenderKey?
     private var parseError: StructuredParseError?
     private var format: StructuredFormat = .json
@@ -153,6 +158,14 @@ final class TreePreviewView: NSView, PreviewContent {
     /// Run when the find bar opens or closes, so the column's mode control
     /// drops below it — the same as over a render.
     var onFindBarVisibilityChange: ((Bool) -> Void)?
+
+    /// Run when what is open in the tree has changed — a triangle clicked, a
+    /// branch opened on the way to a search hit, the whole thing opened or
+    /// closed from the corner, or a fresh parse landing. The column's own
+    /// action segment is offering Expand All or Collapse All depending on the
+    /// answer, so it has to hear about a reader who opens the last branch by
+    /// hand.
+    var onExpansionChange: (() -> Void)?
 
     var isFindBarVisible: Bool { findSession.isVisible }
 
@@ -259,6 +272,13 @@ final class TreePreviewView: NSView, PreviewContent {
 
     private func activateConstraints() {
         NSLayoutConstraint.activate([
+            // The outline is exactly as wide as the clip it is drawn in.
+            // Left to Auto Layout it came out seventeen points wider — the
+            // scroller's own width — and AppKit lays a row out to the width
+            // of the table and not of the column, so the end of every row,
+            // ellipsis and all, was written under the scroller.
+            outlineView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
+
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
             leadingConstraint, trailingConstraint,
@@ -286,9 +306,21 @@ final class TreePreviewView: NSView, PreviewContent {
         let width = scrollView.contentSize.width
         if width > 0, let column = outlineView.tableColumns.first,
            abs(column.width - width) > 0.5 {
+            // The bounds are let go of before the width is set and closed
+            // again after it, and the order is the whole of it. Pinned first
+            // — `minWidth` to the new width, then `maxWidth`, then `width` —
+            // the column was already there by the time it was assigned, so
+            // the assignment changed nothing and the outline was never told:
+            // it went on laying its rows out against the column it had last
+            // tiled, four points wide, and a row's field came out narrower
+            // than the indentation in front of it. That is the squeeze the
+            // reader saw. Moved through a width the column is not already at,
+            // the outline hears it and tiles.
+            column.minWidth = 0
+            column.maxWidth = .greatestFiniteMagnitude
+            column.width = width
             column.minWidth = width
             column.maxWidth = width
-            column.width = width
         }
         let measure = (bounds.width * Layout.messageWidth).rounded(.down)
         if measure > 0, errorLabel.preferredMaxLayoutWidth != measure {
@@ -426,6 +458,9 @@ final class TreePreviewView: NSView, PreviewContent {
         flatRowOrder = [:]
         rowsAreStale = false
         outlineView.reloadData()
+        // Nothing left to open or close either, which is a thing the corner's
+        // own segment is saying.
+        onExpansionChange?()
         // There is no tree to search until the file parses again.
         findSession.refresh()
         errorLabel.attributedStringValue = Self.message(
@@ -516,6 +551,10 @@ final class TreePreviewView: NSView, PreviewContent {
         }
         outlineView.reloadData()
         applyExpansion()
+        // A branch that has just been typed into being arrives closed, so
+        // what the corner is offering can have changed without anyone having
+        // touched a triangle.
+        onExpansionChange?()
         // The rows the search was holding were made by the last parse; the
         // query is run again over the ones that have just replaced them.
         findSession.refresh()
@@ -562,7 +601,48 @@ final class TreePreviewView: NSView, PreviewContent {
                 walk(row.children)
             }
         }
+        isApplyingExpansion = true
         walk(rows)
+        isApplyingExpansion = false
+    }
+
+    // MARK: - Opening and closing the whole tree
+
+    /// Whether there is a branch left to open. A document with no branches at
+    /// all counts as open — there is nothing in it that is closed — so the
+    /// corner offers Collapse All over it, which does nothing and says
+    /// nothing untrue.
+    var isFullyExpanded: Bool {
+        !flatRows.contains { $0.node.isBranch && !expandedPaths.contains($0.path) }
+    }
+
+    /// Every branch open. It goes through `expandedPaths` as well as through
+    /// the outline, so the next parse — one keystroke later — comes back the
+    /// same shape.
+    func expandAll() {
+        setExpansion(open: true)
+    }
+
+    /// And every branch closed again.
+    func collapseAll() {
+        setExpansion(open: false)
+    }
+
+    private func setExpansion(open: Bool) {
+        isApplyingExpansion = true
+        if open {
+            for row in flatRows where row.node.isBranch { expandedPaths.insert(row.path) }
+            outlineView.expandItem(nil, expandChildren: true)
+        } else {
+            expandedPaths.removeAll()
+            outlineView.collapseItem(nil, collapseChildren: true)
+        }
+        // A closed branch wears the count of what is inside it, so every row
+        // that has just changed hands says something different now. One
+        // reload rather than one per branch, since this moved all of them.
+        outlineView.reloadData()
+        isApplyingExpansion = false
+        onExpansionChange?()
     }
 
     private func restore(scroll origin: NSPoint) {
@@ -1098,12 +1178,23 @@ extension TreePreviewView: NSOutlineViewDelegate {
         guard let row = notification.userInfo?["NSObject"] as? Row else { return }
         expandedPaths.insert(row.path)
         reloadTitle(of: row)
+        reportExpansionChange()
     }
 
     func outlineViewItemDidCollapse(_ notification: Notification) {
         guard let row = notification.userInfo?["NSObject"] as? Row else { return }
         expandedPaths.remove(row.path)
         reloadTitle(of: row)
+        reportExpansionChange()
+    }
+
+    /// The corner's own segment is offering Expand All or Collapse All by
+    /// what is open, so a triangle clicked by hand is news. A parse or an
+    /// Expand All tells the column once when it is finished instead: AppKit
+    /// sends one of these per branch.
+    private func reportExpansionChange() {
+        guard !isApplyingExpansion else { return }
+        onExpansionChange?()
     }
 
     /// A branch's own row says how much is inside it while it is closed, so
@@ -1158,6 +1249,44 @@ private final class TreeOutlineView: NSOutlineView {
     /// tracking loop: the same reason the dump's grid answers for its own
     /// clicks.
     var onRowClick: ((Int) -> Void)?
+
+    /// Every row's field given the rest of its row, at the end of every
+    /// layout the outline does.
+    ///
+    /// AppKit gives a row's field its frame once, when the row is made, and
+    /// moves it for nothing afterwards — not a column resized under it, not
+    /// `tile()`, not the row being laid out again. It never shows in a table
+    /// whose rows are made at the width they will be read at, and the tree is
+    /// not one: entering split renders the preview column *before* it slides
+    /// the divider open, so a document's rows are made while the pane is
+    /// still shut and keep that width in a pane eight hundred points wide.
+    /// Nothing about it is a matter of size; a big document only shows it
+    /// because a long key does not survive the squeeze.
+    ///
+    /// Here, and not in the pane's own `layout()`, because a view lays out
+    /// before its subviews do: by the time the pane has set the column, the
+    /// rows for this pass have not been made, and the ones made after it
+    /// would keep whatever frame they were given. After `super` they all
+    /// exist, and this is the last word on them.
+    override func layout() {
+        super.layout()
+        enumerateAvailableRowViews { [unowned self] _, row in
+            // The row's field and not its first subview: a branch's row
+            // carries the disclosure triangle too, and the triangle is
+            // AppKit's to place.
+            guard let field = view(atColumn: 0, row: row, makeIfNecessary: false) else { return }
+            // The width alone: the left edge is the indentation for the
+            // depth the row is at, and AppKit keeps that one right of its own
+            // accord. What it never revisits is how much room it left after
+            // it, which is the whole of the squeeze.
+            let room = bounds.width - field.frame.minX - intercellSpacing.width
+            guard room > 0 else { return }
+            let frame = NSRect(x: field.frame.minX, y: field.frame.minY,
+                               width: room, height: field.frame.height)
+            guard frame != field.frame else { return }
+            field.frame = frame
+        }
+    }
 
     /// The tree's find bar. Find…, Find Next, Find Previous and Use Selection
     /// for Find are nil-targeted `performTextFinderAction:` items, so they

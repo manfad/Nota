@@ -83,6 +83,10 @@ final class PreviewPaneView: NSView {
     /// picked out of a grid, and one range otherwise.
     var onSourceReveal: (([NSRange]) -> Void)?
     var onTaskToggle: ((NSRange) -> Void)?
+    /// What the view in front has open has changed — a tree's branches. The
+    /// corner slot's own segment is offering Expand All or Collapse All by
+    /// the answer.
+    var onExpansionChange: (() -> Void)?
     var onFindBarVisibilityChange: ((Bool) -> Void)?
     var onPositionChange: ((Int) -> Void)?
     var onZoomChange: ((CGFloat) -> Void)?
@@ -217,6 +221,10 @@ final class PreviewPaneView: NSView {
         content.onTaskToggle = { [weak self, weak content] source in
             guard let self, isInFront(content) else { return }
             onTaskToggle?(source)
+        }
+        content.onExpansionChange = { [weak self, weak content] in
+            guard let self, isInFront(content) else { return }
+            onExpansionChange?()
         }
         content.onSourceReveal = { [weak self, weak content] source in
             guard let self, isInFront(content) else { return }

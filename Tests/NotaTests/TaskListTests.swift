@@ -332,6 +332,91 @@ final class TaskListTests: AppKitTestCase {
         XCTAssertTrue(controller.footerRegions.counts.stringValue.hasSuffix(expected))
     }
 
+    // MARK: - Where a tick leaves the page
+
+    /// A tick is not a jump, so the page it was pressed on does not move: the
+    /// note is rewritten, the render comes back changed, and the reader is
+    /// still looking at the box they pressed rather than at whatever the
+    /// caret is sitting in eighty paragraphs up.
+    @MainActor
+    func testTickingABoxLeavesTheSplitPaneWhereItWas() throws {
+        _ = NSApplication.shared
+        let controller = try makeControllerShowingPreview()
+        let editor = try editorTextView(of: controller)
+        editor.insertText(longNoteEndingInTasks, replacementRange: editor.selectedRange())
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        waitForDebounce()
+
+        XCTAssertEqual(controller.previewMode, .split)
+        let preview = try previewView(of: controller)
+        // Read to the bottom, where the boxes are.
+        preview.scroll(toFraction: 1)
+        let before = preview.scrollOffset
+        XCTAssertGreaterThan(before, 0, "the page is long enough to be scrolled")
+
+        try clickCheckbox(of: controller, at: 1)
+
+        XCTAssertEqual(preview.scrollOffset, before, accuracy: 2,
+                       "the press itself moved nothing")
+        waitForDebounce()
+        XCTAssertEqual(preview.scrollOffset, before, accuracy: 2,
+                       "and neither did the render that answered it")
+        XCTAssertTrue(editor.string.contains("- [x] the last box"))
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 0),
+                       "the caret is where the reader left it")
+    }
+
+    @MainActor
+    func testTickingABoxLeavesTheReadingPageWhereItWas() throws {
+        _ = NSApplication.shared
+        let controller = try makeControllerShowingPreview()
+        let editor = try editorTextView(of: controller)
+        editor.insertText(longNoteEndingInTasks, replacementRange: editor.selectedRange())
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        waitForDebounce()
+        controller.setPreviewMode(.reading)
+        waitForDebounce()
+
+        let preview = try previewView(of: controller)
+        preview.scroll(toFraction: 1)
+        let before = preview.scrollOffset
+        XCTAssertGreaterThan(before, 0, "the page is long enough to be scrolled")
+
+        try clickCheckbox(of: controller, at: 1)
+
+        XCTAssertEqual(preview.scrollOffset, before, accuracy: 2)
+        waitForDebounce()
+        XCTAssertEqual(preview.scrollOffset, before, accuracy: 2)
+        XCTAssertTrue(editor.string.contains("- [x] the last box"))
+        XCTAssertEqual(controller.previewMode, .reading, "the page is where you still are")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    /// The band still follows the caret. A tick holds the page still, and the
+    /// next caret the reader moves themselves takes it along again.
+    @MainActor
+    func testACaretMoveAfterATickTakesThePaneToItsBlock() throws {
+        _ = NSApplication.shared
+        let controller = try makeControllerShowingPreview()
+        let editor = try editorTextView(of: controller)
+        editor.insertText(longNoteEndingInTasks, replacementRange: editor.selectedRange())
+        let middle = (editor.string as NSString).range(of: "Paragraph 40")
+        editor.setSelectedRange(NSRange(location: middle.location, length: 0))
+        waitForDebounce()
+
+        let preview = try previewView(of: controller)
+        preview.scroll(toFraction: 1)
+        let bottom = preview.scrollOffset
+
+        try clickCheckbox(of: controller, at: 1)
+        waitForDebounce()
+        XCTAssertEqual(preview.scrollOffset, bottom, accuracy: 2, "the tick held it still")
+
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        XCTAssertEqual(preview.scrollOffset, 0, accuracy: 1,
+                       "and the caret walking to the top walked the page with it")
+    }
+
     // MARK: - Rendering helpers
 
     private func result(
@@ -375,6 +460,14 @@ final class TaskListTests: AppKitTestCase {
     }
 
     // MARK: - Window helpers
+
+    /// Eighty paragraphs and then a task list: the boxes are several screens
+    /// down, so a caret at the top of the note is nowhere near them.
+    private var longNoteEndingInTasks: String {
+        (1 ... 80).map { "Paragraph \($0) with a few words in it." }
+            .joined(separator: "\n\n")
+            + "\n\n- [ ] the first box\n- [ ] the last box\n"
+    }
 
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory

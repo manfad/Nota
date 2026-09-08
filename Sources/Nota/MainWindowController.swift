@@ -159,7 +159,7 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
     /// Exactly one of the three is on screen.
     private lazy var pageListSidebar = PageListSidebarView(topInset: 8)
     /// The outer split keeps the optional sidebar outside the document.
-    private let splitViewController = NSSplitViewController()
+    private let splitViewController = HairlineSplitViewController()
     /// The document owns the shared tab strip and the editor/preview split
     /// beneath it, so the divider begins below rather than crossing the tabs.
     private let workspacePane = NSViewController()
@@ -1017,9 +1017,11 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
     /// it.
     private func installModeOverlay(_ overlay: ModeControlOverlay, over container: NSView) {
         overlay.translatesAutoresizingMaskIntoConstraints = false
-        // The action on the end of the capsule, where the front tab's format
-        // has one. Both columns carry it, so both are wired.
+        // The action on the end of the capsule. Which of the two an overlay
+        // is carrying is its content's business, so both closures go on both
+        // columns and only one of them is ever reachable at a time.
         overlay.onFormat = { [weak self] kind, action in self?.applyFormat(action, of: kind) }
+        overlay.onPreviewAction = { [weak self] action in self?.applyPreviewAction(action) }
         container.addSubview(overlay)
         // The band's height is the overlay's own: it grows while that
         // column's find bar is up, so the whole top of the column is still
@@ -1104,6 +1106,12 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         }
         previewColumn.onTaskToggle = { [weak self] source in
             self?.toggleTask(inSource: source)
+        }
+        // A branch opened or closed in the tree — by hand, by a search
+        // landing on a hit inside it, or by a fresh parse. The column's own
+        // segment is offering Expand All or Collapse All by that answer.
+        previewColumn.onExpansionChange = { [weak self] in
+            self?.refreshPreviewSlotState()
         }
         previewColumn.onSourceReveal = { [weak self] sources in
             self?.revealSource(sources)
@@ -3600,13 +3608,39 @@ final class DocumentSplitViewController: NSSplitViewController {
     }
 }
 
-/// The document split's view: a divider that is hidden is not drawn.
+/// The window's outer split — the sidebar beside the workspace — with the
+/// divider drawn as the window's hairline. The view has to be swapped in
+/// before the controller loads its own: set on a controller that has already
+/// laid its items out, the new view knows nothing of them and the first
+/// question about the arrangement dies on an empty list.
+final class HairlineSplitViewController: NSSplitViewController {
+    override func loadView() {
+        let split = DocumentSplitView()
+        split.isVertical = true
+        split.dividerStyle = .thin
+        splitView = split
+        super.loadView()
+    }
+}
+
+/// A split whose divider is the window's hairline, and is not drawn at all
+/// when it is hidden.
+///
+/// AppKit's thin divider is a colour of its own — near black in dark mode —
+/// while the footer's top line, the tab strip's line and the gutter's edge
+/// are all `separatorColor`, a faint light line. Two panes side by side over a
+/// footer then showed two different lines meeting at a corner. The divider is
+/// drawn here in the same colour as the rest, so every line in the window is
+/// the one line.
 final class DocumentSplitView: NSSplitView {
     var hidesDivider: () -> Bool = { false }
 
+    override var dividerColor: NSColor { .separatorColor }
+
     override func drawDivider(in rect: NSRect) {
         guard !hidesDivider() else { return }
-        super.drawDivider(in: rect)
+        NSColor.separatorColor.setFill()
+        rect.fill()
     }
 }
 
@@ -4551,17 +4585,37 @@ extension MainWindowController {
         }
     }
 
-    /// What the front tab puts in the corner, asked of the note rather than of
-    /// a list of extensions kept here. A tab with a render gets the mode
-    /// control; a `.json` or `.html` tab gets that control with its own
-    /// Beautify / Compact action on the end; everything else — a `.txt`, an
-    /// untitled note, a PDF, a picture, a book — gets nothing, and zen gets
+    /// What the front tab puts in the *editor's* corner, asked of the note
+    /// rather than of a list of extensions kept here. A tab with a render gets
+    /// the mode control; a `.json` or `.html` tab gets that control with its
+    /// own Beautify / Compact action on the end; everything else — a `.txt`,
+    /// an untitled note, a PDF, a picture, a book — gets nothing, and zen gets
     /// nothing whatever the tab is.
-    private var cornerSlotContent: ModeControlOverlay.Content {
-        guard !isZenMode, let note = currentNote, note.supportsRenderedPreview
-        else { return .none }
+    private var editorCornerSlotContent: ModeControlOverlay.Content {
+        guard hasCornerSlot else { return .none }
         guard let kind = cornerFormatKind else { return .modeControl }
         return .modeControlWithFormat(kind)
+    }
+
+    /// And what it puts in the *preview's*, which is not the same thing. The
+    /// editor's action is what can be done to the source; the preview's is
+    /// what can be done to the view, so a tree is offered Expand All and a
+    /// page a Reload, and a `.json` tab's two corners say two different
+    /// things on purpose.
+    ///
+    /// A `.yaml`, a `.toml` and an `.xml` are read through the same tree, so
+    /// they gain the segment here while their editor slot keeps its three:
+    /// the offer belongs to the view, and all four views are the same one.
+    private var previewCornerSlotContent: ModeControlOverlay.Content {
+        guard hasCornerSlot, let kind = cornerPreviewActionKind else {
+            return hasCornerSlot ? .modeControl : .none
+        }
+        return .modeControlWithPreviewAction(kind)
+    }
+
+    /// Whether the front tab has a slot in either corner at all.
+    private var hasCornerSlot: Bool {
+        !isZenMode && currentNote?.supportsRenderedPreview == true
     }
 
     /// Which format the front tab can be laid out both ways, if either. Both
@@ -4574,32 +4628,50 @@ extension MainWindowController {
         return nil
     }
 
+    /// Which preview the front tab is read through, where that preview has an
+    /// action of its own. A tree opens and closes; a page loads again. Every
+    /// other render — Markdown, LaTeX, a grid, a picture — has nothing to
+    /// offer here, and its slot stays the three modes.
+    private var cornerPreviewActionKind: ModeControlOverlay.PreviewActionKind? {
+        switch currentNote?.previewKind {
+        case .tree: .tree
+        case .html: .page
+        default: nil
+        }
+    }
+
     /// Which columns carry a slot, what is in it, and how far down their
     /// column it sits.
     ///
     /// The slot is per column: the editor's goes in reading, where that column
-    /// is collapsed, and the preview's is there in split and reading. Both
-    /// carry whatever the tab put in the corner, action segment included.
+    /// is collapsed, and the preview's is there in split and reading. Each
+    /// carries its own column's action — the source's Beautify / Compact in
+    /// the editor, the view's Expand All or Reload in the preview.
     ///
     /// A ⌘F bar takes its column's corner but not its control. The control
     /// drops the height of the pill and goes on working underneath it, which
     /// is how the mode stays one hover away while a search is up.
     fileprivate func updateModeControlOverlays() {
-        let content = cornerSlotContent
+        let editorContent = editorCornerSlotContent
         // In reading the editor column is collapsed, so its slot is empty
         // however the tab would otherwise have filled it.
-        editorModeOverlay.setContent(installedPreviewMode == .reading ? .none : content)
+        editorModeOverlay.setContent(
+            installedPreviewMode == .reading ? .none : editorContent
+        )
         // Worked out on the spot — a tab arriving in front, a file reloaded
         // off disk — unless a re-parse is already on its way, which is what
         // keeps a burst of typing to one walk over the text.
-        if content.format != nil, formatSlotWorkItem == nil { refreshFormatSlotState() }
+        if editorContent.format != nil, formatSlotWorkItem == nil { refreshFormatSlotState() }
         // Whichever pill stack is standing in the editor's corner — ⌘F's one
         // or two, or ⌘J's one — is what the control clears.
         let editorStack: CGFloat = findSession.isVisible ? findBar.stackHeight
             : (goToLineSession.isVisible ? PillView.height : 0)
         editorModeOverlay.findBarClearance = editorStack > 0
             ? ModeControlOverlay.drop(forFindBarOfHeight: editorStack) : 0
-        previewModeOverlay.setContent(installedPreviewMode != .off ? content : .none)
+        previewModeOverlay.setContent(
+            installedPreviewMode != .off ? previewCornerSlotContent : .none
+        )
+        refreshPreviewSlotState()
         let preview = previewColumn.current
         previewModeOverlay.findBarClearance = preview.isFindBarVisible
             ? ModeControlOverlay.drop(forFindBarOfHeight: preview.findBarHeight) : 0
@@ -4624,15 +4696,53 @@ extension MainWindowController {
     /// up on. One linear walk over the text, so it is asked when the tab
     /// changes and on the debounce after typing, never per keystroke.
     ///
-    /// Both columns are told: in split a `.json` tab has the same capsule in
-    /// each of its two corners, and a segment that said "Beautify" in one and
-    /// "Compact" in the other would be a bug you could see.
+    /// The editor's slot alone: laying a file out is something done to the
+    /// source, and the source is what that column is showing. The preview's
+    /// fourth segment is its own (`refreshPreviewSlotState`).
     private func refreshFormatSlotState() {
         formatSlotWorkItem?.cancel()
         formatSlotWorkItem = nil
         guard let note = currentNote, let kind = cornerFormatKind else { return }
-        let state = formatState(of: note.storage.string, as: kind)
-        for overlay in [editorModeOverlay, previewModeOverlay] { overlay.setFormatState(state) }
+        editorModeOverlay.setFormatState(formatState(of: note.storage.string, as: kind))
+    }
+
+    /// Which way round the *preview's* own segment points. A page has only
+    /// ever the one thing to offer; a tree offers whichever of open and closed
+    /// it is not already in, so the view in front is asked whether every
+    /// branch is open.
+    ///
+    /// Asked whenever the slot is worked out again and whenever the tree
+    /// reports that something opened or closed — a reader clicking the last
+    /// closed triangle turns Expand All into Collapse All under the pointer.
+    private func refreshPreviewSlotState() {
+        guard let kind = previewModeOverlay.content.previewActionKind else { return }
+        switch kind {
+        case .page:
+            previewModeOverlay.setPreviewAction(.reload)
+        case .tree:
+            // Before the column has shown the tree there is nothing to ask,
+            // and the parse that follows reports its own expansion anyway.
+            guard let tree = previewColumn.current as? TreePreviewView else { return }
+            previewModeOverlay.setPreviewAction(tree.isFullyExpanded ? .collapseAll : .expandAll)
+        }
+    }
+
+    /// The preview's own segment was pressed. Nothing here touches the text:
+    /// the tree opens or closes, and the page is loaded again from the text
+    /// that is already there — pictures beside the file included, which is the
+    /// whole point of a reload.
+    private func applyPreviewAction(_ action: ModeControlOverlay.PreviewAction) {
+        switch action {
+        case .expandAll:
+            (previewColumn.current as? TreePreviewView)?.expandAll()
+        case .collapseAll:
+            (previewColumn.current as? TreePreviewView)?.collapseAll()
+        case .reload:
+            guard let page = previewColumn.current as? HTMLPreviewView else { return }
+            page.invalidateRender()
+            refreshPreviewContent()
+        }
+        refreshPreviewSlotState()
     }
 
     /// What the formatter says about the text: the shape the file is *not* in,

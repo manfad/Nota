@@ -34,6 +34,9 @@ class RenderedPreviewView: NSView, PreviewContent {
     /// until the next render arrives.
     private var blocksAreStale = false
     private(set) var highlightedSourceRange: NSRange?
+    /// Whether a tick pressed in this pane is still settling — see
+    /// `Settling` and `tickedTask(at:)`.
+    private var settling: Settling = .nothing
     /// Whether the render is being held at a fixed wrap width — see
     /// `freezeWidth()`.
     private var widthIsFrozen = false
@@ -259,6 +262,11 @@ class RenderedPreviewView: NSView, PreviewContent {
     /// What the pane is showing, for the tests.
     var renderedText: String { textView.string }
 
+    /// How far down the page has been scrolled, in points — for the tests,
+    /// which read it either side of an edit to see that the page was left
+    /// where it was being read.
+    var scrollOffset: CGFloat { scrollView.contentView.bounds.origin.y }
+
     var renderedContent: NSAttributedString { textView.attributedString() }
 
     /// One rectangle per fenced code block, in the text view's coordinates.
@@ -346,7 +354,7 @@ class RenderedPreviewView: NSView, PreviewContent {
             textView.layoutManager?.ensureLayout(for: container)
         }
         layoutSubtreeIfNeeded()
-        scroll(to: previous)
+        scroll(toFraction: previous)
         // Replacing the storage leaves AppKit's own caret at the end of what
         // it put in. The render is not a place a caret lives, so a fresh page
         // starts unselected — whatever the reader had swept belonged to the
@@ -377,6 +385,11 @@ class RenderedPreviewView: NSView, PreviewContent {
 
     /// Lights the block the editor's caret is sitting in and brings it into
     /// view. Returns whether there was one to light.
+    ///
+    /// The page follows the caret because walking the note in the editor
+    /// should walk the pane beside it. A tick pressed in the pane is the one
+    /// caret the reader did not move, so it is the one band that lights where
+    /// it stands — see `Settling`.
     @discardableResult
     func highlightBlock(containingSource location: Int) -> Bool {
         guard !blocksAreStale, let index = blockIndex(forSource: location) else {
@@ -384,8 +397,49 @@ class RenderedPreviewView: NSView, PreviewContent {
             return false
         }
         setHighlight(index)
-        textView.scrollRangeToVisible(blocks[index].range)
+        if settling.takesTheBand(at: location) {
+            textView.scrollRangeToVisible(blocks[index].range)
+        }
         return true
+    }
+
+    /// Where a tick pressed in this pane has got to.
+    ///
+    /// A checkbox rewrites one character of the note, and everything an edit
+    /// sets off follows it: the caret's band laid on again, the render made
+    /// afresh, and a band laid on that. None of it is the reader asking to be
+    /// taken anywhere — they are looking at the box they just pressed, and
+    /// the caret is wherever they left it in the editor, often screens up. So
+    /// while a tick is settling the caret's block is lit where it stands and
+    /// never scrolled to, and the page stays exactly where it was being read.
+    ///
+    /// A caret the reader moves themselves lands somewhere else in the
+    /// source, and that ends the settling: from there it is a jump again.
+    private enum Settling {
+        /// Nothing pressed here: a band scrolls the page to the block it lights.
+        case nothing
+        /// A checkbox was pressed and the caret has not been heard from since.
+        case tick
+        /// It has, and every band since has pointed at this place in the source.
+        case tickWithCaret(at: Int)
+
+        /// Whether the band about to be laid on at this place in the source
+        /// is the reader asking to be taken to it. Answering moves the
+        /// settling on.
+        mutating func takesTheBand(at location: Int) -> Bool {
+            switch self {
+            case .nothing:
+                return true
+            case .tick:
+                self = .tickWithCaret(at: location)
+                return false
+            case .tickWithCaret(let caret) where caret == location:
+                return false
+            case .tickWithCaret:
+                self = .nothing
+                return true
+            }
+        }
     }
 
     private func clicked(at index: Int) {
@@ -399,8 +453,15 @@ class RenderedPreviewView: NSView, PreviewContent {
     /// A checkbox was pressed. Nothing is lit and nothing is jumped to: the
     /// item's source goes out to be rewritten, and the render comes back
     /// changed the way it does after any other edit.
+    ///
+    /// The page also stays exactly where it is. The edit is the reader's, but
+    /// the caret it moves the note under is not: it sits wherever they left
+    /// it in the editor, and the bands the edit sets off would otherwise
+    /// carry the page off to it. So the tick is marked as settling, and until
+    /// it has been answered a band lights where it stands — see `Settling`.
     private func tickedTask(at index: Int) {
         guard !blocksAreStale, let block = blockIndex(forRendered: index) else { return }
+        settling = .tick
         onTaskToggle?(blocks[block].source)
     }
 
@@ -441,7 +502,10 @@ class RenderedPreviewView: NSView, PreviewContent {
         return min(1, max(0, clip.bounds.origin.y / scrollable))
     }
 
-    private func scroll(to fraction: CGFloat) {
+    /// Puts the page where `scrollFraction` says — what a fresh render uses
+    /// to come back where the reader was, and what the tests use to put them
+    /// somewhere first.
+    func scroll(toFraction fraction: CGFloat) {
         let clip = scrollView.contentView
         guard let document = scrollView.documentView else { return }
         let scrollable = document.bounds.height - clip.bounds.height

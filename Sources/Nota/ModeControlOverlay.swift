@@ -6,11 +6,19 @@ import AppKit
 /// The band is the same for every tab — the hover, the fade, the hit testing
 /// and the drop out of ⌘F's way are all here and know nothing of what they
 /// are carrying. What stands in the corner is the tab's own business, and
-/// there are three answers (`Content`): a tab with a render gets the Editor ·
+/// there are four answers (`Content`): a tab with a render gets the Editor ·
 /// Split · Reading control; a `.json` or `.html` tab gets that same control
 /// with a fourth segment out front, the Beautify / Compact action its format
-/// has; and everything else gets nothing at all — the whole overlay goes away
-/// and the band takes no clicks.
+/// has; a column showing a tree or a page gets that same fourth segment
+/// carrying the *preview's* own action instead; and everything else gets
+/// nothing at all — the whole overlay goes away and the band takes no clicks.
+///
+/// The two actions are told apart by the column, not by the tab: the editor's
+/// slot offers what can be done to the *source* — beautify it, compact it —
+/// and the preview's offers what can be done to the *view* — open every
+/// branch of a tree, close them again, load a page afresh. A slot never
+/// carries both, so the capsule is never five segments wide, and the editor
+/// and the preview never say the same thing twice.
 ///
 /// The fourth segment is a segment and not a button beside one. A file with a
 /// render *and* an action would otherwise carry two pieces of chrome in one
@@ -75,7 +83,7 @@ final class ModeControlOverlay: NSView {
     /// on the end of them.
     private static let segmentWidth: CGFloat = 28
 
-    /// What is standing in this column's corner. One slot, three answers, and
+    /// What is standing in this column's corner. One slot, four answers, and
     /// the band around them is the same whichever it is.
     enum Content: Equatable {
         /// Nothing: a `.txt`, an untitled note, a PDF, zen. The overlay goes
@@ -84,12 +92,15 @@ final class ModeControlOverlay: NSView {
         /// Editor · Split · Reading, for a tab with a render beside it.
         case modeControl
         /// The action the file's own format has, standing ahead of the same
-        /// three.
+        /// three. The editor column's answer for a `.json` or `.html` tab.
         case modeControlWithFormat(FormatKind)
+        /// The action the *view* has, standing in the same place. The preview
+        /// column's answer for a tree or a page.
+        case modeControlWithPreviewAction(PreviewActionKind)
 
         /// Whether the modes are in this slot at all — the question the
-        /// window's own layout asks, since it is the same answer for both of
-        /// the two that hold them.
+        /// window's own layout asks, since it is the same answer for all
+        /// three that hold them.
         var showsModes: Bool { self != .none }
 
         /// Which format's action is on the end, if any.
@@ -97,6 +108,17 @@ final class ModeControlOverlay: NSView {
             guard case .modeControlWithFormat(let kind) = self else { return nil }
             return kind
         }
+
+        /// Which preview's action is on the end, if any.
+        var previewActionKind: PreviewActionKind? {
+            guard case .modeControlWithPreviewAction(let kind) = self else { return nil }
+            return kind
+        }
+
+        /// Whether there is a fourth segment at all, whichever of the two it
+        /// is carrying. Every piece of index arithmetic here goes through
+        /// this rather than naming one kind of action.
+        var hasActionSegment: Bool { format != nil || previewActionKind != nil }
     }
 
     /// The two files that carry an action of their own beside the modes. Both
@@ -156,10 +178,61 @@ final class ModeControlOverlay: NSView {
         case invalid(line: Int)
     }
 
+    /// Which preview owns the fourth segment. Not the file's format — the
+    /// *view's* kind, since a `.yaml` and a `.json` are read through the same
+    /// tree and are offered the same thing there, while only one of them has
+    /// a formatter behind its source.
+    enum PreviewActionKind: Hashable {
+        /// A tree — `.json`, `.yaml`, `.toml`, `.xml`: open every branch, or
+        /// close them all again.
+        case tree
+        /// A page: load it afresh from the text beside it.
+        case page
+
+        /// What the segment offers before anything has asked the view. A tree
+        /// that is already open says so on the first refresh; a page has only
+        /// ever one thing to offer.
+        var restingAction: PreviewAction {
+            switch self {
+            case .tree: .expandAll
+            case .page: .reload
+            }
+        }
+    }
+
+    /// What the preview's own segment does when it is pressed. The tree's two
+    /// are one control the way Beautify and Compact are: the view is in one of
+    /// the two shapes already, and the only thing worth offering is the other
+    /// one.
+    enum PreviewAction: Equatable {
+        case expandAll, collapseAll, reload
+
+        /// The tree borrows the source action's own pair — a box opening out
+        /// and a box closing up — because it is the same gesture over the
+        /// other half of the window: one thing spread into lines, one thing
+        /// pulled back together.
+        var symbolName: String {
+            switch self {
+            case .expandAll: "rectangle.expand.vertical"
+            case .collapseAll: "rectangle.compress.vertical"
+            case .reload: "arrow.clockwise"
+            }
+        }
+
+        var toolTip: String {
+            switch self {
+            case .expandAll: L10n.text("Expand All")
+            case .collapseAll: L10n.text("Collapse All")
+            case .reload: L10n.text("Reload Page")
+            }
+        }
+    }
+
     let modeControl = NSSegmentedControl()
 
     /// Where the action sits when it is showing: first, ahead of the modes —
-    /// the file's own layout choice standing before the way it is read.
+    /// what is being done to what is on screen standing before the way it is
+    /// read. The same segment whichever of the two actions is in it.
     static let formatSegmentIndex = 0
 
     /// How far a mode's own place in `PreviewMode.allCases` is shifted to
@@ -167,7 +240,7 @@ final class ModeControlOverlay: NSView {
     /// stands ahead of the modes; none otherwise. The one number every
     /// mapping between a segment and a mode goes through, so nothing else
     /// here hard-codes an index.
-    private var modeOffset: Int { content.format == nil ? 0 : 1 }
+    private var modeOffset: Int { content.hasActionSegment ? 1 : 0 }
 
     /// The segment a mode lives in, whichever shape the capsule is in.
     func segmentIndex(of mode: PreviewMode) -> Int {
@@ -188,10 +261,19 @@ final class ModeControlOverlay: NSView {
 
     private(set) var formatState: FormatState = .action(.beautify)
 
+    /// What the preview's own segment is offering right now. A tree's flips
+    /// as the reader opens and closes branches; a page's is only ever the
+    /// reload.
+    private(set) var previewAction: PreviewAction = .expandAll
+
     /// What the window does when the action segment is pressed. The segment
     /// hands on the reformat it was offering, so the window never has to ask
     /// which way round it was.
     var onFormat: ((FormatKind, FormatAction) -> Void)?
+
+    /// And the same for a preview's own action: the segment hands on what it
+    /// was offering, and the window asks the view in front to do it.
+    var onPreviewAction: ((PreviewAction) -> Void)?
 
     /// The one control the slot is showing, or nothing at all. Everything
     /// about the band — the fade, the fill behind it, what a click lands on —
@@ -384,16 +466,24 @@ final class ModeControlOverlay: NSView {
     func setContent(_ content: Content) {
         guard content != self.content else { return }
         if content == .none { setRevealed(false, animated: false) }
-        let hadFormat = self.content.format != nil
+        let hadAction = self.content.hasActionSegment
+        let previousKind = self.content.previewActionKind
         self.content = content
         isHidden = content == .none
         modeControl.isHidden = content == .none
         // The capsule grows and shrinks by one segment. Rebuilding it costs
         // four symbol images, so it is only done when the shape has actually
         // changed — a tab switch between two `.md` files leaves it alone.
-        if hadFormat != (content.format != nil) {
+        if hadAction != content.hasActionSegment {
             applySegmentCount()
             applySegmentTints()
+        }
+        // A slot that has just taken on a different preview's action starts
+        // at that preview's resting offer, rather than wearing the last
+        // tab's: a page arriving where a tree was must not say "Collapse All"
+        // until the window has been round to ask.
+        if let kind = content.previewActionKind, kind != previousKind {
+            previewAction = kind.restingAction
         }
         applyFormatState()
         applyRevealedAlpha()
@@ -410,7 +500,7 @@ final class ModeControlOverlay: NSView {
     /// Three segments, or four for a file with a format of its own — the
     /// action standing ahead of them when it is there.
     private func applySegmentCount() {
-        let count = PreviewMode.allCases.count + (content.format == nil ? 0 : 1)
+        let count = PreviewMode.allCases.count + (content.hasActionSegment ? 1 : 0)
         guard modeControl.segmentCount != count else { return }
         // The mode selected before the rebuild, read back through the shape
         // the control was in a moment ago — so growing or shrinking by the
@@ -427,7 +517,7 @@ final class ModeControlOverlay: NSView {
             modeControl.setToolTip(mode.controlToolTip, forSegment: index)
             modeControl.setWidth(Self.segmentWidth, forSegment: index)
         }
-        if content.format != nil {
+        if content.hasActionSegment {
             modeControl.setWidth(Self.segmentWidth, forSegment: Self.formatSegmentIndex)
         }
         modeControl.selectedSegment = segmentIndex(of: selectedMode ?? PreviewMode.allCases[0])
@@ -445,18 +535,49 @@ final class ModeControlOverlay: NSView {
         applyFormatState()
     }
 
+    /// Which way round the preview's own segment points. The window works it
+    /// out from the view in front — whether every branch of the tree is
+    /// already open — and hands it here.
+    func setPreviewAction(_ action: PreviewAction) {
+        guard action != previewAction else { return }
+        previewAction = action
+        applyFormatState()
+    }
+
     private func applyFormatState() {
-        guard let kind = content.format,
-              modeControl.segmentCount > PreviewMode.allCases.count else { return }
-        switch formatState {
-        case .action(let action):
+        guard modeControl.segmentCount > PreviewMode.allCases.count else { return }
+        if let kind = content.format {
+            switch formatState {
+            case .action(let action):
+                modeControl.setEnabled(true, forSegment: Self.formatSegmentIndex)
+                modeControl.setToolTip(kind.toolTip(action), forSegment: Self.formatSegmentIndex)
+            case .invalid(let line):
+                modeControl.setEnabled(false, forSegment: Self.formatSegmentIndex)
+                modeControl.setToolTip(
+                    kind.invalidToolTip(line: line), forSegment: Self.formatSegmentIndex
+                )
+            }
+        } else if content.previewActionKind != nil {
+            // Nothing here can fail the way a parse can: a tree with no
+            // branches simply has nothing to open, and a page always has a
+            // page to load again.
             modeControl.setEnabled(true, forSegment: Self.formatSegmentIndex)
-            modeControl.setToolTip(kind.toolTip(action), forSegment: Self.formatSegmentIndex)
-        case .invalid(let line):
-            modeControl.setEnabled(false, forSegment: Self.formatSegmentIndex)
-            modeControl.setToolTip(kind.invalidToolTip(line: line), forSegment: Self.formatSegmentIndex)
+            modeControl.setToolTip(previewAction.toolTip, forSegment: Self.formatSegmentIndex)
+        } else {
+            return
         }
         applyFormatTint()
+    }
+
+    /// The symbol the action segment is wearing, whichever action it is
+    /// carrying. A file that will not parse still shows the beautify symbol:
+    /// it is the shape of the offer, greyed out, not a second state.
+    private var actionSymbolName: String? {
+        if content.format != nil {
+            if case .action(let action) = formatState { return action.symbolName }
+            return FormatAction.beautify.symbolName
+        }
+        return content.previewActionKind == nil ? nil : previewAction.symbolName
     }
 
     /// The same quiet the idle segments have — `secondaryLabelColor` over the
@@ -464,19 +585,14 @@ final class ModeControlOverlay: NSView {
     /// is baked into the image rather than left to AppKit, which is what keeps
     /// the action and the modes beside it reading as one family.
     private func applyFormatTint() {
-        guard content.format != nil, modeControl.segmentCount > PreviewMode.allCases.count
+        guard let symbolName = actionSymbolName,
+              modeControl.segmentCount > PreviewMode.allCases.count
         else { return }
         let enabled = modeControl.isEnabled(forSegment: Self.formatSegmentIndex)
-        let action: FormatAction = {
-            if case .action(let action) = formatState { return action }
-            // A file that will not parse still shows the beautify symbol: it
-            // is the shape of the offer, greyed out, not a second state.
-            return .beautify
-        }()
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let colour: NSColor = enabled ? .secondaryLabelColor : .tertiaryLabelColor
             let image = NSImage(
-                systemSymbolName: action.symbolName,
+                systemSymbolName: symbolName,
                 accessibilityDescription: modeControl.toolTip(forSegment: Self.formatSegmentIndex)
             )?.withSymbolConfiguration(
                 NSImage.SymbolConfiguration(paletteColors: [colour])
@@ -489,19 +605,23 @@ final class ModeControlOverlay: NSView {
 
     /// A click landed on the action segment. The selection goes straight back
     /// to the mode the tab is in — the segment is a button standing in a
-    /// `.selectOne` control, and nothing about the file's layout is a mode —
-    /// and the reformat it was offering goes out.
+    /// `.selectOne` control, and neither the file's layout nor the tree's is
+    /// a mode — and whatever it was offering goes out.
     ///
     /// Answers whether the click was the action's at all, so the window can
     /// treat every other segment as the mode it is.
     @discardableResult
     func handleFormatSegmentClick(restoringMode mode: PreviewMode) -> Bool {
         guard modeControl.selectedSegment == Self.formatSegmentIndex,
-              let kind = content.format
+              content.hasActionSegment
         else { return false }
         modeControl.selectedSegment = segmentIndex(of: mode)
-        guard case .action(let action) = formatState else { return true }
-        onFormat?(kind, action)
+        if let kind = content.format {
+            guard case .action(let action) = formatState else { return true }
+            onFormat?(kind, action)
+        } else if content.previewActionKind != nil {
+            onPreviewAction?(previewAction)
+        }
         return true
     }
 

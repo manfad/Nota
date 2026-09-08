@@ -22,11 +22,14 @@ import Foundation
 ///   text, and a block whose content is nothing but text and inline markup —
 ///   `<li><a href="/">Home</a></li>`, `<td>1</td>`, an empty `<div></div>` —
 ///   left on the one line) or the minified one (no whitespace between the tags
-///   at all).
+///   at all, and the CSS in a `<style>` and the JavaScript in a `<script>`
+///   minified too, through `InlineCodeMinify`).
 /// * `isPretty(_:)` — which way the button should point: a newline anywhere
 ///   outside a tag, a comment and a raw-text element means the page is laid
-///   out. The file's own trailing newline is not one, since every well-kept
-///   text file has it.
+///   out, and so does a stylesheet or a program that still has something to
+///   minify — a page on one line whose `<style>` runs down four hundred is not
+///   a minified page. The file's own trailing newline counts as neither, since
+///   every well-kept text file has it.
 /// * `errorLine(in:)` — where the walk gave up, 1-based, for the tool tip on
 ///   the disabled button.
 ///
@@ -45,6 +48,15 @@ import Foundation
 /// joined, never split, and never respelled. Whitespace *inside* an inline
 /// element is left where it is, since `<span>a </span><span>b</span>` renders
 /// with a space and `<span>a</span><span>b</span>` does not.
+///
+/// The one thing inside a raw-text element that does move is code, and only
+/// under Minify: a `<style>`, and a `<script>` whose `type` says JavaScript or
+/// says nothing, are handed to `InlineCodeMinify`, which takes the whitespace
+/// and the comments out of them and changes nothing else. A `<pre>`, a
+/// `<textarea>`, a `<title>` and a `<script>` carrying anything else — JSON,
+/// an import map, a template — go back down byte for byte, and Beautify never
+/// touches any of them: a program re-indented by the button would be a
+/// different program's worth of diff on every click.
 enum HTMLFormat {
 
     /// Which of the two shapes to write.
@@ -89,18 +101,21 @@ enum HTMLFormat {
 
     /// Whether the page is already laid out in lines: a newline outside a tag,
     /// a comment and a raw-text element, the file's own trailing newline not
-    /// counted.
+    /// counted — or a stylesheet or a program Minify would still change.
     ///
     /// A newline between two attributes is the author's way of keeping a long
     /// tag readable and says nothing about the page's shape; a newline inside a
-    /// `<pre>` or a `<script>` belongs to the content and is not ours to read
-    /// as layout either.
+    /// `<pre>` or a `<title>` belongs to the content and is not ours to read as
+    /// layout either. A `<style>` or a JavaScript `<script>` is the one place
+    /// the answer is not about newlines at all: the question the button asks is
+    /// "is there anything left to minify?", so the minifier is run over the
+    /// content and its answer compared with what is there.
     static func isPretty(_ text: String) -> Bool {
         let bytes = Array(text.utf8)
         var end = bytes.count
         while end > 0, isWhitespace(bytes[end - 1]) { end -= 1 }
         var walker = Walker(bytes: bytes)
-        return walker.hasNewlineInText(before: end)
+        return walker.hasLayoutOrCodeToMinify(before: end)
     }
 
     /// The 1-based line the walk stopped at, or `nil` for a page that reads.
@@ -151,10 +166,11 @@ enum HTMLFormat {
     }
 
     /// `script`, `style`, `pre`, `textarea`, `title`: the content is bytes, not
-    /// markup, and goes back down byte for byte. That is also why the content
-    /// is never re-indented — a newline added after `<pre>` changes what the
-    /// page shows, and one added after `<script>` would be joined by another on
-    /// every later click of the button.
+    /// markup, and is never re-indented — a newline added after `<pre>` changes
+    /// what the page shows, and one added after `<script>` would be joined by
+    /// another on every later click of the button. Beautify writes every one of
+    /// them back byte for byte; Minify does too, except for the two that hold
+    /// code it knows — see `inlineCodeKind(of:bytes:)`.
     private struct RawElement {
         let name: String
         let open: Range<Int>
@@ -226,7 +242,7 @@ enum HTMLFormat {
                 flushRun()
                 writeBlock(node, bytes: bytes, style: style, indent: indent, into: &lines)
             } else {
-                run += inlineMarkup(node, bytes: bytes)
+                run += inlineMarkup(node, bytes: bytes, style: style)
             }
         }
         flushRun()
@@ -244,7 +260,7 @@ enum HTMLFormat {
             lines.append(indentText + source(bytes, range))
 
         case .raw:
-            lines.append(indentText + inlineMarkup(node, bytes: bytes))
+            lines.append(indentText + inlineMarkup(node, bytes: bytes, style: style))
 
         case .element(let element):
             let open = source(bytes, element.open)
@@ -259,7 +275,9 @@ enum HTMLFormat {
                 if !close.isEmpty { lines.append(indentText + close) }
             } else {
                 var run = ""
-                for child in element.children { run += inlineMarkup(child, bytes: bytes) }
+                for child in element.children {
+                    run += inlineMarkup(child, bytes: bytes, style: style)
+                }
                 lines.append(indentText + open + trimmingASCIIWhitespace(run) + close)
             }
         }
@@ -269,7 +287,7 @@ enum HTMLFormat {
     /// inline run everything is inline, however the tag is classified: a
     /// `<div>` a page put inside an `<a>` is still not a place to break the
     /// line the author wrote.
-    private static func inlineMarkup(_ node: Node, bytes: [UInt8]) -> String {
+    private static func inlineMarkup(_ node: Node, bytes: [UInt8], style: Style) -> String {
         switch node {
         case .text(let range):
             return collapsedText(bytes, range)
@@ -278,14 +296,132 @@ enum HTMLFormat {
             return source(bytes, range)
 
         case .raw(let raw):
-            return source(bytes, raw.open) + source(bytes, raw.content)
+            return source(bytes, raw.open) + rawContent(raw, bytes: bytes, style: style)
                 + (raw.close.map { source(bytes, $0) } ?? "")
 
         case .element(let element):
             var out = source(bytes, element.open)
-            for child in element.children { out += inlineMarkup(child, bytes: bytes) }
+            for child in element.children {
+                out += inlineMarkup(child, bytes: bytes, style: style)
+            }
             if let close = element.close { out += source(bytes, close) }
             return out
+        }
+    }
+
+    // MARK: - The code a page carries
+
+    /// What a raw-text element holds, as far as this is concerned.
+    private enum InlineCodeKind {
+        case css, javascript, other
+    }
+
+    /// The `type` values a `<script>` may wear and still be a program. An
+    /// absent `type`, an empty one and `module` are all JavaScript; everything
+    /// else — `application/json`, `application/ld+json`, `importmap`,
+    /// `speculationrules`, `text/template`, somebody's Handlebars — is data or
+    /// another language's source, and neither is ours to rewrite.
+    private static let javaScriptTypes: Set<String> = [
+        "text/javascript", "application/javascript", "module", "text/ecmascript",
+        "application/ecmascript", "text/jscript", "application/x-javascript",
+    ]
+
+    private static func inlineCodeKind(of raw: RawElement, bytes: [UInt8]) -> InlineCodeKind {
+        // A `<style>` is a stylesheet whatever its `type` says; the attribute
+        // has meant nothing since HTML5 dropped it.
+        if raw.name == "style" { return .css }
+        guard raw.name == "script" else { return .other }
+        let type = (attributeValue("type", inTag: raw.open, bytes: bytes) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return type.isEmpty || javaScriptTypes.contains(type) ? .javascript : .other
+    }
+
+    /// The content of a raw-text element as it goes back down: minified where
+    /// it is code and the page is being minified, and the bytes it was
+    /// everywhere else.
+    private static func rawContent(_ raw: RawElement, bytes: [UInt8], style: Style) -> String {
+        let text = source(bytes, raw.content)
+        guard style == .minified else { return text }
+        switch inlineCodeKind(of: raw, bytes: bytes) {
+        case .css: return InlineCodeMinify.css(text)
+        case .javascript: return InlineCodeMinify.javascript(text)
+        case .other: return text
+        }
+    }
+
+    /// Whether Minify would still find something to take out of this one. The
+    /// minifiers are idempotent, so running one and comparing is the whole
+    /// answer.
+    private static func hasCodeToMinify(_ raw: RawElement, bytes: [UInt8]) -> Bool {
+        let text = source(bytes, raw.content)
+        switch inlineCodeKind(of: raw, bytes: bytes) {
+        case .css: return InlineCodeMinify.css(text) != text
+        case .javascript: return InlineCodeMinify.javascript(text) != text
+        case .other: return false
+        }
+    }
+
+    /// One attribute's value out of an open tag's own bytes, case folded on the
+    /// name and taken in whichever of the four forms the author used. The
+    /// walker keeps a tag as the range it occupied and never as a dictionary,
+    /// which is what keeps every attribute spelled the way it was written, so
+    /// the one question anybody asks of a tag is answered by reading it again.
+    private static func attributeValue(
+        _ name: String, inTag range: Range<Int>, bytes: [UInt8]
+    ) -> String? {
+        var index = range.lowerBound + 1  // <
+        let end = range.upperBound
+
+        func skipWhitespace() {
+            while index < end, isWhitespace(bytes[index]) { index += 1 }
+        }
+
+        // The tag's own name.
+        while index < end, !isWhitespace(bytes[index]), bytes[index] != 0x3E,
+            bytes[index] != 0x2F
+        {
+            index += 1
+        }
+        while true {
+            skipWhitespace()
+            guard index < end, bytes[index] != 0x3E else { return nil }
+            if bytes[index] == 0x2F {  // a `/` that is not part of `/>`
+                index += 1
+                continue
+            }
+            let nameStart = index
+            while index < end, !isWhitespace(bytes[index]), bytes[index] != 0x3D,
+                bytes[index] != 0x3E, bytes[index] != 0x2F
+            {
+                index += 1
+            }
+            let attribute = String(decoding: bytes[nameStart..<index], as: UTF8.self).lowercased()
+            let nameEnd = index
+            skipWhitespace()
+            var value: String?
+            if index < end, bytes[index] == 0x3D {
+                index += 1  // =
+                skipWhitespace()
+                guard index < end else { return nil }
+                let quote = bytes[index]
+                if quote == 0x22 || quote == 0x27 {
+                    index += 1
+                    let valueStart = index
+                    while index < end, bytes[index] != quote { index += 1 }
+                    value = String(decoding: bytes[valueStart..<index], as: UTF8.self)
+                    if index < end { index += 1 }
+                } else {
+                    let valueStart = index
+                    while index < end, !isWhitespace(bytes[index]), bytes[index] != 0x3E {
+                        index += 1
+                    }
+                    value = String(decoding: bytes[valueStart..<index], as: UTF8.self)
+                }
+            }
+            if attribute == name { return value }
+            // Nothing read and nothing to read: a tag nobody can walk any
+            // further is a tag with no such attribute.
+            if nameEnd == nameStart, value == nil { return nil }
         }
     }
 
@@ -409,9 +545,10 @@ enum HTMLFormat {
         }
 
         /// `isPretty`'s pass: the same tokens, but only ever asking whether a
-        /// newline turned up in character data. A page the walk cannot finish
-        /// is answered from what it read before it stopped.
-        mutating func hasNewlineInText(before end: Int) -> Bool {
+        /// newline turned up in character data, or whether a stylesheet or a
+        /// program still has something Minify would take out of it. A page the
+        /// walk cannot finish is answered from what it read before it stopped.
+        mutating func hasLayoutOrCodeToMinify(before end: Int) -> Bool {
             while !isAtEnd {
                 let tokenStart = index
                 guard let token = try? nextToken() else { return false }
@@ -423,9 +560,10 @@ enum HTMLFormat {
                     }
                 case .start(let name, let range, let selfClosing):
                     if HTMLFormat.rawTextNames.contains(name), !selfClosing {
-                        guard (try? scanRawText(name: name, open: range, openedAt: tokenStart))
-                            != nil
+                        guard let raw = try? scanRawText(
+                            name: name, open: range, openedAt: tokenStart)
                         else { return false }
+                        if HTMLFormat.hasCodeToMinify(raw, bytes: bytes) { return true }
                     }
                 case .comment, .end:
                     break

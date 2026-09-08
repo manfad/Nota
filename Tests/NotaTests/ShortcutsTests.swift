@@ -183,7 +183,7 @@ final class ShortcutsTests: AppKitTestCase {
     // MARK: - The Settings page
 
     @MainActor
-    func testSettingsHasEightPagesAndKeepsSummonOnShortcuts() throws {
+    func testSettingsHasNinePagesAndKeepsSummonOnShortcuts() throws {
         _ = NSApplication.shared
         let controller = SettingsWindowController.shared
         let root = try XCTUnwrap(controller.window?.contentView)
@@ -192,7 +192,7 @@ final class ShortcutsTests: AppKitTestCase {
         XCTAssertEqual(
             controller.pageTitles,
             ["General", "Appearance", "Editor", "Preview", "Tab bar", "Status bar",
-             "Shortcuts", "About"]
+             "Shortcuts", "File types", "About"]
         )
 
         controller.selectPage(at: 0)
