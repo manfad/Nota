@@ -233,6 +233,11 @@ final class CSVPreviewView: NSView, PreviewContent {
         previousButton.toolTip = "Previous page"
         nextButton.toolTip = "Next page"
         exportButton.toolTip = L10n.text("Export as CSV…")
+        // The one button in the bar that wears a word: the two chevrons say
+        // themselves, and a bare share arrow did not.
+        exportButton.title = L10n.text("Export")
+        exportButton.imagePosition = .imageLeading
+        exportButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         previousButton.setAccessibilityIdentifier("csv-previous")
         nextButton.setAccessibilityIdentifier("csv-next")
         exportButton.setAccessibilityIdentifier("csv-export")
@@ -341,7 +346,6 @@ final class CSVPreviewView: NSView, PreviewContent {
                 equalTo: previousButton.leadingAnchor, constant: -Layout.barSpacing
             ),
             exportButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            exportButton.widthAnchor.constraint(equalToConstant: Layout.pageButtonWidth),
 
             scrollView.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: Layout.rowGap),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),

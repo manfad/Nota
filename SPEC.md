@@ -1318,7 +1318,9 @@
 
 ### Table (CSV) — a `.sql` or `.csv` tab's rows
 Both grids — the dump's and the table's — carry the same Export button, immediately before the pager on its leading
-side: `square.and.arrow.up`, tool tip "Export as CSV…" through `L10n`, disabled with nothing on screen to export.
+side: `square.and.arrow.up` with the word `Export` beside it — the one button in the bar that wears a word, since the
+  chevrons say themselves and a bare share arrow did not — tool tip "Export as CSV…" through `L10n`, disabled with
+  nothing on screen to export.
 It asks the window for a destination pinned to `csv`
 (`MainWindowController.runExportSavePanel(suggestedName:extension:existingFileURL:)` — Nota's own `SaveDialog`
 with the extension pinned, the one door File › Export… goes through too, since Done 51 retired `NSSavePanel` from
