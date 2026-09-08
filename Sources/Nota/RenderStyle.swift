@@ -45,6 +45,13 @@ enum RenderStyle {
     /// where an equation number sits.
     static let lineFragmentPadding: CGFloat = 5
 
+    /// The margins the rendered pane holds its text inside — matched to the
+    /// editor's own padding, so the two columns of text start the same
+    /// distance from their edges. `RenderedPreviewView` insets by these, and
+    /// the export takes its page margins from them (`PDFPaginator`).
+    static let previewHorizontalInset: CGFloat = 20
+    static let previewVerticalInset: CGFloat = 14
+
     /// One step of list or quote indentation.
     static func indentUnit(for font: NSFont) -> CGFloat {
         (font.pointSize * 1.8).rounded()

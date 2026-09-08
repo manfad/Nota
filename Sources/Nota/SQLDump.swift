@@ -754,6 +754,107 @@ final class SQLDump {
         return columns
     }
 
+    // MARK: - Every row, for an export
+
+    /// Every row of a table, walked in the sort order asked — no `LIMIT`, no
+    /// `OFFSET`: an export wants the whole table and a page exists to leave
+    /// most of it out. `onColumns` is called first and once, with the
+    /// columns in the order every row's own values come in; `onRow` is then
+    /// called once per row, in the same order the grid would page it in.
+    /// Nothing is held past a call: a table of two hundred thousand rows
+    /// never sits in memory as anything more than the one row in hand and
+    /// whatever the caller does with it.
+    func forEachRow(
+        ofTable table: String, sort: Sort? = nil,
+        onColumns: ([Column]) -> Void, onRow: ([Value]) -> Void
+    ) -> Failure? {
+        guard handle != nil else {
+            return Failure(message: "No database.", statement: table)
+        }
+        guard tables.contains(table) else {
+            return Failure(message: "no such table: \(table)", statement: table)
+        }
+        let quoted = SQLDump.quote(table)
+        let declared = declaredTypes(ofTable: table)
+        let order = SQLDump.orderClause(sort, columns: declared.map(\.name))
+        let sql = "SELECT * FROM \(quoted)\(order)"
+        return forEachRow(sql, declared: declared, statement: table,
+                          onColumns: onColumns, onRow: onRow)
+    }
+
+    /// Every row of whatever is typed in the query box, walked in the sort
+    /// order asked. The same authorizer the query box reads under stands
+    /// here too: what runs is the reader's own text, and it must still
+    /// refuse a write. Unlike `page(ofQuery:)` this never asks
+    /// `SQLQueryRewrite` for a rowid — an export has no cell to click back to
+    /// the file, so there is nothing the splice would buy it.
+    func forEachRow(
+        ofQuery query: String, sort: Sort? = nil,
+        onColumns: ([Column]) -> Void, onRow: ([Value]) -> Void
+    ) -> Failure? {
+        guard let handle else {
+            return Failure(message: "No database.", statement: query)
+        }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return Failure(message: "The query is empty.", statement: "")
+        }
+
+        sqlite3_set_authorizer(handle, { _, action, _, _, _, _ in
+            SQLDump.isRead(action) ? SQLITE_OK : SQLITE_DENY
+        }, nil)
+        defer { sqlite3_set_authorizer(handle, nil, nil) }
+
+        let statements: [String]
+        switch SQLDump.statements(in: trimmed, of: handle) {
+        case .success(let prepared): statements = prepared
+        case .failure(let failure): return failure
+        }
+        guard let last = statements.last else {
+            return Failure(message: "The query is empty.", statement: "")
+        }
+        let base = SQLDump.dropTrailingSemicolon(last)
+        let order = SQLDump.orderClause(sort, columns: nil)
+        let sql = "SELECT * FROM (\(base))\(order)"
+        return forEachRow(sql, declared: nil, statement: last,
+                          onColumns: onColumns, onRow: onRow)
+    }
+
+    /// Runs `sql` and calls `onColumns` once and then `onRow` once per row it
+    /// steps — the shared tail of both `forEachRow` overloads, and the
+    /// column-naming half of `read(_:offset:total:...)` besides: a table's
+    /// columns are described by its schema and a query's by whatever SQLite
+    /// can say about the expression it selected, in `SQLDump.columns(of:declared:)`.
+    /// No rowid dance here — that is what a page's cell-click needs and an
+    /// export never does.
+    private func forEachRow(
+        _ sql: String, declared: [Column]?, statement source: String,
+        onColumns: ([Column]) -> Void, onRow: ([Value]) -> Void
+    ) -> Failure? {
+        guard let handle else {
+            return Failure(message: "No database.", statement: source)
+        }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement
+        else {
+            return Failure(message: String(cString: sqlite3_errmsg(handle)), statement: source)
+        }
+        defer { sqlite3_finalize(statement) }
+        let columns = SQLDump.columns(of: statement, declared: declared)
+        onColumns(columns)
+        let count = columns.count
+        var stepped = sqlite3_step(statement)
+        while stepped == SQLITE_ROW {
+            onRow((0..<count).map { value(of: statement, at: Int32($0)) })
+            stepped = sqlite3_step(statement)
+        }
+        guard stepped == SQLITE_DONE else {
+            return Failure(message: String(cString: sqlite3_errmsg(handle)), statement: source)
+        }
+        return nil
+    }
+
     // MARK: - Reading a query
 
     /// One page of whatever was typed in the query box.
@@ -1020,22 +1121,11 @@ final class SQLDump {
         }
         defer { sqlite3_finalize(statement) }
 
-        let count = Int(sqlite3_column_count(statement))
         // Column 0 is the rowid when one was asked for, and belongs to
         // nobody's header.
         let first = rowidColumn ? 1 : 0
-        let columns = (first..<count).map { index -> Column in
-            let name = sqlite3_column_name(statement, Int32(index))
-                .map { String(cString: $0) } ?? ""
-            // A table's columns are described by its schema; a query's by
-            // whatever SQLite can say about the expression it selected.
-            if let declared, let match = declared.first(where: { $0.name == name }) {
-                return match
-            }
-            let type = sqlite3_column_decltype(statement, Int32(index))
-                .map { String(cString: $0) }
-            return Column(name: name, declaredType: type)
-        }
+        let count = Int(sqlite3_column_count(statement))
+        let columns = SQLDump.columns(of: statement, declared: declared, from: first)
 
         var rows: [[Value]] = []
         var rowids: [Int64]? = rowidColumn ? [] : nil
@@ -1052,6 +1142,28 @@ final class SQLDump {
         }
         return .success(Page(columns: columns, rows: rows, offset: offset, total: total,
                              rowids: rowids, rowidTable: rowidTable))
+    }
+
+    /// The columns of a prepared statement, from `first` on — 1 skips a
+    /// leading rowid column that belongs to nobody's header. A name a
+    /// table's own schema already describes keeps that description; anything
+    /// else is named after whatever SQLite can say about the expression it
+    /// selected. Shared by a page's own read and a whole export's
+    /// `forEachRow`, so a query's columns read the same in both.
+    private static func columns(
+        of statement: OpaquePointer, declared: [Column]?, from first: Int = 0
+    ) -> [Column] {
+        let count = Int(sqlite3_column_count(statement))
+        return (first..<count).map { index -> Column in
+            let name = sqlite3_column_name(statement, Int32(index))
+                .map { String(cString: $0) } ?? ""
+            if let declared, let match = declared.first(where: { $0.name == name }) {
+                return match
+            }
+            let type = sqlite3_column_decltype(statement, Int32(index))
+                .map { String(cString: $0) }
+            return Column(name: name, declaredType: type)
+        }
     }
 
     private func value(of statement: OpaquePointer, at index: Int32) -> Value {

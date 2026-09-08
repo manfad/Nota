@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 
 /// The whole UI: a document workspace with a tab strip across its title bar,
 /// an editor and optional Markdown preview between shared chrome, and a status
@@ -101,6 +102,29 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
     /// a test hands in something else — `nil` from it is the panel being
     /// cancelled, which is the case ⌘D on an untitled note turns on.
     var savePanelProvider: ((Note) -> URL?)?
+
+    /// The export sheet, asked what the reader chose. The real sheet unless
+    /// a test hands in something else — `nil` from it is Cancel, and nothing
+    /// is written.
+    var exportSheetProvider: ((Note, [ExportTarget]) -> ExportChoice?)?
+
+    /// Where an export lands — File › Export…, the dump's Export button and
+    /// the table's own all come through `runExportSavePanel`, and all three
+    /// come through here in a test. The real dialog otherwise, the same way
+    /// `savePanelProvider` stands in for a note's own save; `nil` is the
+    /// dialog cancelled, and nothing is written.
+    var exportPanelProvider: ((_ suggestedName: String, _ extension: String) -> URL?)?
+
+    /// The print operation, handed the document it was built for, instead of
+    /// being run. The real thing is a sheet on the window; a test takes the
+    /// pair and asserts on the pages without a panel ever appearing.
+    var printOperationRunner: ((NSPrintOperation, PDFDocument) -> Void)?
+
+    /// True from the moment an export starts until it answers. A book, a
+    /// download and a TeX run all take long enough for a second ⇧⌘E to land
+    /// on top of the first, so File › Export… greys out while one is running
+    /// and the panes' own Export buttons refuse.
+    private(set) var isExporting = false
 
     private var preferences: Preferences { .shared }
     private var fontSize: CGFloat { preferences.fontSize }
@@ -1149,6 +1173,15 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         }
         previewColumn.onDropFiles = { [weak self] urls in
             self?.openDroppedFiles(urls)
+        }
+        // The dump's Export button, or the table's: a destination through the
+        // same save flow a Save As gets, with the extension pinned to `csv`.
+        previewColumn.onExportDestination = { [weak self] defaultName in
+            guard let self, !self.isExporting else { return nil }
+            return self.runExportSavePanel(
+                suggestedName: defaultName, extension: "csv",
+                existingFileURL: self.currentNote?.fileURL
+            )
         }
 
         installModeOverlay(previewModeOverlay, over: previewColumn)
@@ -2464,6 +2497,16 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         vimEngine.isEnabled = preferences.vimMode
     }
 
+    /// A word in the middle of the footer that stays there — a long export
+    /// saying where it has got to. Nothing takes it down but the next line or
+    /// the `updateStatus()` the export's completion calls, since a book that
+    /// takes a minute must not go quiet halfway through it.
+    func showFooterProgress(_ message: String) {
+        footerMessageWorkItem?.cancel()
+        footerMessageWorkItem = nil
+        statusLabel.stringValue = message
+    }
+
     /// A word in the middle of the footer for a few seconds, then back to the
     /// counts — where "Not an editor command" and vimrc errors land.
     func showFooterMessage(_ message: String) {
@@ -2947,6 +2990,236 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         alert.addButton(withTitle: L10n.text("Replace", chinese: "替换"))
         alert.addButton(withTitle: L10n.text("Cancel", chinese: "取消"))
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    // MARK: - Export
+
+    /// Whether File › Export… means anything on the tab in front — what the
+    /// menu greys the item out by. Every tab Nota can already write something
+    /// for says yes: a render, a listing, a rich-text document, a picture, a
+    /// book onto pages, a document into a book, a grid as CSV. An empty
+    /// window says no, and so does a window already busy exporting.
+    var canExportCurrentTab: Bool {
+        guard !isExporting, let note = currentNote else { return false }
+        return !Exporter.targets(for: note).isEmpty
+    }
+
+    /// ⇧⌘E. Ask what shape, ask where, write it, and open what was written
+    /// in a tab beside the source (SPEC "## Export").
+    ///
+    /// Available in every mode: the export is about the tab, not about which
+    /// half of it is on screen. Asynchronous throughout — a book, a page and
+    /// a `.tex` all answer through the run loop — so the window says what is
+    /// happening in the footer and refuses a second export until the first
+    /// one is done.
+    func exportCurrentTab() {
+        guard !isExporting, let note = currentNote else { return }
+        let targets = Exporter.targets(for: note)
+        guard !targets.isEmpty else { return }
+        guard let choice = runExportSheet(for: note, targets: targets) else { return }
+        // Answered once and remembered, the way the save panel's own format
+        // is: the next export opens on whichever way the pictures went last.
+        preferences.exportEditorImages = choice.images
+        guard let destination = runExportSavePanel(
+            suggestedName: exportName(for: note, target: choice.target),
+            extension: choice.target.fileExtension,
+            existingFileURL: note.fileURL
+        ) else { return }
+
+        isExporting = true
+        Exporter.export(
+            note, to: choice.target, at: destination,
+            context: exportContext(images: choice.images)
+        ) { [weak self] result in
+            guard let self else { return }
+            self.isExporting = false
+            self.updateStatus()
+            switch result {
+            case .success:
+                // Through the same door a file dropped on the strip comes in
+                // by, so the written file becomes whatever kind of tab it is,
+                // beside the tab it came from, selected.
+                self.open(url: destination)
+            case let .failure(error):
+                // A reader who pressed Cancel is told nothing: they know.
+                guard !Self.isCancellation(error) else { return }
+                // The quiet word in the footer every other failure that is
+                // not the reader's fault gets. Nothing here is worth an alert.
+                self.showFooterMessage(String(
+                    format: L10n.text("Couldn’t export “%@”."), destination.lastPathComponent
+                ))
+            }
+        }
+    }
+
+    /// The one error an export answers with that the window must stay silent
+    /// about: the reader closed the question rather than hit a wall.
+    private static func isCancellation(_ error: Error) -> Bool {
+        (error as? TeXExportError) == .cancelled
+    }
+
+    private func runExportSheet(for note: Note, targets: [ExportTarget]) -> ExportChoice? {
+        if let exportSheetProvider { return exportSheetProvider(note, targets) }
+        guard let window else { return nil }
+        let dialog = ExportDialog(targets: targets, images: preferences.exportEditorImages)
+        return dialog.runSheet(on: window)
+    }
+
+    /// What the export dialog opens on: the tab's own name with the target's
+    /// extension in place of the note's — a Markdown note exports as
+    /// `notes.pdf`, not as `notes.md`. A grid is the exception: the pane
+    /// already knows whether the reader is looking at a table or at a query
+    /// of their own, and names the file after that, so File › Export… →
+    /// Table (CSV) offers exactly what the pane's own Export button does.
+    private func exportName(for note: Note, target: ExportTarget) -> String {
+        if target == .csv, let name = csvExportName(for: note) { return name }
+        return SaveNameComposer.split(name: note.title).base + "." + target.fileExtension
+    }
+
+    private func csvExportName(for note: Note) -> String? {
+        switch previewColumn.content(for: note) {
+        case let sql as SQLPreviewView: return sql.defaultExportName()
+        case let csv as CSVPreviewView: return csv.defaultExportName()
+        default: return nil
+        }
+    }
+
+    /// Where an export lands: Nota's own Save dialog — the one Save and Save
+    /// As use, since SPEC Done 51 retired `NSSavePanel` from both — opened on
+    /// the name the caller composed with the extension pinned. The reader
+    /// picks a folder and a name; the kind of file is not theirs to change.
+    ///
+    /// The extension is not remembered as the last save extension: exporting
+    /// as PDF must not offer `pdf` the next time the note itself is saved.
+    /// The folder is, the same as any other save.
+    ///
+    /// One door for all three ways in — File › Export…, the dump's Export
+    /// button, the table's — so a test stubs `exportPanelProvider` once.
+    func runExportSavePanel(
+        suggestedName: String, extension ext: String, existingFileURL: URL?
+    ) -> URL? {
+        if let exportPanelProvider { return exportPanelProvider(suggestedName, ext) }
+        guard let window else { return nil }
+        let dialog = SaveDialog(
+            suggestedName: suggestedName,
+            existingFileURL: existingFileURL,
+            lastDirectory: preferences.lastSaveDirectory,
+            lastExtension: ext,
+            preferredExtension: ext
+        )
+        dialog.confirmReplace = { [weak self] url in self?.confirmReplace(url) ?? false }
+        guard let url = dialog.runSheet(on: window) else { return nil }
+        preferences.lastSaveDirectory = url.deletingLastPathComponent()
+        return url
+    }
+
+    /// What the export needs to know about this window: the editor's font and
+    /// paragraph shape, the store the chips' pictures live in, whether the
+    /// gutter is on, the pane the tab is being read through — for an exporter
+    /// whose answer is on screen rather than in the note, such as a dump's
+    /// rows — the window a prompt would be a sheet on, and where a long
+    /// export's running commentary goes.
+    private func exportContext(images: ExportImagePlacement) -> Exporter.Context {
+        var context = Exporter.Context(
+            font: preferences.font(),
+            paragraphStyle: preferences.paragraphStyle(),
+            assets: store.assets,
+            showsLineNumbers: preferences.showsLineNumbers,
+            images: images
+        )
+        context.previewContent = currentNote.map { previewColumn.content(for: $0) }
+        context.window = window
+        context.progress = { [weak self] message in self?.showFooterProgress(message) }
+        return context
+    }
+
+    // MARK: - Print
+
+    /// Whether File › Print… means anything on the tab in front.
+    ///
+    /// One rule: a tab prints if the first thing it would export is a PDF. A
+    /// note prints its render, a book prints its pages, a grid prints its
+    /// render too — the CSV is the tab's third target, not its first — and a
+    /// document, whose only target is the book it comes apart into, is the
+    /// one kind that answers this by printing itself instead.
+    ///
+    /// So with every exporter plugged in the answer is yes for every tab
+    /// there is, and no only for a window with no tab or one already busy
+    /// exporting. The rule is written out rather than shortened to `true`
+    /// because it is the rule, and a target added later will obey it.
+    var canPrintCurrentTab: Bool {
+        guard !isExporting, let note = currentNote else { return false }
+        if note.kind == .pdf { return true }
+        guard let first = Exporter.targets(for: note).first else { return false }
+        return first.fileExtension == "pdf"
+    }
+
+    /// ⌥⌘P. Make the PDF the tab's first export target would make, then hand
+    /// it to the system print dialog (SPEC "## Export", Print).
+    ///
+    /// The dialog *is* the preview — it shows the pages, the paper and the
+    /// range — so Nota puts nothing of its own in front of it. Every kind
+    /// goes the same way round, through a PDF in a temp file, with one
+    /// exception: a document tab is a PDF already and prints itself.
+    func printCurrentTab() {
+        guard canPrintCurrentTab, let note = currentNote else { return }
+
+        if note.kind == .pdf {
+            guard let document = note.pdfDocument else {
+                showFooterMessage(L10n.text("Nothing to print."))
+                return
+            }
+            runPrintOperation(for: document)
+            return
+        }
+
+        guard let target = Exporter.targets(for: note).first else { return }
+        let temporary = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Nota-Print-\(UUID().uuidString).pdf")
+
+        isExporting = true
+        Exporter.export(
+            note, to: target, at: temporary,
+            context: exportContext(images: preferences.exportEditorImages)
+        ) { [weak self] result in
+            guard let self else { return }
+            self.isExporting = false
+            self.updateStatus()
+            defer { try? FileManager.default.removeItem(at: temporary) }
+            switch result {
+            case .success:
+                guard let document = PDFDocument(url: temporary) else {
+                    self.showFooterMessage(L10n.text("Nothing to print."))
+                    return
+                }
+                self.runPrintOperation(for: document)
+            case let .failure(error):
+                guard !Self.isCancellation(error) else { return }
+                self.showFooterMessage(L10n.text("Nothing to print."))
+            }
+        }
+    }
+
+    /// The system print dialog, as a sheet, over the pages PDFKit made of the
+    /// document — no scaling and pages turned the way they were drawn, so
+    /// what comes out of the printer is what the export would have written.
+    ///
+    /// The document is held for as long as the operation runs: `PDFDocument`
+    /// owns the pages the print view draws, and a print that outlives its
+    /// document prints nothing.
+    private func runPrintOperation(for document: PDFDocument) {
+        guard let operation = document.printOperation(
+            for: NSPrintInfo.shared, scalingMode: .pageScaleNone, autoRotate: true
+        ) else {
+            showFooterMessage(L10n.text("Nothing to print."))
+            return
+        }
+        if let printOperationRunner {
+            printOperationRunner(operation, document)
+            return
+        }
+        guard let window else { return }
+        operation.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
     }
 
     /// No type filter: Notepad++ opens whatever you point it at, and the

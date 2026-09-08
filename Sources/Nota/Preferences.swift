@@ -216,6 +216,7 @@ final class Preferences {
         static let lastSaveDirectory = "lastSaveDirectory"
         static let lastSaveExtension = "lastSaveExtension"
         static let previousDefaultApps = "previousDefaultApps"
+        static let exportEditorImages = "exportEditorImages"
     }
 
     private let defaults: UserDefaults
@@ -640,6 +641,22 @@ final class Preferences {
         set {
             guard newValue != previousDefaultApps else { return }
             defaults.set(newValue, forKey: Key.previousDefaultApps)
+            announce()
+        }
+    }
+
+    /// Where an exported listing puts the note's pictures — in the text, or
+    /// as plates at the end (SPEC "## Export"). Asked in the export sheet and
+    /// remembered here, so the reader answers it once. Inline until they say
+    /// otherwise: that is where the note itself put them.
+    var exportEditorImages: ExportImagePlacement {
+        get {
+            defaults.string(forKey: Key.exportEditorImages)
+                .flatMap(ExportImagePlacement.init) ?? .inline
+        }
+        set {
+            guard newValue != exportEditorImages else { return }
+            defaults.set(newValue.rawValue, forKey: Key.exportEditorImages)
             announce()
         }
     }

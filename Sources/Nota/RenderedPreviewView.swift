@@ -124,7 +124,7 @@ class RenderedPreviewView: NSView, PreviewContent {
 
     /// Matched to the editor's own padding, so the two columns of text start
     /// the same distance from their edges.
-    var horizontalInset: CGFloat = 20 {
+    var horizontalInset: CGFloat = RenderStyle.previewHorizontalInset {
         didSet {
             guard horizontalInset != oldValue else { return }
             applyInsets()
@@ -151,7 +151,7 @@ class RenderedPreviewView: NSView, PreviewContent {
         PreviewFileDrop.accept(sender, by: onDropFiles)
     }
 
-    private static let verticalInset: CGFloat = 14
+    private static let verticalInset = RenderStyle.previewVerticalInset
 
     override init(frame frameRect: NSRect) {
         let storage = NSTextStorage()

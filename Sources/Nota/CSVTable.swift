@@ -356,6 +356,26 @@ struct CSVTable: Equatable {
                                     locale: .current)
     }
 
+    // MARK: - Export
+
+    /// The header and every row, in the order `ordering(sort)` gives — the
+    /// whole table, with no page cut out of it. A field is its text as read,
+    /// except a trailing one a ragged row never wrote at all: that comes
+    /// back `nil` rather than `""`, since the two are not the same field and
+    /// `CSVWriter` only knows to leave a `nil` out rather than write it
+    /// empty. `fieldSources[index].count` is how many fields that record
+    /// actually wrote, before `rows` padded it out to the table's width.
+    func exportRows(sort: Sort? = nil) -> (header: [String], rows: [[String?]]) {
+        let order = ordering(sort)
+        let exported: [[String?]] = order.map { index in
+            let written = fieldSources[index].count
+            return rows[index].enumerated().map { position, value in
+                position < written ? value : nil
+            }
+        }
+        return (columns, exported)
+    }
+
     /// Which page an offset actually lands on: a whole number of pages from
     /// the top, and never past the last row there is.
     static func clamp(offset: Int, total: Int) -> Int {
