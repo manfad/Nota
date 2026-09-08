@@ -1161,6 +1161,41 @@
   `SQLDumpDialect`. `Examples/sql/MySQL.sql` (a phpMyAdmin export) and `Examples/sql/PostgreSQL.sql` (a `pg_dump`
   export) are the same shop twice, with every spelling above in them, and the tests load both.
 
+### Export to CSV (done 2026-09-08) — shared by this section and the one below
+Both grids — the dump's and the table's — carry the same Export button, immediately before the pager on its leading
+side: `square.and.arrow.up`, tool tip "Export as CSV…" through `L10n`, disabled with nothing on screen to export.
+It asks the window for a destination pinned to `csv`
+(`MainWindowController.presentExportPanel(defaultName:extension:)`, a plain `NSSavePanel` rather than the Save
+dialog above — there is only a browser to pick a destination in and no Format to compose, which is the one thing
+that dialog's own header says a hand-built form has no business reimplementing; `exportPanelProvider` is the test
+seam beside `savePanelProvider`) and writes every row with the streaming half of `CSVWriter`, Nota's own RFC 4180
+writer and no dependency: `write(header:rows:) -> String` builds the whole file in memory for a caller that wants
+it that way, and the streaming pair `write(header:to:)` / `write(row:to:)` write straight to a `FileHandle` one row
+at a time, so a table of two hundred thousand rows is never held twice over — once as what was read, and again as
+the string a naive writer would build. A field is quoted only when it has to be — a comma, a double quote, a CR or
+LF, or a leading or trailing space — with an inner quote doubled the way `CSVTable` reads `""` back as one; a `nil`
+— a SQL `NULL`, or a ragged CSV row's own trailing field it never wrote that far into — is written as nothing at
+all rather than as a word, since the two are not the same field.
+
+The dump's pane exports the picked table, or the query's own result when the box is what the grid shows, in the
+grid's own sort order and every row rather than a page's hundred:
+`SQLDump.forEachRow(ofTable:sort:onColumns:onRow:)` / `forEachRow(ofQuery:sort:onColumns:onRow:)` take the same
+`ORDER BY` a page's read does and run the query under the same read-only authorizer the query box always has, with
+no `LIMIT` and none of `SQLQueryRewrite`'s rowid splice — an export has no cell to click back to the file, so
+there is nothing the splice would buy it. `onColumns` is called once, before `onRow` is called once per row, so
+the header is written before the first row is. Default name is `<table>.csv`, or `<dump's own file name>-query.csv`
+for a query. The table's own pane exports `CSVTable.exportRows(sort:)` — the header and every row in
+`ordering(sort)`'s order, a trailing field a ragged row never wrote coming back `nil` rather than `""`, read off
+how many fields `fieldSources` actually holds for that row before `rows` padded it out to the table's width.
+Default name is `<file base name>.csv`, so a `.tsv` becomes a `.csv` the same way its own read already treats it as
+a table rather than as text.
+
+A write that fails is said the same quiet way a failing run or a failing query already are in the dump's pane —
+`present(_:informative:)`, `alertOverrideForTesting` for the tests — and the table's pane grew the identical seam
+for it, since until now it had never had anything of its own to fail at. `SQLPreviewView.exportCSV(to:)` and
+`CSVPreviewView.exportCSV(to:)` are the plain, throwing functions behind the button, so a File menu item can reach
+either directly without going through the button at all.
+
 ## CSV preview (done 2026-09-06, Todo 27)
 - A `.csv` or `.tsv` file is a tab with a preview beside it, exactly the way a `.sql` is: the same three modes, the
   same floating mode control in each column's corner, ⌘P / ⇧⌘P and the View items, per tab and remembered in the
@@ -1247,6 +1282,7 @@
 - Untitled notes and every other extension have no table preview. Save As to `.csv` is what turns a note into one. A
   `.tsv` wears the `.csv` drawing in the strip. `Examples/Products.csv` is the demo: forty rows, quoted fields with
   commas and quotes in them, and one record written over two lines.
+- Export to CSV — see "Export to CSV" under SQL preview above, which the two panes share.
 
 ## Export (done 2026-09-08, Todo 1 — the two PDFs Nota writes itself)
 - File › Export…, ⇧⌘E (adjustable, `ShortcutAction.export`; ⌘E is the Mac's Use Selection for Find and stays where

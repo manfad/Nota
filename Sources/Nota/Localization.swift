@@ -243,6 +243,7 @@ enum L10n {
         "Minify %@": "精简 %@",
         "Not valid %@: line %d": "%@ 无效：第 %d 行",
         "Not valid %@: line %d — %@": "%@ 无效：第 %d 行 — %@",
+        "Export as CSV…": "导出为 CSV…",
     ]
 
     /// Taiwan/Hong Kong vocabulary, not a character-by-character conversion of
@@ -459,6 +460,7 @@ enum L10n {
         "Minify %@": "精簡 %@",
         "Not valid %@: line %d": "%@ 無效：第 %d 行",
         "Not valid %@: line %d — %@": "%@ 無效：第 %d 行 — %@",
+        "Export as CSV…": "匯出為 CSV…",
     ]
 
     /// Bahasa Melayu. A few entries are the English word itself — "Editor",
@@ -676,6 +678,7 @@ enum L10n {
         "Minify %@": "Kecilkan %@",
         "Not valid %@: line %d": "%@ tidak sah: baris %d",
         "Not valid %@: line %d — %@": "%@ tidak sah: baris %d — %@",
+        "Export as CSV…": "Eksport sebagai CSV…",
     ]
 
     /// Keys whose translation is legitimately the English word — Malay spells
