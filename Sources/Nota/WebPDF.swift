@@ -58,11 +58,12 @@ enum WebPDF {
 
     /// The margin a printed page keeps on every side.
     ///
-    /// The render's own inset is 20pt (`EditorPaddingOption.normal`), which is
-    /// the right air between a column of text and the edge of a window and far
-    /// too little between it and the edge of a sheet — half an inch is what a
-    /// printer can actually reach, and what every other document on the desk
-    /// has. So it is the render's inset rounded out to that.
+    /// The render's own inset is 20pt (`RenderStyle.previewHorizontalInset`),
+    /// which is the right air between a column of text and the edge of a
+    /// window and far too little between it and the edge of a sheet — half an
+    /// inch is what a printer can actually reach, and what every other
+    /// document on the desk has. So it is the render's inset rounded out to
+    /// that.
     static let margin: CGFloat = 36
 
     /// The paper this Mac prints on — Letter or A4, whichever the region

@@ -88,7 +88,6 @@ final class NotaTests: AppKitTestCase {
         XCTAssertEqual(preferences.fontFamily, .system)
         XCTAssertEqual(preferences.fontSize, 13)
         XCTAssertEqual(preferences.lineSpacing, .normal)
-        XCTAssertEqual(preferences.padding, .normal)
         XCTAssertEqual(preferences.fontDisplayName, "System")
         // Line numbers are on unless explicitly turned off.
         XCTAssertTrue(preferences.showsLineNumbers)
@@ -132,8 +131,6 @@ final class NotaTests: AppKitTestCase {
 
         XCTAssertEqual(LineSpacingOption.tight.multiple, 1.15)
         XCTAssertEqual(LineSpacingOption.relaxed.multiple, 1.5)
-        XCTAssertEqual(EditorPaddingOption.compact.inset, 12)
-        XCTAssertEqual(EditorPaddingOption.wide.inset, 40)
 
         // Sizes are clamped and rounded on the way in.
         preferences.fontSize = 200
@@ -189,9 +186,10 @@ final class NotaTests: AppKitTestCase {
             controller.rows(on: page).map(\.title)
         }
         XCTAssertEqual(titles(on: 0), ["Language", "Theme", "Open supported files in"])
-        XCTAssertEqual(titles(on: 1), ["Font", "Size", "Line spacing", "Padding", "Sidebar side"])
+        XCTAssertEqual(titles(on: 1), ["Font", "Size", "Line spacing", "Sidebar side"])
         XCTAssertEqual(titles(on: 2), ["Word wrap", "Line numbers", "Gutter separator",
-                                       "Highlight current line", "Vim mode"])
+                                       "Highlight current line", "Vim mode", "Line numbers",
+                                       "Gutter separator", "Highlight current line"])
         XCTAssertEqual(titles(on: 3), ["Show tab bar", "Auto-hide tab bar", "Traffic lights",
                                        "Bookmark button", "Bookmark dialog button",
                                        "Settings button"])
@@ -3084,34 +3082,29 @@ final class NotaTests: AppKitTestCase {
     func testTextSitsCloserToTheGutterWhileTheRightMarginKeepsTheSetting() throws {
         _ = NSApplication.shared
         let previousNumbers = Preferences.shared.showsLineNumbers
-        let previousPadding = Preferences.shared.padding
         defer {
             Preferences.shared.showsLineNumbers = previousNumbers
-            Preferences.shared.padding = previousPadding
         }
-        Preferences.shared.padding = .normal
         Preferences.shared.showsLineNumbers = true
 
         let directory = try makeTemporaryDirectory()
         let controller = MainWindowController(store: SessionStore(directory: directory))
         _ = controller.window
 
-        // Gutter on: 8pt off the numbers on the left, the setting on the right.
+        // Gutter on: 8pt off the numbers on the left, the plain 20pt margin
+        // on the right.
         XCTAssertTrue(controller.isGutterVisible)
         XCTAssertEqual(controller.horizontalTextInset, MainWindowController.gutterTextGap)
-        XCTAssertEqual(
-            controller.trailingTextInsetExtra,
-            EditorPaddingOption.normal.inset - MainWindowController.gutterTextGap
-        )
+        XCTAssertEqual(controller.trailingTextInsetExtra, 20 - MainWindowController.gutterTextGap)
         XCTAssertEqual(
             controller.editorParagraphStyle?.tailIndent,
-            -(EditorPaddingOption.normal.inset - MainWindowController.gutterTextGap)
+            -(20 - MainWindowController.gutterTextGap)
         )
 
-        // Gutter off: the plain symmetric padding, and no tail indent at all.
+        // Gutter off: the plain symmetric 20pt margin, and no tail indent at all.
         Preferences.shared.showsLineNumbers = false
         XCTAssertFalse(controller.isGutterVisible)
-        XCTAssertEqual(controller.horizontalTextInset, EditorPaddingOption.normal.inset)
+        XCTAssertEqual(controller.horizontalTextInset, 20)
         XCTAssertEqual(controller.trailingTextInsetExtra, 0)
         XCTAssertEqual(controller.editorParagraphStyle?.tailIndent, 0)
     }

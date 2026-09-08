@@ -45,7 +45,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let sizeField = NSTextField()
     private let sizeStepper = NSStepper()
     private let spacingPopUp = NSPopUpButton()
-    private let paddingPopUp = NSPopUpButton()
     private let languagePopUp = NSPopUpButton()
     private let themePopUp = NSPopUpButton()
     private let sidebarSidePopUp = NSPopUpButton()
@@ -53,6 +52,9 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let lineNumbersSwitch = NSSwitch()
     private let gutterSeparatorSwitch = NSSwitch()
     private let highlightCurrentLineSwitch = NSSwitch()
+    private let zenLineNumbersSwitch = NSSwitch()
+    private let zenGutterSeparatorSwitch = NSSwitch()
+    private let zenHighlightCurrentLineSwitch = NSSwitch()
     private let vimModeSwitch = NSSwitch()
     /// Editor / Split / Preview, on the General page — `PreviewMode.allCases`
     /// order. Not private: a test reaches it directly.
@@ -112,6 +114,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     /// The row whose switch only means anything while line numbers are on.
     private var gutterSeparatorRow: SettingsRowView?
+    /// Same, for the zen gutter separator and the zen "Line numbers" switch.
+    private var zenGutterSeparatorRow: SettingsRowView?
     /// Greyed while "Show tab bar" is off: a strip that is gone for good has
     /// nothing to slide in.
     private var autoHideTabBarRow: SettingsRowView?
@@ -399,7 +403,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         sizeStepper.action = #selector(sizeStepperChanged)
 
         for control in [wordWrapSwitch, gutterSeparatorSwitch, highlightCurrentLineSwitch,
-                        vimModeSwitch] {
+                        vimModeSwitch, zenGutterSeparatorSwitch, zenHighlightCurrentLineSwitch] {
             control.target = self
             control.action = #selector(editorSwitchChanged)
         }
@@ -425,6 +429,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         }
         lineNumbersSwitch.target = self
         lineNumbersSwitch.action = #selector(lineNumbersChanged)
+        zenLineNumbersSwitch.target = self
+        zenLineNumbersSwitch.action = #selector(zenLineNumbersChanged)
         showTabBarSwitch.target = self
         showTabBarSwitch.action = #selector(showTabBarChanged)
         statusBarSwitch.target = self
@@ -469,7 +475,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         resetShortcutsButton.bezelStyle = .rounded
         resetShortcutsButton.controlSize = .small
 
-        for popUp in [fontPopUp, spacingPopUp, paddingPopUp, languagePopUp, themePopUp,
+        for popUp in [fontPopUp, spacingPopUp, languagePopUp, themePopUp,
                       sidebarSidePopUp] {
             popUp.widthAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
         }
@@ -508,7 +514,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             row("Font", control: fontPopUp),
             row("Size", control: sizeField, trailing: sizeStack),
             row("Line spacing", control: spacingPopUp),
-            row("Padding", control: paddingPopUp),
             row("Sidebar side", control: sidebarSidePopUp),
         ]
         return page("Appearance", blocks: [groupBox(text)], rows: text)
@@ -524,7 +529,22 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             row("Highlight current line", control: highlightCurrentLineSwitch),
             row("Vim mode", control: vimModeSwitch),
         ]
-        return page("Editor", blocks: [groupBox(rows)], rows: rows)
+
+        // The same three switches again, consulted only while the window is
+        // in zen mode, so zen can be as bare or as furnished as the reader
+        // likes without touching the everyday trio above.
+        let zenSeparator = row("Gutter separator", control: zenGutterSeparatorSwitch)
+        zenGutterSeparatorRow = zenSeparator
+        let zenRows = [
+            row("Line numbers", control: zenLineNumbersSwitch),
+            zenSeparator,
+            row("Highlight current line", control: zenHighlightCurrentLineSwitch),
+        ]
+        return page(
+            "Editor",
+            blocks: [groupBox(rows), sectionHeading("Zen"), groupBox(zenRows)],
+            rows: rows + zenRows
+        )
     }
 
     private func tabBarPage() -> Page {
@@ -1117,8 +1137,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
         fill(spacingPopUp, with: LineSpacingOption.allCases.map { ($0.title, $0.rawValue) },
              action: #selector(lineSpacingChanged))
-        fill(paddingPopUp, with: EditorPaddingOption.allCases.map { ($0.title, $0.rawValue) },
-             action: #selector(paddingChanged))
         fill(languagePopUp, with: AppLanguage.allCases.map { ($0.title, $0.rawValue) },
              action: #selector(languageChanged))
         fill(themePopUp, with: AppTheme.allCases.map { ($0.title, $0.rawValue) },
@@ -1133,7 +1151,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         sizeStepper.doubleValue = Double(preferences.fontSize)
 
         select(spacingPopUp, raw: preferences.lineSpacing.rawValue)
-        select(paddingPopUp, raw: preferences.padding.rawValue)
         select(languagePopUp, raw: preferences.language.rawValue)
         select(themePopUp, raw: preferences.theme.rawValue)
         select(sidebarSidePopUp, raw: preferences.sidebarSide.rawValue)
@@ -1142,6 +1159,10 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         gutterSeparatorSwitch.state = preferences.showsGutterSeparator ? .on : .off
         gutterSeparatorRow?.isEnabled = preferences.showsLineNumbers
         highlightCurrentLineSwitch.state = preferences.highlightsCurrentLine ? .on : .off
+        zenLineNumbersSwitch.state = preferences.zenShowsLineNumbers ? .on : .off
+        zenGutterSeparatorSwitch.state = preferences.zenShowsGutterSeparator ? .on : .off
+        zenGutterSeparatorRow?.isEnabled = preferences.zenShowsLineNumbers
+        zenHighlightCurrentLineSwitch.state = preferences.zenHighlightsCurrentLine ? .on : .off
         let enabled = Set(preferences.footerSegments)
         for (segment, control) in footerSwitches {
             control.state = enabled.contains(segment) ? .on : .off
@@ -1265,11 +1286,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         apply { preferences.lineSpacing = spacing }
     }
 
-    @objc private func paddingChanged(_ sender: NSPopUpButton) {
-        guard let padding = rawValue(of: sender, as: EditorPaddingOption.self) else { return }
-        apply { preferences.padding = padding }
-    }
-
     /// Language and theme are the two that re-word the dialog itself, so both
     /// rebuild it once the preference is written.
     @objc private func languageChanged(_ sender: NSPopUpButton) {
@@ -1296,6 +1312,9 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             preferences.showsGutterSeparator = gutterSeparatorSwitch.state == .on
             preferences.highlightsCurrentLine = highlightCurrentLineSwitch.state == .on
             preferences.vimMode = vimModeSwitch.state == .on
+            preferences.zenShowsLineNumbers = zenLineNumbersSwitch.state == .on
+            preferences.zenShowsGutterSeparator = zenGutterSeparatorSwitch.state == .on
+            preferences.zenHighlightsCurrentLine = zenHighlightCurrentLineSwitch.state == .on
         }
     }
 
@@ -1486,6 +1505,11 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     @objc private func lineNumbersChanged(_ sender: NSSwitch) {
         gutterSeparatorRow?.isEnabled = sender.state == .on
+        editorSwitchChanged(sender)
+    }
+
+    @objc private func zenLineNumbersChanged(_ sender: NSSwitch) {
+        zenGutterSeparatorRow?.isEnabled = sender.state == .on
         editorSwitchChanged(sender)
     }
 

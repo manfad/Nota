@@ -71,26 +71,6 @@ enum PlainTextImageStyle: String, CaseIterable {
     }
 }
 
-enum EditorPaddingOption: String, CaseIterable {
-    case compact, normal, wide
-
-    var inset: CGFloat {
-        switch self {
-        case .compact: 12
-        case .normal: 20
-        case .wide: 40
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .compact: L10n.text("Compact")
-        case .normal: L10n.text("Normal")
-        case .wide: L10n.text("Wide")
-        }
-    }
-}
-
 /// Light, dark, or whatever the Mac is doing. Applied to the app as a whole
 /// through `NSApp.appearance`, so every window, panel and menu follows.
 enum AppTheme: String, CaseIterable {
@@ -183,10 +163,12 @@ final class Preferences {
         static let customFontName = "customFontName"
         static let fontSize = "fontSize"
         static let lineSpacing = "lineSpacing"
-        static let padding = "editorPadding"
         static let lineNumbers = "showsLineNumbers"
         static let gutterSeparator = "showsGutterSeparator"
         static let highlightsCurrentLine = "highlightsCurrentLine"
+        static let zenLineNumbers = "zenShowsLineNumbers"
+        static let zenGutterSeparator = "zenShowsGutterSeparator"
+        static let zenHighlightsCurrentLine = "zenHighlightsCurrentLine"
         static let wordWrap = "wrapsLines"
         static let sidebarSide = "sidebarSide"
         static let plainTextImageStyle = "plainTextImageStyle"
@@ -309,15 +291,6 @@ final class Preferences {
         }
     }
 
-    var padding: EditorPaddingOption {
-        get { defaults.string(forKey: Key.padding).flatMap(EditorPaddingOption.init) ?? .normal }
-        set {
-            guard newValue != padding else { return }
-            defaults.set(newValue.rawValue, forKey: Key.padding)
-            announce()
-        }
-    }
-
     /// Line numbers in the left gutter. On unless turned off.
     var showsLineNumbers: Bool {
         get { defaults.object(forKey: Key.lineNumbers) as? Bool ?? true }
@@ -347,6 +320,40 @@ final class Preferences {
         set {
             guard newValue != highlightsCurrentLine else { return }
             defaults.set(newValue, forKey: Key.highlightsCurrentLine)
+            announce()
+        }
+    }
+
+    /// The zen trio: the same three switches, but only consulted while the
+    /// window is in zen mode (Settings › Editor › Zen). All off by default,
+    /// so zen stays bare until asked otherwise.
+    var zenShowsLineNumbers: Bool {
+        get { defaults.object(forKey: Key.zenLineNumbers) as? Bool ?? false }
+        set {
+            guard newValue != zenShowsLineNumbers else { return }
+            defaults.set(newValue, forKey: Key.zenLineNumbers)
+            announce()
+        }
+    }
+
+    /// The zen gutter's hairline. Off by default, and meaningless with
+    /// `zenShowsLineNumbers` off — same relationship as the normal pair.
+    var zenShowsGutterSeparator: Bool {
+        get { defaults.object(forKey: Key.zenGutterSeparator) as? Bool ?? false }
+        set {
+            guard newValue != zenShowsGutterSeparator else { return }
+            defaults.set(newValue, forKey: Key.zenGutterSeparator)
+            announce()
+        }
+    }
+
+    /// The zen cursorline band. Off by default; vim's `:set cursorline`
+    /// still lights the same band in zen, independent of this.
+    var zenHighlightsCurrentLine: Bool {
+        get { defaults.object(forKey: Key.zenHighlightsCurrentLine) as? Bool ?? false }
+        set {
+            guard newValue != zenHighlightsCurrentLine else { return }
+            defaults.set(newValue, forKey: Key.zenHighlightsCurrentLine)
             announce()
         }
     }

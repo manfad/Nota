@@ -1419,21 +1419,37 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
     /// margin rather than the gutter plus a whole second padding.
     static let gutterTextGap: CGFloat = 8
 
-    var isGutterVisible: Bool { preferences.showsLineNumbers && !isZenMode }
+    /// The line-numbers switch that actually applies right now: the zen trio
+    /// while the window is in zen mode, the normal trio otherwise.
+    var effectiveShowsLineNumbers: Bool {
+        isZenMode ? preferences.zenShowsLineNumbers : preferences.showsLineNumbers
+    }
+
+    var effectiveShowsGutterSeparator: Bool {
+        isZenMode ? preferences.zenShowsGutterSeparator : preferences.showsGutterSeparator
+    }
+
+    var effectiveHighlightsCurrentLine: Bool {
+        isZenMode ? preferences.zenHighlightsCurrentLine : preferences.highlightsCurrentLine
+    }
+
+    var isGutterVisible: Bool { effectiveShowsLineNumbers }
 
     /// The container inset is symmetric, so this is the left margin; when the
-    /// gutter pulls it in, the right margin is kept at the setting through the
-    /// paragraph style instead (`trailingTextInsetExtra`).
+    /// gutter pulls it in, the right margin is kept at the plain 20pt margin
+    /// through the paragraph style instead (`trailingTextInsetExtra`). Zen
+    /// keeps its own wide padding regardless of the gutter — gutter plus 40pt
+    /// reads fine.
     var horizontalTextInset: CGFloat {
         if isZenMode { return Layout.zenTextPadding }
-        return isGutterVisible ? Self.gutterTextGap : preferences.padding.inset
+        return isGutterVisible ? Self.gutterTextGap : Layout.textPadding
     }
 
     /// The render's left and right margin. It has no gutter to make room for,
-    /// so it is simply the setting — and zen's wider one in zen, so that with
-    /// both columns on screen the two bodies of text line up.
+    /// so it is simply the plain margin — and zen's wider one in zen, so that
+    /// with both columns on screen the two bodies of text line up.
     var previewHorizontalInset: CGFloat {
-        isZenMode ? Layout.zenTextPadding : preferences.padding.inset
+        isZenMode ? Layout.zenTextPadding : RenderStyle.previewHorizontalInset
     }
 
     /// What the editor is typing with, for the tests.
@@ -1447,9 +1463,15 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         (scrollView, textView, textView.textContainer, editorVisibleWidth)
     }
 
-    /// How much further in the right margin sits than the left.
+    /// How much further in the right margin sits than the left. Not in zen:
+    /// there the base inset is already `Layout.zenTextPadding` on both sides
+    /// (no gutter eats into it from the right), so the zen padding is matched
+    /// with no extra needed even when the zen gutter is on. With the gutter
+    /// showing outside zen, the right margin is still the plain 20pt text
+    /// padding, so this makes up the difference from the gutter's own gap.
     var trailingTextInsetExtra: CGFloat {
-        isGutterVisible ? max(0, preferences.padding.inset - Self.gutterTextGap) : 0
+        guard isGutterVisible, !isZenMode else { return 0 }
+        return max(0, Layout.textPadding - Self.gutterTextGap)
     }
 
     private func applyEditorInsets() {
@@ -1459,11 +1481,12 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
     }
 
     fileprivate func applyLineNumberVisibility() {
-        // The gutter is chrome, so zen hides it whatever the setting says.
-        scrollView.rulersVisible = preferences.showsLineNumbers && !isZenMode
-        lineNumberRuler?.showsSeparator = preferences.showsGutterSeparator
+        // Zen consults its own trio (Settings › Editor › Zen) instead of the
+        // normal one while the window is in zen mode.
+        scrollView.rulersVisible = effectiveShowsLineNumbers
+        lineNumberRuler?.showsSeparator = effectiveShowsGutterSeparator
         lineNumberRuler?.setFontSize(preferences.fontSize)
-        textView.highlightsCurrentLine = preferences.highlightsCurrentLine
+        textView.highlightsCurrentLine = effectiveHighlightsCurrentLine
         applyEditorInsets()
     }
 

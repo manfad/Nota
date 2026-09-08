@@ -156,7 +156,7 @@
   "182 字 · 1860 字符", "182 字 · 1860 字元", "182 perkataan · 1860 aksara" — one word for one and for many,
   since neither Chinese nor Malay has a plural; and a new tab is 无标题 / 未命名 (Untitled 2, 无标题 2) while
   Malay keeps Untitled. A name a tab already has stays when the language changes (2026-09-07). **Appearance** — font family, size, line
-  spacing, editor padding, sidebar side (Left / Right, default Right). **Tab bar** — a first group of "Show tab bar" and "Auto-hide tab bar", then a
+  spacing, sidebar side (Left / Right, default Right). **Tab bar** — a first group of "Show tab bar" and "Auto-hide tab bar", then a
   second group for what the strip shows: Traffic lights, Bookmark button, Bookmark dialog button, Settings
   button; no footnote — the keys (⌘T, ⇧⌘J, ⌘D, ⇧⌘D, ⌘, and ⌘W) all keep working with the strip and its
   buttons hidden, but the page does not say so. "Bookmark dialog button" keeps the older
@@ -166,7 +166,9 @@
   there is nothing left for either row to do. Whenever the lights are gone from their corner, the strip
   takes their slot, starting at the same 12pt inset it uses beside a left sidebar; a tab torn off from it
   is placed under the pointer by the strip's current inset, not always the lights' 82pt.
-  **Editor** — word wrap, line numbers, gutter separator, highlight current line, vim mode. **Preview** — start supported files
+  **Editor** — word wrap, line numbers, gutter separator, highlight current line, vim mode, then a Zen group of its
+  own — line numbers, gutter separator, highlight current line, consulted only while the window is in zen mode
+  (see "## Zen mode"), all off by default. **Preview** — start supported files
   in preview mode. **Status bar** — show status bar, then which regions it shows. **Shortcuts** — Summon
   first, then the menu commands under the menu each lives in; the sentence explaining Summon ("Summon
   brings Nota to the front from any app, even while it is hidden.") is not a footnote under the group but
@@ -368,8 +370,8 @@
   Arrow and page keys scroll the render, and ⌘F searches the render itself, opening Nota's own find bar in the corner
   over it; the render's own mode control drops below that bar while it is up and stays one hover away. The keyboard
   belongs to the render in reading mode, and to the editor in the other two.
-- Zen takes the chrome and leaves the columns: the tab strip, status bar, gutter, image sidebar and both mode controls
-  go, and the mode the tab is in does not change. Split keeps both panes side by side, at the divider they were left at;
+- Zen takes the chrome and leaves the columns: the tab strip, status bar, image sidebar and both mode controls
+  go (the gutter goes too by default, but Settings › Editor › Zen can bring it back for zen alone), and the mode the tab is in does not change. Split keeps both panes side by side, at the divider they were left at;
   the editor mode is the text alone; reading is the render alone. In split each column's top edge is then the window's
   own: nothing is held back for the traffic lights (they are gone), a 12pt drag band lies over each column's top
   padding, and both use zen's wider 40pt margin, so the two bodies of text line up. Coming out of zen brings the chrome back and nothing else.
@@ -1723,10 +1725,17 @@ with nothing else to wire.
   tests pin it.
 
 ## Zen mode
-- ⌥⌘Z toggles: tab strip, traffic lights, status bar, line-number gutter, image sidebar and the Markdown mode controls all
-  hide; what is left is the note itself — the text (same font/width, padding grows to 40pt), or in split the text and the
+- ⌥⌘Z toggles: tab strip, traffic lights, status bar, image sidebar and the Markdown mode controls all
+  hide; what is left is the note itself — the text (same font/width, margin grows to 40pt on both sides), or in split the text and the
   render still side by side, or in reading the render alone. ⌘ shortcuts still work (⌘T, ⌘W, ⌘P, ⌘B forces the sidebar back for that note).
   Remembered per session; combine with ⌃⌘F for full screen if wanted.
+- The gutter is its own question in zen: Settings › Editor › Zen carries a second trio — line numbers, gutter
+  separator, highlight current line (`Preferences.zenShowsLineNumbers` / `zenShowsGutterSeparator` /
+  `zenHighlightsCurrentLine`) — consulted instead of the everyday trio while the window is in zen mode
+  (`MainWindowController.effectiveShowsLineNumbers` / `effectiveShowsGutterSeparator` / `effectiveHighlightsCurrentLine`).
+  All three default off, so zen starts bare regardless of what the everyday editor shows; turning the zen gutter on
+  does not touch the margin — it stays 40pt on both sides even with the zen gutter showing, since zen's own wide
+  padding already clears it.
 
 ## Images
 - The store: originals in `<support>/assets/<uuid>.<ext>`, which is what the editor, the chips, the sidebar and the
@@ -1909,6 +1918,18 @@ with nothing else to wire.
    as shells and read on selection or in an idle pass.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+68. **Zen gets its own gutter trio, and the Padding setting is gone (done 2026-09-08).** Settings › Editor now ends
+    in a Zen group — line numbers, gutter separator, highlight current line (`Preferences.zenShowsLineNumbers` /
+    `zenShowsGutterSeparator` / `zenHighlightsCurrentLine`), all off by default — consulted instead of the everyday
+    trio whenever the window is in zen mode (`MainWindowController.effectiveShowsLineNumbers` /
+    `effectiveShowsGutterSeparator` / `effectiveHighlightsCurrentLine`, read wherever the plain preferences used to
+    be); the everyday trio is untouched and zen's own 40pt margin holds on both sides regardless of whether its
+    gutter is on. Alongside it, Settings › Appearance's Padding popup (Compact / Normal / Wide) is gone — it never
+    did a visible job: the gutter, when shown, already pinned the left margin at 8pt (`gutterTextGap`) regardless of
+    the setting, and zen already forced its own 40pt over it. The editor's horizontal margin is now three plain
+    numbers with nothing to configure: 8pt off the gutter when line numbers show, 20pt without the gutter, 40pt in
+    zen on both sides; the preview column keeps its own 20pt (`RenderStyle.previewHorizontalInset`) outside zen and
+    40pt in zen, as before. `EditorPaddingOption` and the stored `editorPadding` default are gone; nothing migrates.
 67. **Oracle and SQL Server exports load too (done 2026-09-08, first pass).** Beside `mysqldump`, phpMyAdmin and
     `pg_dump`, a `.sql` written by SSMS ("Generate Scripts") or by SQL Developer / SQL*Plus now runs into the same
     in-memory SQLite, so every query, the completion and the jump work over it unchanged. Both are told apart from
