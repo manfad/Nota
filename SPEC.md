@@ -735,6 +735,39 @@
 - Footer: the middle counts pages (`12 pages`, `1 page`), the right says which one (`Page 3 of 12`), and it is empty
   when there is no document to be in. Everything else in the chrome — the strip, the vim badge, zen — is unchanged.
 
+### Export as EPUB (done 2026-09-08, Todo 1)
+- A PDF exports as a reflowable EPUB 3 — the thing a Kindle or Books actually wants. Reflowable, not a photograph of
+  the paper: every line in a PDF was placed where the typesetter put it on a sheet of a fixed size, and a phone
+  showing that sheet is showing a picture of a page. So the sheet is thrown away and the sentences are kept.
+- Chapters are the document's outline, which is the only place a PDF says where its parts begin: one chapter per
+  top-level bookmark, running to the page the next one starts on. Bookmarks nested inside become `<h2>` / `<h3>` at
+  the page they land on. The pages before the first bookmark — a cover, a title page — go into the first chapter
+  rather than into a chapter with no name. A document with no outline is a document nobody divided: one chapter per
+  page, titled `Page 3` in the app's own language.
+- Paragraphs are rebuilt out of the lines `PDFPage.string` hands back, since a PDF has none of its own: a blank line
+  ends one, a line indented past the rest of the page starts one, and a line that ends a sentence, stops well short
+  of the column's width, and is followed by something that begins one — a capital, a digit, an opening quote, a CJK
+  character — ends one too. All three conditions of that last rule have to hold: a capital after a full stop is not
+  enough on its own, because a line that wrapped mid-sentence often starts with a name.
+- A word the typesetter broke across two lines is put back together only when the second half starts in lower case,
+  or when the whole word joined up is written somewhere else on the same page. `well-known` broken after its own
+  hyphen keeps it.
+- Two CJK characters either side of a line break are joined with nothing between them, the way the language is
+  written; two Latin words get their space.
+- A scan is refused rather than exported: fewer than one page in twenty carrying any text at all and the answer is
+  `This PDF has no text to read — it is probably a scan.` A file PDFKit will not open at all — a `.pdf` that is
+  really a text file — is `This file is not a PDF.` Neither writes anything.
+- Written the way the specification insists: `mimetype` first and stored, `META-INF/container.xml`,
+  `OEBPS/content.opf` (dc:title, a `urn:uuid` identifier, dc:language, manifest, spine), `nav.xhtml` for EPUB 3 and
+  `toc.ncx` as well for the older Kindle tools, one XHTML per chapter, and a small stylesheet that sets only the
+  little a reading system will not — a reflowable book belongs to whoever is reading it. `/usr/bin/zip` packs it, no
+  zip library, the same argument `EPUBBook` makes for `ditto`. What comes out opens in Nota's own reader.
+- `dc:language` is the document's own `/Lang` where it has one and what `NLLanguageRecognizer` makes of the first
+  pages otherwise: a reading system told a book is Chinese picks a font that can draw it, and one told `en` does not.
+- Out of scope for this pass: the pictures inside the pages — a PDF's images are placed rather than flowed, and
+  lifting one out means deciding where in a reflowed paragraph it belongs — and bold and italic, which come back as
+  plain text. Running heads and folios are part of the text layer and come through with it.
+
 ## RTF (done 2026-09-05, Todo 26)
 - A rich-text document opens in a tab of its own and is read there, the fourth viewer after a PDF, a picture and a
   book. The bytes decide, not the name: `{\rtf` at the front of a file is rich text whatever the file is called, so
@@ -780,6 +813,24 @@
   characters`), because rich text is words on a page; the right is empty, since there is no caret behind it and no
   page to be on, and so are the encoding and line-ending badges.
 - Print goes with Todo 1.
+
+### Export as PDF (done 2026-09-08, Todo 1)
+- A book exports as a PDF: every chapter printed the way it is read, bound end to end in spine order, the book's own
+  contents as the document's outline and its title as the document's title.
+- The printing is WebKit's, not Nota's. A chapter is XHTML with the book's stylesheets, fonts and pictures beside it,
+  and the only honest picture of it is the one on screen — so each chapter is loaded into an offscreen web view under
+  `nota-file://`, through the same `PageFiles` handler the column reads it with, printed to a sheet of its own, and
+  the sheets are merged by PDFKit at the end.
+- Always the light page. A book is *read* in Nota's dark, and paper has no appearance to follow: the export pins the
+  window and the view to Aqua and the reader stylesheet is not injected at all.
+- One chapter at a time. Two WebKit print operations at once is where WebKit stops being reliable, so the chapters
+  queue and the merge happens when the last one lands.
+- Each contents line becomes an outline entry pointing at the first page of the chapter it names, nested the way the
+  contents are nested. An entry naming an `#anchor` partway into a chapter lands on the chapter: where in a printed
+  sheet that anchor ended up is not something the PDF knows.
+- A chapter that will not print — a file missing from the unpacked folder, XHTML WebKit refuses, a page that never
+  finishes loading — is left out and the book goes on without it. The export fails only when nothing at all printed
+  (`Nothing in this book could be printed.`), which is the one case with no PDF to write.
 
 ## Image tabs (decided 2026-09-04)
 - A picture opens in a tab of its own and is looked at there, the way a PDF is read in one: PNG, JPEG, GIF, TIFF,
@@ -977,6 +1028,25 @@
   file URL renders with every stylesheet and picture beside it silently missing. A link the reader clicks becomes a
   `file://` URL again on its way to the browser. The page reports its own scroll on each frame, so a reload puts the
   reader back where they were.
+
+### Export as PDF (done 2026-09-08, Todo 1)
+- A page exports as a PDF, paginated. Three doors: the file, the text in the editor — an unsaved edit is the page,
+  the same way the preview is — and a web view that already holds one, which is what the page on screen is.
+- WebKit's print operation, never `createPDF`. `createPDF` renders the viewport once, as a single sheet of whatever
+  size the view happens to be, so a long page comes back as one enormous page. Printing is the only path in WebKit
+  that breaks a page into pages, and it breaks it where the page's own CSS says.
+- The paper is `NSPrintInfo.shared`'s — Letter or A4, whichever the region says — with half an inch of margin on
+  every side. The render's own 20pt inset is the right air between a column of text and the edge of a window and far
+  too little between it and the edge of a sheet, so it is that inset rounded out to what a printer can reach.
+- The web view is in a transparent borderless window parked 20,000pt off every display, at the paper's printable
+  width. It has to be in a window with a real frame: a view of no size lays nothing out, and WebKit prints nothing
+  at all.
+- A minute, and then it gives up. A page whose script never returns never finishes loading, and there is no callback
+  for that — only the clock: `The page took too long to print.` The limit is an argument, which is how a test asks
+  for one it can wait out.
+- Both panels off and the job saved to a file rather than sent to a printer (`jobDisposition = .save`,
+  `jobSavingURL`), and one job at a time through a queue of Nota's own: two WebKit print operations in flight
+  together is where the second one comes back empty.
 
 ## SQL preview (done 2026-09-05, Todo 6; second pass 6-A; third pass 6-B; the query's jump 6-C)
 - A `.sql` file is a tab with a preview beside it, the way a `.md` is: the same three modes, the same floating mode

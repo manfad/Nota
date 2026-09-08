@@ -33,6 +33,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | LaTeX render | `LaTeXParser.swift` → `LaTeXRenderer.swift`; formulas `MathParser.swift` + `MathLayout.swift` |
 | Preview column plumbing (which view shows, zoom, scroll memory) | `PreviewPaneView.swift`, `PreviewContent.swift`, `RenderedPreviewView.swift` |
 | PDF / picture / HTML / EPUB / RTF viewer tabs | `PDFPreviewView.swift`, `ImagePreviewView.swift`, `HTMLPreviewView.swift`, `EPUBPreviewView.swift` + `EPUBBook.swift`, `RTFPreviewView.swift` |
+| Converting between the things Nota reads: a book or a page printed as a PDF, a PDF read back as a book | `WebPDF.swift` (WebKit's print operation, headless), `EPUBToPDF.swift` (chapters printed and bound), `PDFToEPUB.swift` (a text layer reflowed into EPUB 3) |
 | A `.sql` dump's grid: running it, paging it, sorting it, picking cells out of it, ⌘F over it | `SQLPreviewView.swift` (the pane), `SQLGridView.swift` (the grid, its header and its cells), `SQLQueryBox.swift` (the query editor), `SQLDump.swift` (the database), `SQLDumpDialect.swift` (a MySQL or Postgres dump made SQLite's), `SQLSourceMap.swift` (which line of the file a row was written on, and where in it a cell's own value is), `SQLQueryRewrite.swift` (the rowid spliced into a query so its rows point at the file too), `GridFindSession.swift` (⌘F over the grid; `SQLDump.hits` is the one statement that answers it) |
 | A `.csv` / `.tsv` file's grid: reading it, paging it, sorting it, ⌘F over it | `CSVPreviewView.swift` (the pane, over `SQLGridView`), `CSVTable.swift` (the RFC 4180 reader, `ordering` — the order the grid and its ⌘F walk — and where each record and each field of it is written) |
 | The Export button on a `.sql` or `.csv` grid, or the CSV a table writes out | `CSVWriter.swift` (the RFC 4180 writer, in-memory and streaming), `SQLDump.forEachRow` / `CSVTable.exportRows` (every row, in the grid's sort order, no page cut out of it), `SQLPreviewView.exportCSV(to:)` / `CSVPreviewView.exportCSV(to:)` (the plain functions behind the button), `MainWindowController.presentExportPanel` / `exportPanelProvider` (the destination, pinned to `csv`) |
@@ -241,6 +242,20 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   pointing at the wrong one. Pure; no WebKit.
 - `PDFPreviewView.swift` (~600) — PDFKit viewer tab, `reveal(page:range:query:)` for a ⇧⌘F hit, and `PDFPageThumbnails` (pages drawn small on one serial queue, from a second `PDFDocument` of the file, cached per document for the sidebar's page list). No outline: a PDF's sidebar is its pages. `ImagePreviewView.swift` (~240) — picture tab.
 - `EPUBBook.swift` (~490) — unpack (ditto), container/OPF/spine/nav/NCX parsing, `contentsEntries`, `contentsLine(ofChapter:)`, `words(ofChapter:)` (the chapter's text with the markup left behind, block elements on lines of their own — what ⇧⌘F searches a book by). `EPUBPreviewView.swift` (~300) — chapter viewer; no floating chapter bar.
+- `WebPDF.swift` (~410) — a page printed to a PDF file, headless: `NSPrintOperation` from `WKWebView` (never
+  `createPDF`, which renders one viewport-sized sheet), both panels off, the job saved to `jobSavingURL`, the view
+  in a transparent borderless window parked off every display at the paper's printable width, `readyState` polled
+  and a short settle for pictures, a timeout that fails with a sentence, and one job at a time through its own
+  queue. Three doors: a file, a string of HTML with a base URL, and a web view that already holds the page.
+- `EPUBToPDF.swift` (~170) — a book as a PDF: each spine chapter loaded under `nota-file://` and printed by
+  `WebPDF`, the sheets merged by PDFKit in spine order, `contentsEntries` rebuilt as the document's `PDFOutline`
+  and the book's title as its title. A chapter that will not print is left out; only a book where nothing printed
+  fails.
+- `PDFToEPUB.swift` (~560) — a PDF as a reflowable EPUB 3: chapters from `outlineRoot` (or a chapter per page
+  where there is none), paragraphs rebuilt out of `PDFPage.string`'s lines (blank line, indent, or a short line
+  that ends a sentence), hyphens healed conservatively, CJK joined without a space, a scan refused, `dc:language`
+  from `/Lang` or `NLLanguageRecognizer`, and `mimetype` / `container.xml` / `content.opf` / `nav.xhtml` /
+  `toc.ncx` / one XHTML per chapter zipped by `/usr/bin/zip` with the stored `mimetype` first. Pure; no AppKit.
 - `RTFPreviewView.swift` (~430) — the rich-text viewer tab: `NSAttributedString(url:…)` into a read-only, selectable
   `NSTextView` at the editor's margin, the document's own fonts and colours kept (black body text swapped for
   `labelColor`), `TextFindSession` for ⌘F, and a zoom that scales every font, paragraph measurement and attachment.
@@ -405,6 +420,12 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   the disabled cases (unterminated comment, unclosed tag or quote, unclosed raw element, nesting past 256).
 - `HTMLPreviewTests.swift` (which also covers a press in the page revealing its tag, and a page the tokeniser will
   not read having no map), `PDFTests.swift`, `ImageTests.swift`, `EPUBTests.swift`, `RTFTests.swift` — the viewer tabs, including the sidebar each of them fills (an RTF has none) and the ⇧⌘F hit each of a document and a book answers with (`PDFTests`, `EPUBTests`). `PDFTests` covers the page list: the title over it, the cards and their captions, a click going to a page, the ring following the pages, the thumbnails landing off a background queue, two documents of the same length not sharing a list, and a document with bookmarks listing pages just the same.
+- `BookExportTests.swift` (8) — the three conversions, over the real files in `Examples/`: `Book.epub` printed to a
+  PDF with a sheet per chapter, the contents as its outline and chapter one on page one; `燈籠.epub` keeping its
+  characters; `Demo.pdf` and `Demo-zh.pdf` read back as books Nota's own `EPUBBook.open` opens, with a chapter per
+  bookmark and the document's own words in them; `fake.pdf` and a blank page refused with their sentences;
+  `HTML.html` printed and a page taller than a sheet broken across two; and a page whose script never returns
+  failing on the clock, with the limit handed in so the test does not wait a minute for it.
 - `GridFindTests.swift` (22) — ⌘F over a grid, and what a selection in one shows the editor, both panes: the pill and its `canReplace`, the count and its
   wording, case and diacritics, the bands through `grid.highlight(row:column:)`, ⌘G wrapping both ways, a match on
   the second page turning the page and landing the cursor, the editor's caret following it, Escape keeping the
