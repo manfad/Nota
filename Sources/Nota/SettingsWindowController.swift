@@ -55,7 +55,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let zenLineNumbersSwitch = NSSwitch()
     private let zenGutterSeparatorSwitch = NSSwitch()
     private let zenHighlightCurrentLineSwitch = NSSwitch()
-    private let vimModeSwitch = NSSwitch()
     /// Editor / Split / Preview, on the General page — `PreviewMode.allCases`
     /// order. Not private: a test reaches it directly.
     let openingModeControl = NSSegmentedControl()
@@ -403,7 +402,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         sizeStepper.action = #selector(sizeStepperChanged)
 
         for control in [wordWrapSwitch, gutterSeparatorSwitch, highlightCurrentLineSwitch,
-                        vimModeSwitch, zenGutterSeparatorSwitch, zenHighlightCurrentLineSwitch] {
+                        zenGutterSeparatorSwitch, zenHighlightCurrentLineSwitch] {
             control.target = self
             control.action = #selector(editorSwitchChanged)
         }
@@ -527,7 +526,9 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             row("Line numbers", control: lineNumbersSwitch),
             separator,
             row("Highlight current line", control: highlightCurrentLineSwitch),
-            row("Vim mode", control: vimModeSwitch),
+            // Vim mode has no row: the engine stays, and `Preferences.vimMode`
+            // still honours `defaults write com.manfad.nota vimMode -bool YES`,
+            // but the switch is shelved for 2.0 (SPEC Todo).
         ]
 
         // The same three switches again, consulted only while the window is
@@ -1182,7 +1183,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         openingModeControl.selectedSegment = PreviewMode.allCases.firstIndex(
             of: preferences.openingMode
         ) ?? 0
-        vimModeSwitch.state = preferences.vimMode ? .on : .off
         showTabBarSwitch.state = preferences.hidesTabBar ? .off : .on
         autoHideTabBarSwitch.state = preferences.autoHidesTabBar ? .on : .off
         autoHideTabBarRow?.isEnabled = !preferences.hidesTabBar
@@ -1311,7 +1311,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             preferences.showsLineNumbers = lineNumbersSwitch.state == .on
             preferences.showsGutterSeparator = gutterSeparatorSwitch.state == .on
             preferences.highlightsCurrentLine = highlightCurrentLineSwitch.state == .on
-            preferences.vimMode = vimModeSwitch.state == .on
             preferences.zenShowsLineNumbers = zenLineNumbersSwitch.state == .on
             preferences.zenShowsGutterSeparator = zenGutterSeparatorSwitch.state == .on
             preferences.zenHighlightsCurrentLine = zenHighlightCurrentLineSwitch.state == .on

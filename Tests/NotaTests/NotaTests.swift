@@ -188,7 +188,7 @@ final class NotaTests: AppKitTestCase {
         XCTAssertEqual(titles(on: 0), ["Language", "Theme", "Open supported files in"])
         XCTAssertEqual(titles(on: 1), ["Font family", "Font size", "Line spacing", "Sidebar side"])
         XCTAssertEqual(titles(on: 2), ["Word wrap", "Line numbers", "Gutter separator",
-                                       "Highlight current line", "Vim mode", "Line numbers",
+                                       "Highlight current line", "Line numbers",
                                        "Gutter separator", "Highlight current line"])
         XCTAssertEqual(titles(on: 3), ["Show tab bar", "Auto-hide tab bar", "Traffic lights",
                                        "Bookmark button", "Bookmark dialog button",

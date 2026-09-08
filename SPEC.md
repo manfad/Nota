@@ -166,7 +166,7 @@
   there is nothing left for either row to do. Whenever the lights are gone from their corner, the strip
   takes their slot, starting at the same 12pt inset it uses beside a left sidebar; a tab torn off from it
   is placed under the pointer by the strip's current inset, not always the lights' 82pt.
-  **Editor** — word wrap, line numbers, gutter separator, highlight current line, vim mode, then a Zen group of its
+  **Editor** — word wrap, line numbers, gutter separator, highlight current line, then a Zen group of its
   own — line numbers, gutter separator, highlight current line, consulted only while the window is in zen mode
   (see "## Zen mode"), all off by default. **Preview** — start supported files
   in preview mode. **Status bar** — show status bar, then which regions it shows. **Shortcuts** — Summon
@@ -1861,7 +1861,11 @@ with nothing else to wire.
   tab, with a key recorder and Clear. No menu-bar item. It is a key *code*, not a key equivalent — Carbon
   registers a system-wide hotkey by position — which is why it is stored apart from the app shortcuts below it.
 
-## Vim mode (Settings checkbox, off by default)
+## Vim mode (shelved 2026-09-09; no switch in Settings, see Todo 5)
+- The whole engine below is still built and tested, and `Preferences.vimMode` is still honoured — `defaults write
+  com.manfad.nota vimMode -bool YES` turns it on — but Settings › Editor no longer offers the switch. Decided
+  2026-09-09 after a week on it: people who live in vim do not reach for a GUI editor, so the mode was not earning
+  its row. It comes back, with a page of its own, if 2.0 happens.
 - The footer badge stands in for the vim mode while there is no editor in front (decided 2026-09-05): it reads
   `Read-only` over a PDF, a picture, a book or an RTF and `Reading` over a note in reading mode, and it is shown there
   whether vim is on or off; the pending-keys label stays away with it. Split and the editor give the word back to vim
@@ -1906,6 +1910,11 @@ with nothing else to wire.
 - Created-date header, git/auto-commit, theming, menu-bar icon, collapse/expand images, jk escape, app icon (for now).
 
 ## Todo (in rough priority)
+5. **2.0: vim mode back, on a page of its own.** The engine and its tests never left (see "## Vim mode"); what is
+   missing is the Settings page — Vim mode, then the insert-mode caret (Bar / Block / Underline), greyed while vim is
+   off — and vim taking the editor to a monospaced font while it is on and putting the font back after. The caret
+   shapes and the font swap were built and shelved in the stash "caret shape + vim monospaced swap, shelved for
+   2.0" on 2026-09-09; a block caret on Serif or Rounded read as a bug, which is why the font goes with the mode.
 2. **Ship it, signed.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on
    another Mac without the Gatekeeper allow-once dance (see Done 28 for the ad-hoc release itself).
 3. **Tab strip overflow chevron.** The one piece of the Chromium strip still open (Done 15-A): a chevron at the

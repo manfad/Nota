@@ -60,7 +60,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | File changed on disk | `FileWatcher.swift`, handling in `MainWindowController` "External changes" |
 | Search all tabs (⇧⌘F): text, a PDF's pages, a book's chapters | `NoteSearch.swift` (the search itself), what each tab hands it `Note.searchSource`, dialog in `TabPickerPanel.swift`, revealing a hit `MainWindowController` "Search across tabs" |
 | Global summon hotkey | `GlobalHotKey.swift`, recorder `ShortcutRecorderField.swift` |
-| Vim | `Vim/` (see below) |
+| Vim (engine only; the Settings switch is shelved for 2.0, `defaults write com.manfad.nota vimMode -bool YES` turns it on) | `Vim/` (see below) |
 | Big files, spell check | `BigFile.swift`, `SpellCheckPolicy.swift` |
 | Task lists `- [ ]` | `TaskList.swift` |
 | Return continuing a list (`1.` → `2.`, `a.` → `b.`, `- [ ]`) | `ListContinuation.swift` |
