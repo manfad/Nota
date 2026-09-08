@@ -114,11 +114,18 @@ final class CSVPreviewView: NSView, PreviewContent {
     /// Run when a table has landed — for the tests, which have no other way
     /// to wait for a background read.
     var onDidFinish: (() -> Void)?
-    /// Asked for a destination when the Export button is pressed — the
-    /// window's own save flow, pinned to `csv`. `nil` back is the panel
-    /// cancelled, and nothing is written. Nothing in the app sets it
-    /// directly: `PreviewPaneView` wires it to `runExportSavePanel`.
-    var exportDestination: ((_ defaultName: String) -> URL?)?
+    /// Asked where the export is going when the `Export CSV` button is
+    /// pressed, and which of the columns are going into it — the table's own
+    /// header rides along, since the dialog lists it. `nil` back is the
+    /// dialog cancelled, and nothing is written. Nothing in the app sets it
+    /// directly: `PreviewPaneView` wires it to `runCSVExportDialog`.
+    /// The file the Export CSV button has just written, handed up so the
+    /// window can open it — a reader who exported a table wants to see the
+    /// table, and Nota reads a `.csv` as one. Nothing in the pane opens it.
+    var onExported: ((URL) -> Void)?
+    var exportDestination: ((
+        _ defaultName: String, _ columns: [(name: String, type: String?)]
+    ) -> CSVExportChoice?)?
     /// Stands in for the alert an export failure raises, the same seam the
     /// dump's pane uses (`SQLPreviewView.alertOverrideForTesting`) — so a
     /// test never puts a modal on screen. Nothing in the app sets it.
@@ -235,8 +242,12 @@ final class CSVPreviewView: NSView, PreviewContent {
         exportButton.toolTip = L10n.text("Export as CSV…")
         // The one button in the bar that wears a word: the two chevrons say
         // themselves, and a bare share arrow did not.
-        exportButton.title = L10n.text("Export")
+        exportButton.title = L10n.text("Export CSV")
         exportButton.imagePosition = .imageLeading
+        // One line, whatever the width — the same rule Refresh keeps: squeezed,
+        // the words truncate rather than folding into three rows of the bar.
+        exportButton.cell?.wraps = false
+        exportButton.cell?.lineBreakMode = .byTruncatingTail
         exportButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         previousButton.setAccessibilityIdentifier("csv-previous")
         nextButton.setAccessibilityIdentifier("csv-next")
@@ -501,17 +512,28 @@ final class CSVPreviewView: NSView, PreviewContent {
 
     // MARK: - Export
 
-    /// The Export button: a destination through the window's own save flow,
-    /// pinned to `csv`, and the table written into it. A write that fails is
-    /// said quietly — an alert, not a crash.
+    /// The `Export CSV` button: the table's own header handed to the window's
+    /// export dialog, and the columns it comes back with written into the
+    /// file it names. A write that fails is said quietly — an alert, not a
+    /// crash.
     @objc private func exportCSVButtonPressed(_ sender: Any?) {
-        guard let destination = exportDestination?(defaultExportName()) else { return }
+        guard let choice = exportDestination?(defaultExportName(), exportColumns())
+        else { return }
+        let destination = choice.url
         do {
-            try exportCSV(to: destination)
+            try exportCSV(to: destination, columns: choice.columns)
+            onExported?(destination)
         } catch {
             present("Couldn’t export “\(destination.lastPathComponent)”.",
                    informative: error.localizedDescription)
         }
+    }
+
+    /// The header the export dialog lists: the table's own columns, in the
+    /// order the grid has them. A `.csv` declares no types, so every column
+    /// comes with `nil` and the dialog's trailing column stays empty.
+    func exportColumns() -> [(name: String, type: String?)] {
+        (table?.columns ?? []).map { ($0, nil) }
     }
 
     /// `<file base name>.csv` — a `.tsv` becomes a `.csv` the same way its
@@ -523,21 +545,46 @@ final class CSVPreviewView: NSView, PreviewContent {
     }
 
     /// Writes the table out as CSV, every row and in the grid's own sort
-    /// order. What the Export button reaches through the save panel, and
+    /// order. What the `Export CSV` button reaches through the dialog, and
     /// what a File > Export… item elsewhere can call directly.
-    func exportCSV(to url: URL) throws {
-        guard let table else { throw CSVExportError.nothingToExport }
+    ///
+    /// `columns` is the dialog's own answer: the indices of the ticked
+    /// columns, in the order the grid has them. `nil` is every column, which
+    /// is what File > Export… means by a table.
+    func exportCSV(to url: URL, columns: [Int]? = nil) throws {
+        let export = try exportTable()
         guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
             throw CocoaError(.fileWriteUnknown)
         }
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }
-        let export = table.exportRows(sort: sort)
-        try CSVWriter.write(header: export.header, to: handle)
+        try CSVWriter.write(header: Self.picked(export.header, columns), to: handle)
         for row in export.rows {
-            try CSVWriter.write(row: row, to: handle)
+            try CSVWriter.write(row: Self.picked(row, columns), to: handle)
         }
     }
+
+    /// One row, or the header, cut down to the columns the dialog ticked.
+    /// `nil` is every column, and an index a row is too short for is simply
+    /// not there rather than a crash.
+    private static func picked<Element>(_ all: [Element], _ columns: [Int]?) -> [Element] {
+        guard let columns else { return all }
+        return columns.compactMap { all.indices.contains($0) ? all[$0] : nil }
+    }
+
+    /// The same rows, handed back rather than written: the header and every
+    /// row in the grid's own sort order, a trailing field a ragged row never
+    /// wrote coming back `nil`. What `Preview as PDF` draws onto pages
+    /// (`TablePDF`), and what `exportCSV` writes out.
+    func exportTable() throws -> (header: [String], rows: [[String?]]) {
+        guard let table else { throw CSVExportError.nothingToExport }
+        return table.exportRows(sort: sort)
+    }
+
+    /// The font the grid draws its cells in — the editor's own size,
+    /// monospaced. An exporter that draws the table rather than writing it
+    /// out sets its own cells in the same one.
+    var gridCellFont: NSFont { cellFont }
 
     /// Stands in for the real export panel's alert — the same seam
     /// `SQLPreviewView.present(_:informative:)` uses.

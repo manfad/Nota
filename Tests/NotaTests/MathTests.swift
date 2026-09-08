@@ -212,11 +212,34 @@ final class MathTests: AppKitTestCase {
         let formula = try measured("\\frac{1}{2}", display: true)
         let light = try draw(formula, appearance: NSAppearance(named: .aqua))
         let dark = try draw(formula, appearance: NSAppearance(named: .darkAqua))
-        XCTAssertEqual(paintedPixels(in: light), paintedPixels(in: dark), "the same boxes")
+        // The same boxes — to within the anti-aliasing, which lands a few
+        // more faint pixels around white ink than around black.
+        let lightPainted = paintedPixels(in: light)
+        let darkPainted = paintedPixels(in: dark)
+        XCTAssertEqual(
+            Double(lightPainted), Double(darkPainted),
+            accuracy: Double(max(lightPainted, darkPainted)) * 0.15, "the same boxes"
+        )
         let lightInk = try XCTUnwrap(brightestInk(in: light))
         let darkInk = try XCTUnwrap(brightestInk(in: dark))
         XCTAssertLessThan(lightInk, 0.2, "light mode's label is nearly black")
         XCTAssertGreaterThan(darkInk, 0.5, "dark mode's label is nearly white")
+    }
+
+    /// The test above is satisfied by the fraction's rule alone, which is a
+    /// filled rectangle. The glyphs are Core Text's, and a line drawn without
+    /// `kCTForegroundColorFromContext` comes out in Core Text's own black
+    /// whatever the context is filled with — so a formula of letters and
+    /// nothing else has to be checked on its own.
+    func testTheGlyphsThemselvesTakeTheDrawTimeColour() throws {
+        for tex in ["xy", "\\alpha+\\beta", "e^{i\\pi}"] {
+            let formula = try measured(tex)
+            let light = try draw(formula, appearance: NSAppearance(named: .aqua))
+            let dark = try draw(formula, appearance: NSAppearance(named: .darkAqua))
+            XCTAssertGreaterThan(paintedPixels(in: dark), 0, "\(tex) drew nothing")
+            XCTAssertLessThan(try XCTUnwrap(brightestInk(in: light)), 0.2, "\(tex) light: black ink")
+            XCTAssertGreaterThan(try XCTUnwrap(brightestInk(in: dark)), 0.5, "\(tex) dark: white ink")
+        }
     }
 
     // MARK: - The attachment

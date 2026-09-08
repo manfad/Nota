@@ -26,7 +26,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         ("General", "gearshape"),
         ("Appearance", "paintbrush"),
         ("Editor", "square.and.pencil"),
-        ("Preview", "doc.richtext"),
         ("Tab bar", "rectangle.topthird.inset.filled"),
         ("Status bar", "rectangle.bottomthird.inset.filled"),
         ("Shortcuts", "keyboard"),
@@ -38,6 +37,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         let key: String
         let content: NSView
         let rows: [SettingsRowView]
+        /// The list two pages are made of instead of stacked groups.
+        let outline: SettingsOutlineView?
     }
 
     private let fontPopUp = NSPopUpButton()
@@ -53,7 +54,9 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let gutterSeparatorSwitch = NSSwitch()
     private let highlightCurrentLineSwitch = NSSwitch()
     private let vimModeSwitch = NSSwitch()
-    private let previewModeSwitch = NSSwitch()
+    /// Editor / Split / Preview, on the General page — `PreviewMode.allCases`
+    /// order. Not private: a test reaches it directly.
+    let openingModeControl = NSSegmentedControl()
     private let statusBarSwitch = NSSwitch()
     private let showTabBarSwitch = NSSwitch()
     private let autoHideTabBarSwitch = NSSwitch()
@@ -119,6 +122,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private var statusDetailRows: [SettingsRowView] = []
 
     private var shortcutFields: [ShortcutAction: ShortcutRecorderField] = [:]
+    /// The File types list, which is the one page built from an outline.
+    private var fileTypesOutline: SettingsOutlineView?
     private var localizedLabels: [(field: NSTextField, key: String)] = []
     private var sectionTitles: [(field: NSTextField, key: String)] = []
     private var hasCentered = false
@@ -252,12 +257,40 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     }
 
     /// A page's rows as the user reads them: the label on the left and the
-    /// control on the right. Switches carry no title of their own, so this is
-    /// how a test names one.
+    /// control on the right. Switches and tick boxes carry no title of their
+    /// own, so this is how a test names one.
+    ///
+    /// A page built from an outline answers with the rows folded under its
+    /// groups, in order, and the tick box of each — never the group rows.
     func rows(on page: Int) -> [(title: String, control: NSControl)] {
         guard pages.indices.contains(page) else { return [] }
+        if let outline = pages[page].outline {
+            return outline.items.map { ($0.titleField.stringValue, $0.checkbox as NSControl) }
+        }
         return pages[page].rows.map { ($0.label.stringValue, $0.control) }
     }
+
+    /// A list page group by group: the group's title, and the rows under it.
+    func outlineGroupsForTesting(on page: Int) -> [(title: String, rows: [String])] {
+        guard pages.indices.contains(page), let outline = pages[page].outline else { return [] }
+        return outline.groups.map { group in
+            (group.titleField.stringValue, group.children.map(\.titleField.stringValue))
+        }
+    }
+
+    /// One group row, so a test can press its tick.
+    func outlineGroupForTesting(on page: Int, titled title: String) -> SettingsOutlineItem? {
+        guard pages.indices.contains(page), let outline = pages[page].outline else { return nil }
+        return outline.groups.first { $0.titleKey == title || $0.titleField.stringValue == title }
+    }
+
+    /// Opens every group on a list page — what a screenshot wants, and what a
+    /// test that reads what is on screen wants.
+    func expandOutlineForTesting(on page: Int) {
+        guard pages.indices.contains(page) else { return }
+        pages[page].outline?.expandAllGroups()
+    }
+
 
     // MARK: - Layout
 
@@ -370,8 +403,11 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             control.target = self
             control.action = #selector(editorSwitchChanged)
         }
-        previewModeSwitch.target = self
-        previewModeSwitch.action = #selector(previewSwitchChanged)
+        openingModeControl.segmentStyle = .rounded
+        openingModeControl.trackingMode = .selectOne
+        openingModeControl.segmentCount = PreviewMode.allCases.count
+        openingModeControl.target = self
+        openingModeControl.action = #selector(openingModeChanged)
         for control in [autoHideTabBarSwitch, trafficLightsSwitch,
                         bookmarkToggleButtonSwitch, bookmarkButtonSwitch,
                         settingsButtonSwitch] {
@@ -445,13 +481,17 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     private func buildPages() {
         pages = [
-            generalPage(), appearancePage(), editorPage(), previewPage(),
+            generalPage(), appearancePage(), editorPage(),
             tabBarPage(), statusBarPage(), shortcutsPage(), fileTypesPage(), aboutPage(),
         ]
     }
 
     private func generalPage() -> Page {
-        let rows = [row("Language", control: languagePopUp), row("Theme", control: themePopUp)]
+        let rows = [
+            row("Language", control: languagePopUp),
+            row("Theme", control: themePopUp),
+            row("Open supported files in", control: openingModeControl),
+        ]
         return page(
             "General",
             blocks: [groupBox(rows)],
@@ -485,13 +525,6 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             row("Vim mode", control: vimModeSwitch),
         ]
         return page("Editor", blocks: [groupBox(rows)], rows: rows)
-    }
-
-    private func previewPage() -> Page {
-        let rows = [
-            row("Start supported files in preview mode", control: previewModeSwitch),
-        ]
-        return page("Preview", blocks: [groupBox(rows)], rows: rows)
     }
 
     private func tabBarPage() -> Page {
@@ -603,9 +636,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     /// One row of the page and the pieces of it that change as the Mac does.
     private struct FileTypeRow {
         let ext: String
-        let row: SettingsRowView
-        let checkbox: NSButton
-        let name: NSTextField
+        let item: SettingsOutlineItem
         /// The `?` that appears only on a row Nota already owned.
         let help: NSButton
     }
@@ -623,7 +654,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     /// whether it is ticked and whether the tick can still be taken off.
     var fileTypeRowsForTesting: [(ext: String, app: String, ticked: Bool, enabled: Bool)] {
         fileTypeRows.map {
-            ($0.ext, $0.name.stringValue, $0.checkbox.state == .on, $0.row.isEnabled)
+            ($0.ext, $0.item.trailingField.stringValue, $0.item.state == .on, $0.item.isEnabled)
         }
     }
 
@@ -635,7 +666,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
 
     /// The checkbox of one row, which is where a refusal's full sentence hangs.
     func fileTypeCheckboxForTesting(_ ext: String) -> NSButton? {
-        fileTypeRows.first { $0.ext == ext }?.checkbox
+        fileTypeRows.first { $0.ext == ext }?.item.checkbox
     }
 
     private func fileTypesPage() -> Page {
@@ -671,52 +702,78 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         allRow.setCustomSpacing(16, after: allHelp)
         blocks.append(allRow)
 
-        var rows: [SettingsRowView] = []
+        var groups: [SettingsOutlineItem] = []
         for group in DefaultAppTypes.groups {
-            let built = group.extensions.map { fileTypeRow(for: $0) }
-            blocks.append(sectionHeading(group.titleKey))
-            blocks.append(groupBox(built))
-            rows.append(contentsOf: built)
+            let item = SettingsOutlineItem(
+                titleKey: group.titleKey,
+                children: group.extensions.map { fileTypeItem(for: $0) }
+            )
+            item.onToggle = { [weak self, weak item] claimed in
+                guard let item else { return }
+                self?.setFileTypeGroup(item, claimed: claimed)
+            }
+            groups.append(item)
         }
-        return page(Self.fileTypesKey, blocks: blocks, rows: rows)
+        let outline = SettingsOutlineView(groups: groups)
+        fileTypesOutline = outline
+        blocks.append(outline)
+        return page(Self.fileTypesKey, blocks: blocks, rows: [], outline: outline)
     }
 
-    /// One extension: its kind icon, the extension itself with its dot, the
-    /// app that opens it today, and the tick that hands it to Nota.
-    private func fileTypeRow(for ext: String) -> SettingsRowView {
-        let icon = NSImageView()
-        icon.image = FileKindIcon.image(
-            named: FileKindIcon.symbolName(forTitle: "file." + ext), pointSize: 13
-        )
-        icon.contentTintColor = .secondaryLabelColor
-        icon.imageScaling = .scaleNone
-
-        let label = NSTextField(labelWithString: "." + ext)
-        label.lineBreakMode = .byTruncatingTail
-
-        let name = NSTextField(labelWithString: "")
-        name.font = .systemFont(ofSize: 12)
-        name.textColor = .secondaryLabelColor
-        name.lineBreakMode = .byTruncatingTail
-        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        let checkbox = NSButton(
-            checkboxWithTitle: "", target: self, action: #selector(fileTypeCheckboxChanged(_:))
-        )
-        let trailing = NSStackView(views: [name, checkbox])
-        trailing.orientation = .horizontal
-        trailing.spacing = 8
-
+    /// One extension: the extension itself with its dot, the app that opens
+    /// it today, and the tick that hands it to Nota.
+    private func fileTypeItem(for ext: String) -> SettingsOutlineItem {
         let help = helpButton(explaining: Self.alreadyDefaultHelpKey)
         help.isHidden = true
+        let item = SettingsOutlineItem(titleKey: "." + ext, accessory: help)
+        item.trailingColor = .secondaryLabelColor
+        item.onToggle = { [weak self] claimed in
+            if claimed {
+                self?.claimFileType(ext) { [weak self] in self?.refreshFileTypeRows() }
+            } else {
+                self?.releaseFileType(ext)
+            }
+        }
+        fileTypeRows.append(FileTypeRow(ext: ext, item: item, help: help))
+        return item
+    }
 
-        let row = SettingsRowView(
-            label: label, control: checkbox, trailing: trailing, accessory: help, icon: icon
-        )
-        fileTypeRows.append(
-            FileTypeRow(ext: ext, row: row, checkbox: checkbox, name: name, help: help)
-        )
-        return row
+    /// A group's tick claims every extension folded under it, or hands back
+    /// every one this page took. "Documents and pictures" is asked for by
+    /// name here, which is why the button above the list still leaves it be.
+    private func setFileTypeGroup(_ group: SettingsOutlineItem, claimed: Bool) {
+        guard let index = fileTypesOutline?.groups.firstIndex(of: group),
+              DefaultAppTypes.groups.indices.contains(index)
+        else { return }
+        let extensions = DefaultAppTypes.groups[index].extensions
+        if claimed {
+            var pending = extensions.count
+            for ext in extensions {
+                claimFileType(ext) { [weak self] in
+                    pending -= 1
+                    if pending == 0 { self?.refreshFileTypeRows() }
+                }
+            }
+            return
+        }
+        // Twins naming one type are one release, not two: the first forgets
+        // the whole set, so the second would find nothing written down.
+        var seen: Set<String> = []
+        var wanted: [String] = []
+        for ext in extensions where preferences.previousDefaultApps[ext] != nil {
+            guard let type = DefaultAppTypes.type(forExtension: ext),
+                  seen.insert(type.identifier).inserted
+            else { continue }
+            wanted.append(ext)
+        }
+        guard !wanted.isEmpty else { refreshFileTypeRows(); return }
+        var pending = wanted.count
+        for ext in wanted {
+            releaseFileType(ext) { [weak self] in
+                pending -= 1
+                if pending == 0 { self?.refreshFileTypeRows() }
+            }
+        }
     }
 
     /// Reads the Mac live: what opens each of these types today, and whether
@@ -728,38 +785,31 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             let current = DefaultAppTypes.type(forExtension: entry.ext)
                 .flatMap { defaultAppRegistry.defaultApplication(toOpen: $0) }
             let isNota = current != nil && current?.identifier == nota?.identifier
-            entry.checkbox.state = isNota ? .on : .off
+            entry.item.state = isNota ? .on : .off
             // A refusal is what the row has to say until it is tried again;
             // the app that still owns the type is second to that.
             let failure = fileTypeFailures[entry.ext]
-            entry.name.stringValue = failure ?? (current?.name ?? L10n.text("None"))
-            entry.name.textColor = failure == nil ? .secondaryLabelColor : .systemRed
+            entry.item.trailingText = failure ?? (current?.name ?? L10n.text("None"))
+            entry.item.trailingColor = failure == nil ? .secondaryLabelColor : .systemRed
             // Ticked with nothing written down: Nota was already the default
             // before the page was ever opened, and Launch Services has no
             // unsetter to invent one from.
             let locked = isNota && remembered[entry.ext] == nil
-            entry.row.isEnabled = !locked
+            entry.item.isEnabled = !locked
             entry.help.isHidden = !locked
             if let failure {
-                entry.checkbox.toolTip = String(
+                entry.item.checkbox.toolTip = String(
                     format: L10n.text("Nota could not take .%@ over: %@"), entry.ext, failure
                 ) + " " + L10n.text(Self.finderInsteadKey)
             } else {
-                entry.checkbox.toolTip = locked ? L10n.text(Self.alreadyDefaultHelpKey) : nil
+                entry.item.checkbox.toolTip = locked ? L10n.text(Self.alreadyDefaultHelpKey) : nil
             }
+            entry.item.apply()
         }
+        fileTypesOutline?.refreshGroupStates()
         useNotaForAllButton.isEnabled = nota != nil
         // Nothing written down, nothing to put back.
         restorePreviousAppsButton.isEnabled = !remembered.isEmpty
-    }
-
-    @objc private func fileTypeCheckboxChanged(_ sender: NSButton) {
-        guard let entry = fileTypeRows.first(where: { $0.checkbox === sender }) else { return }
-        if sender.state == .on {
-            claimFileType(entry.ext) { [weak self] in self?.refreshFileTypeRows() }
-        } else {
-            releaseFileType(entry.ext)
-        }
     }
 
     /// Hands the extension to Nota, writing down whatever had it first so the
@@ -911,7 +961,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     // MARK: - Building blocks
 
     private func page(
-        _ key: String, blocks: [NSView], rows: [SettingsRowView], centered: Bool = false
+        _ key: String, blocks: [NSView], rows: [SettingsRowView],
+        centered: Bool = false, outline: SettingsOutlineView? = nil
     ) -> Page {
         let stack = NSStackView(views: blocks)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -933,7 +984,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         if centered, let first = blocks.first {
             stack.setCustomSpacing(16, after: first)
         }
-        return Page(key: key, content: stack, rows: rows)
+        return Page(key: key, content: stack, rows: rows, outline: outline)
     }
 
     private func groupBox(_ rows: [SettingsRowView]) -> NSView { GroupBoxView(rows: rows) }
@@ -1101,7 +1152,15 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         footerCursorSwitch.state = preferences.footerShowsCursorPosition ? .on : .off
         statusBarSwitch.state = preferences.showsStatusBar ? .on : .off
         setStatusDetailsEnabled(preferences.showsStatusBar)
-        previewModeSwitch.state = preferences.opensMarkdownInReadingMode ? .on : .off
+        let openingModeLabels: [PreviewMode: String] = [
+            .off: "Editor", .split: "Split", .reading: "Preview",
+        ]
+        for (index, mode) in PreviewMode.allCases.enumerated() {
+            openingModeControl.setLabel(L10n.text(openingModeLabels[mode] ?? ""), forSegment: index)
+        }
+        openingModeControl.selectedSegment = PreviewMode.allCases.firstIndex(
+            of: preferences.openingMode
+        ) ?? 0
         vimModeSwitch.state = preferences.vimMode ? .on : .off
         showTabBarSwitch.state = preferences.hidesTabBar ? .off : .on
         autoHideTabBarSwitch.state = preferences.autoHidesTabBar ? .on : .off
@@ -1119,6 +1178,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             : ""
         hotKeyWarning.isHidden = !failed
         refreshShortcutFields()
+        fileTypesOutline?.applyAll()
         // What is stored never clashes — a clash is refused rather than
         // written — so the fields the refresh just filled have nothing to warn
         // about.
@@ -1239,8 +1299,8 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         }
     }
 
-    @objc private func previewSwitchChanged(_ sender: Any?) {
-        apply { preferences.opensMarkdownInReadingMode = previewModeSwitch.state == .on }
+    @objc private func openingModeChanged(_ sender: NSSegmentedControl) {
+        apply { preferences.openingMode = PreviewMode.allCases[sender.selectedSegment] }
     }
 
     /// The four positive labels: off is what hides the piece of chrome each
@@ -1782,15 +1842,22 @@ private final class SectionHeadingLabel: WrappingLabel {
     required init?(coder: NSCoder) { fatalError("not used") }
 }
 
-/// The one colour the redesign adds: the fill of an inset group. Light mode
-/// gets the card white that sits over the window's grey; dark mode gets a
-/// touch of white over the window instead, because the control background
-/// there is darker than the window and would read as a hole.
-private enum SettingsPalette {
+/// The colours the redesign adds. `groupFill` is the fill of an inset group:
+/// light mode gets the card white that sits over the window's grey; dark mode
+/// gets a touch of white over the window instead, because the control
+/// background there is darker than the window and would read as a hole.
+/// `rowAlternateFill` is the quiet banding an outline's odd rows take on top
+/// of it.
+enum SettingsPalette {
     static let groupFill = NSColor(name: "notaSettingsGroupFill") { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             ? NSColor(white: 1, alpha: 0.06)
             : .controlBackgroundColor
     }
 
+    static let rowAlternateFill = NSColor(name: "notaSettingsRowAlternateFill") { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.045)
+            : NSColor(white: 0, alpha: 0.028)
+    }
 }

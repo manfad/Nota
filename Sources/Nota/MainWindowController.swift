@@ -103,17 +103,26 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
     /// cancelled, which is the case ⌘D on an untitled note turns on.
     var savePanelProvider: ((Note) -> URL?)?
 
-    /// The export sheet, asked what the reader chose. The real sheet unless
-    /// a test hands in something else — `nil` from it is Cancel, and nothing
-    /// is written.
+    /// The export sheet, asked what the reader chose — the shape, the
+    /// pictures and the file it is all going into, since Done 62 folded the
+    /// save dialog into the sheet. The real sheet unless a test hands in
+    /// something else — `nil` from it is Cancel, and nothing is written.
     var exportSheetProvider: ((Note, [ExportTarget]) -> ExportChoice?)?
 
-    /// Where an export lands — File › Export…, the dump's Export button and
-    /// the table's own all come through `runExportSavePanel`, and all three
-    /// come through here in a test. The real dialog otherwise, the same way
-    /// `savePanelProvider` stands in for a note's own save; `nil` is the
+    /// Where an export that only wants a destination lands: Nota's own Save
+    /// dialog with the extension pinned (`runExportSavePanel`). `nil` is the
     /// dialog cancelled, and nothing is written.
     var exportPanelProvider: ((_ suggestedName: String, _ extension: String) -> URL?)?
+
+    /// Where a grid's own `Export CSV` button lands — both of them come
+    /// through `runCSVExportDialog`, and both come through here in a test.
+    /// The real dialog otherwise, the same way `savePanelProvider` stands in
+    /// for a note's own save; `nil` is the dialog cancelled, and nothing is
+    /// written. File › Export… does not pass this way: its sheet asks for the
+    /// name and the folder itself (Done 62), and takes every column.
+    var csvExportDialogProvider: ((
+        _ suggestedName: String, _ columns: [(name: String, type: String?)]
+    ) -> CSVExportChoice?)?
 
     /// The print operation, handed the document it was built for, instead of
     /// being run. The real thing is a sheet on the window; a test takes the
@@ -1174,15 +1183,20 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         previewColumn.onDropFiles = { [weak self] urls in
             self?.openDroppedFiles(urls)
         }
-        // The dump's Export button, or the table's: a destination through the
-        // same save flow a Save As gets, with the extension pinned to `csv`.
-        previewColumn.onExportDestination = { [weak self] defaultName in
+        // The dump's `Export CSV` button, or the table's: Nota's own CSV
+        // export dialog, which asks which columns are going out as well as
+        // where the file lands.
+        previewColumn.onExportDestination = { [weak self] defaultName, columns in
             guard let self, !self.isExporting else { return nil }
-            return self.runExportSavePanel(
-                suggestedName: defaultName, extension: "csv",
+            return self.runCSVExportDialog(
+                suggestedName: defaultName, columns: columns,
                 existingFileURL: self.currentNote?.fileURL
             )
         }
+
+        // And the file it wrote opens as a tab — or its tab comes to the front,
+        // when the export landed on a file already open here.
+        previewColumn.onExported = { [weak self] url in self?.open(url: url) }
 
         installModeOverlay(previewModeOverlay, over: previewColumn)
     }
@@ -3004,8 +3018,9 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         return !Exporter.targets(for: note).isEmpty
     }
 
-    /// ⇧⌘E. Ask what shape, ask where, write it, and open what was written
-    /// in a tab beside the source (SPEC "## Export").
+    /// ⇧⌘E. Ask — in one sheet — what shape, what it is called and where it
+    /// goes, write it, and open what was written in a tab beside the source
+    /// (SPEC "## Export").
     ///
     /// Available in every mode: the export is about the tab, not about which
     /// half of it is on screen. Asynchronous throughout — a book, a page and
@@ -3020,16 +3035,17 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         // Answered once and remembered, the way the save panel's own format
         // is: the next export opens on whichever way the pictures went last.
         preferences.exportEditorImages = choice.images
-        guard let destination = runExportSavePanel(
-            suggestedName: exportName(for: note, target: choice.target),
-            extension: choice.target.fileExtension,
-            existingFileURL: note.fileURL
-        ) else { return }
+        let destination = choice.destination
+        // And the next export opens in the folder this one landed in. Never
+        // `lastSaveDirectory`: an export must not move where ⌘S offers to put
+        // the note itself. Written here rather than inside the sheet so an
+        // export answered through `exportSheetProvider` remembers it too.
+        preferences.lastExportDirectory = destination.deletingLastPathComponent()
 
         isExporting = true
         Exporter.export(
             note, to: choice.target, at: destination,
-            context: exportContext(images: choice.images)
+            context: exportContext(images: choice.images, target: choice.target)
         ) { [weak self] result in
             guard let self else { return }
             self.isExporting = false
@@ -3043,6 +3059,13 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
             case let .failure(error):
                 // A reader who pressed Cancel is told nothing: they know.
                 guard !Self.isCancellation(error) else { return }
+                // A note too tall to be one picture is told what the wall
+                // was: "couldn't export" would only leave the reader trying
+                // the same note again.
+                guard !Self.isTooLongForAnImage(error) else {
+                    self.showFooterMessage(L10n.text("Too long for one image."))
+                    return
+                }
                 // The quiet word in the footer every other failure that is
                 // not the reader's fault gets. Nothing here is worth an alert.
                 self.showFooterMessage(String(
@@ -3058,30 +3081,42 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         (error as? TeXExportError) == .cancelled
     }
 
+    /// The one failure with a word of its own: a note taller than any single
+    /// picture may be (SPEC "## Export", Snapshots).
+    private static func isTooLongForAnImage(_ error: Error) -> Bool {
+        if case Exporter.Failure.tooLongForAnImage = error { return true }
+        return false
+    }
+
+    /// The one sheet File › Export… asks through: the file, which half of the
+    /// tab it is taken from, where the pictures go, the name and the folder. It opens on a name per target — a
+    /// name it goes on offering until the reader types one of their own — in
+    /// the note's own folder, or in the folder the last export landed in.
+    /// The replace question is the window's, the same alert a save raises.
     private func runExportSheet(for note: Note, targets: [ExportTarget]) -> ExportChoice? {
         if let exportSheetProvider { return exportSheetProvider(note, targets) }
         guard let window else { return nil }
-        let dialog = ExportDialog(targets: targets, images: preferences.exportEditorImages)
+        var names: [ExportTarget: String] = [:]
+        for target in targets { names[target] = exportName(for: note, target: target) }
+        let dialog = ExportDialog(
+            targets: targets,
+            images: preferences.exportEditorImages,
+            suggestedNames: names,
+            existingFileURL: note.fileURL,
+            lastDirectory: preferences.lastExportDirectory,
+            // The render only asks where its pictures go when the note has
+            // pictures: a note with no chips places nothing either way.
+            hasImageChips: !NoteText.assetIDs(in: note.text).isEmpty
+        )
+        dialog.confirmReplace = { [weak self] url in self?.confirmReplace(url) ?? false }
         return dialog.runSheet(on: window)
     }
 
-    /// What the export dialog opens on: the tab's own name with the target's
+    /// What the export sheet opens on: the tab's own name with the target's
     /// extension in place of the note's — a Markdown note exports as
-    /// `notes.pdf`, not as `notes.md`. A grid is the exception: the pane
-    /// already knows whether the reader is looking at a table or at a query
-    /// of their own, and names the file after that, so File › Export… →
-    /// Table (CSV) offers exactly what the pane's own Export button does.
+    /// `notes.pdf`, not as `notes.md`.
     private func exportName(for note: Note, target: ExportTarget) -> String {
-        if target == .csv, let name = csvExportName(for: note) { return name }
-        return SaveNameComposer.split(name: note.title).base + "." + target.fileExtension
-    }
-
-    private func csvExportName(for note: Note) -> String? {
-        switch previewColumn.content(for: note) {
-        case let sql as SQLPreviewView: return sql.defaultExportName()
-        case let csv as CSVPreviewView: return csv.defaultExportName()
-        default: return nil
-        }
+        SaveNameComposer.split(name: note.title).base + "." + target.fileExtension
     }
 
     /// Where an export lands: Nota's own Save dialog — the one Save and Save
@@ -3093,8 +3128,9 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
     /// as PDF must not offer `pdf` the next time the note itself is saved.
     /// The folder is, the same as any other save.
     ///
-    /// One door for all three ways in — File › Export…, the dump's Export
-    /// button, the table's — so a test stubs `exportPanelProvider` once.
+    /// File › Export… asks in its own sheet (Done 62) and never comes this
+    /// way, and neither do the grids, which ask their columns as well
+    /// (`runCSVExportDialog`).
     func runExportSavePanel(
         suggestedName: String, extension ext: String, existingFileURL: URL?
     ) -> URL? {
@@ -3113,13 +3149,49 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         return url
     }
 
+    /// Where a grid's `Export CSV` button lands: Nota's own CSV export
+    /// dialog, which asks the one thing a save dialog has no row for — which
+    /// of the grid's columns are going out — as well as the name and the
+    /// folder, with the format pinned to `csv`.
+    ///
+    /// It opens in the note's own folder, falling back to the folder the last
+    /// export landed in, and remembers the one it lands in as the *export*
+    /// directory: an export is not a save, and neither one may move the
+    /// other. The replace question is the window's, the same alert a save
+    /// raises.
+    ///
+    /// One door for both grids' buttons, so a test stubs
+    /// `csvExportDialogProvider` once.
+    func runCSVExportDialog(
+        suggestedName: String,
+        columns: [(name: String, type: String?)],
+        existingFileURL: URL?
+    ) -> CSVExportChoice? {
+        if let csvExportDialogProvider {
+            return csvExportDialogProvider(suggestedName, columns)
+        }
+        guard let window else { return nil }
+        let dialog = CSVExportDialog(
+            columns: columns,
+            suggestedName: suggestedName,
+            existingFileURL: existingFileURL,
+            lastDirectory: preferences.lastExportDirectory
+        )
+        dialog.confirmReplace = { [weak self] url in self?.confirmReplace(url) ?? false }
+        guard let choice = dialog.runSheet(on: window) else { return nil }
+        preferences.lastExportDirectory = choice.url.deletingLastPathComponent()
+        return choice
+    }
+
     /// What the export needs to know about this window: the editor's font and
     /// paragraph shape, the store the chips' pictures live in, whether the
     /// gutter is on, the pane the tab is being read through — for an exporter
     /// whose answer is on screen rather than in the note, such as a dump's
     /// rows — the window a prompt would be a sheet on, and where a long
     /// export's running commentary goes.
-    private func exportContext(images: ExportImagePlacement) -> Exporter.Context {
+    private func exportContext(
+        images: ExportImagePlacement, target: ExportTarget? = nil
+    ) -> Exporter.Context {
         var context = Exporter.Context(
             font: preferences.font(),
             paragraphStyle: preferences.paragraphStyle(),
@@ -3127,10 +3199,38 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
             showsLineNumbers: preferences.showsLineNumbers,
             images: images
         )
+        context.screenWidth = target.flatMap(screenWidth(for:))
         context.previewContent = currentNote.map { previewColumn.content(for: $0) }
         context.window = window
         context.progress = { [weak self] message in self?.showFooterProgress(message) }
         return context
+    }
+
+    /// The measure a picture is taken at: the column the reader is actually
+    /// reading in, rather than the paper measure the two PDFs use. The render
+    /// column's own content width for a picture of the preview, the editor's
+    /// text width for a picture of the listing, and nothing at all for every
+    /// target that goes onto pages (SPEC "## Export", Snapshots).
+    ///
+    /// `nil` where the column has not been laid out yet — a zero-width answer
+    /// would photograph the note one word to a line — and the export falls
+    /// back to the page's measure.
+    private func screenWidth(for target: ExportTarget) -> CGFloat? {
+        let width: CGFloat
+        switch target {
+        case .previewPNG:
+            guard let note = currentNote else { return nil }
+            // The render knows its own measure exactly, scroller and all; the
+            // rich-text pane is asked the same question of its bounds.
+            let content = previewColumn.content(for: note)
+            width = (content as? RenderedPreviewView)?.contentWidth
+                ?? (content.bounds.width - content.horizontalInset * 2)
+        case .editorPNG:
+            width = editorVisibleWidth - horizontalTextInset * 2
+        default:
+            return nil
+        }
+        return width > 1 ? width : nil
     }
 
     // MARK: - Print
@@ -3301,8 +3401,8 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         addTab(fileURL: target, text: opened.text, format: opened.format)
         // The setting is about opening files, not about restoring them: a tab
         // coming back from the session keeps the mode it was left in.
-        if preferences.opensMarkdownInReadingMode, Note.supportsRenderedPreview(target) {
-            setPreviewMode(.reading)
+        if preferences.openingMode != .off, Note.supportsRenderedPreview(target) {
+            setPreviewMode(preferences.openingMode)
         }
     }
 

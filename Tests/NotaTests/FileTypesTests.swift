@@ -140,7 +140,7 @@ final class FileTypesTests: AppKitTestCase {
     func testFileTypesPageIsBetweenShortcutsAndAbout() {
         XCTAssertEqual(
             controller.pageTitles,
-            ["General", "Appearance", "Editor", "Preview", "Tab bar", "Status bar",
+            ["General", "Appearance", "Editor", "Tab bar", "Status bar",
              "Shortcuts", "File types", "About"]
         )
         XCTAssertNotNil(NSImage(systemSymbolName: "doc.badge.gearshape",
@@ -290,6 +290,67 @@ final class FileTypesTests: AppKitTestCase {
 
         XCTAssertEqual(try row("html").app, "Not allowed by macOS")
         XCTAssertNotEqual(try row("html").app, permErr.localizedDescription)
+    }
+
+    // MARK: - The group rows
+
+    /// The tick on a group row claims every extension folded under it, reads
+    /// as mixed while only some of them are Nota's, and hands the whole group
+    /// back when it is taken off again.
+    func testAGroupTickClaimsAndReleasesEveryRowUnderIt() throws {
+        let sublime = app("Sublime", opening: "txt")
+        app("Xcode", opening: "md")
+        let page = openPage()
+        let text = try XCTUnwrap(DefaultAppTypes.groups.first)
+        XCTAssertEqual(text.titleKey, "Text")
+        let group = try XCTUnwrap(controller.outlineGroupForTesting(on: page, titled: "Text"))
+        XCTAssertEqual(group.state, .off, "nothing in the group is Nota's yet")
+
+        try toggle("txt")
+        openPage()
+        XCTAssertEqual(group.state, .mixed, "one row out of five")
+
+        try click(group.checkbox)
+        openPage()
+        XCTAssertEqual(group.state, .on)
+        for ext in text.extensions {
+            XCTAssertTrue(try row(ext).ticked, ".\(ext) should be ticked")
+        }
+        XCTAssertEqual(Preferences.shared.previousDefaultApps["txt"], sublime.identifier)
+        XCTAssertEqual(Preferences.shared.previousDefaultApps["md"], "com.example.xcode")
+        // The next group along is untouched: a group tick is its own group.
+        XCTAssertFalse(try row("json").ticked)
+
+        try click(group.checkbox)
+        openPage()
+        XCTAssertEqual(try row("txt").app, "Sublime")
+        XCTAssertEqual(try row("md").app, "Xcode")
+        XCTAssertEqual(try row("markdown").app, "Xcode", "the twin comes back with it")
+        XCTAssertTrue(Preferences.shared.previousDefaultApps.isEmpty)
+        // .log and .rtf were nobody's before the group tick, so there is
+        // nothing to hand them back to. They stay Nota's with their ticks
+        // dead, which is what leaves the group row mixed.
+        XCTAssertTrue(try row("log").ticked)
+        XCTAssertFalse(try row("log").enabled)
+        XCTAssertEqual(group.state, .mixed)
+    }
+
+    /// The page is one folding list: four group rows, each with the table's
+    /// own extensions under it in the table's order.
+    func testTheListIsTheTableGroupByGroup() throws {
+        let page = openPage()
+        XCTAssertEqual(controller.outlineGroupsForTesting(on: page).map(\.title),
+                       ["Text", "Data", "Code", "Documents and pictures"])
+        XCTAssertEqual(controller.outlineGroupsForTesting(on: page).map(\.rows),
+                       DefaultAppTypes.groups.map { $0.extensions.map { "." + $0 } })
+
+        // Text opens with the page and the rest are folded; every group open
+        // is the tall case, and it still lays out.
+        controller.expandOutlineForTesting(on: page)
+        let root = try XCTUnwrap(controller.window?.contentView)
+        root.layoutSubtreeIfNeeded()
+        XCTAssertFalse(root.hasAmbiguousLayout)
+        XCTAssertEqual(controller.rows(on: page).count, DefaultAppTypes.allExtensions.count)
     }
 
     // MARK: - The all button

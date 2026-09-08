@@ -1,0 +1,4 @@
+id,first_name,last_name,email,city,country,age,joined,plan,balance
+1,Aisha,Okafor,aisha.okafor@example.com,Kuala Lumpur,MY,42,2026-03-22,team,48.22
+2,Bram,Vos,bram.vos@example.com,Rotterdam,NL,56,2026-02-21,team,56.91
+3,Chen,Wei,chen.wei@example.com,Taipei,TW,54,2026-04-11,free,393.11

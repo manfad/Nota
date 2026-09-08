@@ -132,11 +132,18 @@ final class SQLPreviewView: NSView, PreviewContent {
     /// Run when a database, or a page of one, has landed — for the tests,
     /// which have no other way to wait for a background run.
     var onDidFinish: (() -> Void)?
-    /// Asked for a destination when the Export button is pressed — the
-    /// window's own save flow, pinned to `csv`. `nil` back is the panel
-    /// cancelled, and nothing is written. Nothing in the app sets it directly:
-    /// `PreviewPaneView` wires it to `runExportSavePanel`.
-    var exportDestination: ((_ defaultName: String) -> URL?)?
+    /// Asked where the export is going when the `Export CSV` button is
+    /// pressed, and which of the columns are going into it — the grid's own
+    /// header rides along, since the dialog lists it. `nil` back is the
+    /// dialog cancelled, and nothing is written. Nothing in the app sets it
+    /// directly: `PreviewPaneView` wires it to `runCSVExportDialog`.
+    /// The file the Export CSV button has just written, handed up so the
+    /// window can open it — a reader who exported a table wants to see the
+    /// table, and Nota reads a `.csv` as one. Nothing in the pane opens it.
+    var onExported: ((URL) -> Void)?
+    var exportDestination: ((
+        _ defaultName: String, _ columns: [(name: String, type: String?)]
+    ) -> CSVExportChoice?)?
     /// How many times the file has been run into a database. The one number
     /// that says a big file is not being re-run on every keystroke.
     private(set) var runCount = 0
@@ -281,8 +288,12 @@ final class SQLPreviewView: NSView, PreviewContent {
         exportButton.toolTip = L10n.text("Export as CSV…")
         // The one button in the bar that wears a word: the two chevrons say
         // themselves, and a bare share arrow did not.
-        exportButton.title = L10n.text("Export")
+        exportButton.title = L10n.text("Export CSV")
         exportButton.imagePosition = .imageLeading
+        // One line, whatever the width — the same rule Refresh keeps: squeezed,
+        // the words truncate rather than folding into three rows of the bar.
+        exportButton.cell?.wraps = false
+        exportButton.cell?.lineBreakMode = .byTruncatingTail
         exportButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         previousButton.setAccessibilityIdentifier("sql-previous")
         nextButton.setAccessibilityIdentifier("sql-next")
@@ -476,6 +487,9 @@ final class SQLPreviewView: NSView, PreviewContent {
         sort = nil
         pickedTable = note.sqlTable
         queryBox.string = note.sqlQuery ?? ""
+        // The names in the box's dropdown belonged to the database that has
+        // just gone; the next one to land brings its own.
+        queryBox.completionSchema = .empty
         pendingFindLanding = nil
         findSession.close()
         grid.clearCellSelection()
@@ -541,7 +555,30 @@ final class SQLPreviewView: NSView, PreviewContent {
             applySortIndicators()
         }
         announce(dump.failure)
+        refreshCompletionSchema(from: dump, token: token)
         reload()
+    }
+
+    /// The names the query box completes on, read off the database and handed
+    /// over as a plain value.
+    ///
+    /// Read on the pane's own queue, where the dump is asked everything else:
+    /// `declaredTypes(ofTable:)` is a `PRAGMA` per table, which is nothing on
+    /// a small dump and is not a thing to put on the main thread on a large
+    /// one. What crosses back is a dictionary of strings, so the box never
+    /// holds the database at all.
+    private func refreshCompletionSchema(from dump: SQLDump, token: Int) {
+        queue.async { [weak self] in
+            var columns: [String: [String]] = [:]
+            for table in dump.tables {
+                columns[table] = dump.declaredTypes(ofTable: table).map(\.name)
+            }
+            let schema = SQLCompletion.Schema(tables: dump.tables, columns: columns)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, token == runToken else { return }
+                queryBox.completionSchema = schema
+            }
+        }
     }
 
     /// Asks the database for the page the bar says it is showing: the query
@@ -711,18 +748,29 @@ final class SQLPreviewView: NSView, PreviewContent {
 
     // MARK: - Export
 
-    /// The Export button: a destination through the window's own save flow,
-    /// pinned to `csv`, and the current result written into it. A write that
-    /// fails is said quietly, the way a failing run or a failing query
-    /// already are here — an alert, not a crash.
+    /// The `Export CSV` button: the grid's own header handed to the window's
+    /// export dialog, and the columns it comes back with written into the
+    /// file it names. A write that fails is said quietly, the way a failing
+    /// run or a failing query already are here — an alert, not a crash.
     @objc private func exportCSVButtonPressed(_ sender: Any?) {
-        guard let destination = exportDestination?(defaultExportName()) else { return }
+        guard let choice = exportDestination?(defaultExportName(), exportColumns())
+        else { return }
+        let destination = choice.url
         do {
-            try exportCSV(to: destination)
+            try exportCSV(to: destination, columns: choice.columns)
+            onExported?(destination)
         } catch {
             present("Couldn’t export “\(destination.lastPathComponent)”.",
                    informative: (error as? SQLDump.Failure)?.message ?? error.localizedDescription)
         }
+    }
+
+    /// The header the export dialog lists: the columns the grid is showing —
+    /// the query's own where the box holds one, since the page on screen *is*
+    /// the query's result — with each column's declared type where SQLite
+    /// gave it one. An expression a query selected has none.
+    func exportColumns() -> [(name: String, type: String?)] {
+        (page?.columns ?? fallbackColumns).map { ($0.name, $0.declaredType) }
     }
 
     /// `<table>.csv` for a table, `<dump base name>-query.csv` for a query —
@@ -740,11 +788,14 @@ final class SQLPreviewView: NSView, PreviewContent {
     /// Writes the current result out as CSV — the picked table, or the
     /// query's own when the grid is showing one — every row, in the grid's
     /// own sort order and none of the paging a page's `LIMIT` would leave
-    /// out. What the Export button reaches through the save panel, and what
+    /// out. What the `Export CSV` button reaches through the dialog, and what
     /// a File > Export… item elsewhere can call directly.
-    func exportCSV(to url: URL) throws {
-        guard let dump else { throw CSVExportError.nothingToExport }
-        let query = queryBox.string.trimmingCharacters(in: .whitespacesAndNewlines)
+    ///
+    /// `columns` is the dialog's own answer: the indices of the ticked
+    /// columns, in the order the grid has them. `nil` is every column, which
+    /// is what File > Export… means by a table.
+    func exportCSV(to url: URL, columns: [Int]? = nil) throws {
+        let (dump, source) = try exportSource()
         guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
             throw CocoaError(.fileWriteUnknown)
         }
@@ -752,35 +803,94 @@ final class SQLPreviewView: NSView, PreviewContent {
         defer { try? handle.close() }
 
         var writeError: Error?
-        func writeHeader(_ columns: [SQLDump.Column]) {
+        func writeHeader(_ all: [SQLDump.Column]) {
             guard writeError == nil else { return }
-            do { try CSVWriter.write(header: columns.map(\.name), to: handle) }
+            let names = Self.picked(all, columns).map(\.name)
+            do { try CSVWriter.write(header: names, to: handle) }
             catch { writeError = error }
         }
         func writeRow(_ values: [SQLDump.Value]) {
             guard writeError == nil else { return }
-            do { try CSVWriter.write(row: values.map(Self.csvField), to: handle) }
+            let fields = Self.picked(values, columns).map(Self.csvField)
+            do { try CSVWriter.write(row: fields, to: handle) }
             catch { writeError = error }
         }
 
-        let failure: SQLDump.Failure?
-        if !query.isEmpty {
-            failure = dump.forEachRow(ofQuery: query, sort: sort,
-                                      onColumns: writeHeader, onRow: writeRow)
-        } else if let table = pickedTable {
-            failure = dump.forEachRow(ofTable: table, sort: sort,
-                                      onColumns: writeHeader, onRow: writeRow)
-        } else {
-            throw CSVExportError.nothingToExport
-        }
+        let failure = forEachExportRow(of: source, in: dump,
+                                       onColumns: writeHeader, onRow: writeRow)
         if let writeError { throw writeError }
         if let failure { throw failure }
+    }
+
+    /// The same rows, gathered rather than written: the column names and
+    /// every row of the picked table or of the query's own result, in the
+    /// grid's own sort order and with `NULL` coming back `nil` the way the
+    /// CSV writes it. What `Preview as PDF` draws onto pages (`TablePDF`).
+    ///
+    /// Held in memory, unlike `exportCSV`, which streams: a table this drew
+    /// onto pages would have to be held whole to be paginated anyway.
+    func exportTable() throws -> (header: [String], rows: [[String?]]) {
+        let (dump, source) = try exportSource()
+        var header: [String] = []
+        var rows: [[String?]] = []
+        let failure = forEachExportRow(
+            of: source, in: dump,
+            onColumns: { header = $0.map(\.name) },
+            onRow: { rows.append($0.map(Self.csvField)) }
+        )
+        if let failure { throw failure }
+        return (header, rows)
+    }
+
+    /// The font the grid draws its cells in — the editor's own size,
+    /// monospaced. An exporter that draws the table rather than writing it
+    /// out sets its own cells in the same one.
+    var gridCellFont: NSFont { cellFont }
+
+    /// Which rows an export is of: the query in the box where the grid is
+    /// showing one, and the picked table otherwise.
+    private enum ExportSource {
+        case query(String)
+        case table(String)
+    }
+
+    /// Asked before anything is written, so a pane with nothing to export
+    /// refuses before a file has been made rather than after.
+    private func exportSource() throws -> (dump: SQLDump, source: ExportSource) {
+        guard let dump else { throw CSVExportError.nothingToExport }
+        let query = queryBox.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty { return (dump, .query(query)) }
+        guard let table = pickedTable else { throw CSVExportError.nothingToExport }
+        return (dump, .table(table))
+    }
+
+    /// One walk over the whole result, in the grid's sort: `onColumns` once,
+    /// then `onRow` per row, with no `LIMIT` and no page cut out of it.
+    private func forEachExportRow(
+        of source: ExportSource, in dump: SQLDump,
+        onColumns: ([SQLDump.Column]) -> Void, onRow: ([SQLDump.Value]) -> Void
+    ) -> SQLDump.Failure? {
+        switch source {
+        case .query(let query):
+            dump.forEachRow(ofQuery: query, sort: sort, onColumns: onColumns, onRow: onRow)
+        case .table(let table):
+            dump.forEachRow(ofTable: table, sort: sort, onColumns: onColumns, onRow: onRow)
+        }
     }
 
     /// A value as the grid reads it, except `NULL`: the grid draws the word,
     /// but a CSV field is not text and `NULL` written into one would read
     /// back as the four letters rather than as nothing. `CSVWriter` is what
     /// turns this `nil` into an empty field.
+    /// One row, or the header, cut down to the columns the dialog ticked.
+    /// `nil` is every column, and an index the row is too short for is
+    /// simply not there — a result answering fewer columns than the header
+    /// the dialog was built from must not take the write down with it.
+    private static func picked<Element>(_ all: [Element], _ columns: [Int]?) -> [Element] {
+        guard let columns else { return all }
+        return columns.compactMap { all.indices.contains($0) ? all[$0] : nil }
+    }
+
     private static func csvField(_ value: SQLDump.Value) -> String? {
         if case .null = value { return nil }
         return value.displayText

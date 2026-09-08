@@ -4,8 +4,9 @@ import AppKit
 ///
 /// A target is a *shape*, not a file type: `.previewPDF` is "what the reader
 /// is looking at, on pages", `.editorPDF` is "the source, as the editor has
-/// it". Which of them a tab offers is `Exporter.targets(for:)`, and the sheet
-/// lists them in that order with the first one selected.
+/// it", and the two PNGs are those same two on the screen rather than on
+/// paper. Which of them a tab offers is `Exporter.targets(for:)`, and the
+/// sheet lists them in that order with the first one selected.
 enum ExportTarget: String, CaseIterable {
     /// The render, the document or the picture as the tab shows it.
     case previewPDF
@@ -15,11 +16,13 @@ enum ExportTarget: String, CaseIterable {
     case bookPDF
     /// A document taken apart into a book.
     case epub
-    /// A dump's or a table's rows, written out as CSV.
-    case csv
     /// A `.tex` through a real TeX engine, rather than through Nota's own
     /// reading of it.
     case texPDF
+    /// The render as the screen has it, in one tall picture.
+    case previewPNG
+    /// The source listing as the screen has it, in one tall picture.
+    case editorPNG
 
     /// The word the popup wears — also the `L10n` key it is looked up under,
     /// so the sheet and the tables can never drift apart.
@@ -29,8 +32,9 @@ enum ExportTarget: String, CaseIterable {
         case .editorPDF: "Editor as PDF"
         case .bookPDF: "Book as PDF"
         case .epub: "Book (EPUB)"
-        case .csv: "Table (CSV)"
         case .texPDF: "PDF through TeX"
+        case .previewPNG: "PNG of the preview"
+        case .editorPNG: "PNG of the editor"
         }
     }
 
@@ -42,7 +46,7 @@ enum ExportTarget: String, CaseIterable {
         switch self {
         case .previewPDF, .editorPDF, .bookPDF, .texPDF: "pdf"
         case .epub: "epub"
-        case .csv: "csv"
+        case .previewPNG, .editorPNG: "png"
         }
     }
 }
@@ -56,7 +60,7 @@ enum ExportImagePlacement: String, CaseIterable {
     var titleKey: String {
         switch self {
         case .inline: "Inline"
-        case .plates: "Plates at the end"
+        case .plates: "End"
         }
     }
 
@@ -66,11 +70,16 @@ enum ExportImagePlacement: String, CaseIterable {
 /// Making the file the reader asked for.
 ///
 /// The one seam every export goes through. What each target *is* is decided
-/// here; how a page ends is `PDFPaginator`'s; the sheet and the save dialog
-/// are the window's. Four of the six targets are somebody else's work —
-/// a book onto pages, a document into a book, rows as CSV, a `.tex` through
-/// a TeX engine — so each of those is a hook standing empty until it is
-/// plugged in, and a target whose hook is empty is not offered at all.
+/// here; how a page ends is `PDFPaginator`'s, how a picture is drawn is
+/// `SnapshotPNG`'s; the sheet and the save dialog are the window's. Three of
+/// the seven targets are somebody else's work — a book onto pages, a
+/// document into a book, a `.tex` through a TeX engine — so each of those is
+/// a hook standing empty until it is plugged in, and a target whose hook is
+/// empty is not offered at all.
+///
+/// A grid's rows as CSV is not among them: that is the `Export CSV` button on
+/// the pane itself, which asks which columns are going out — a question this
+/// sheet has no row for (`CSVExportDialog`).
 enum Exporter {
 
     /// What the window knows and the export needs: the editor's font and
@@ -85,6 +94,22 @@ enum Exporter {
         /// The measure a render is laid out to. The page's, unless a test
         /// asks for another.
         var width: CGFloat = PDFPaginator.contentWidth
+        /// The measure the *screen* is reading at, for the one export that is
+        /// a photograph of it rather than a page: the preview column's own
+        /// content width for a render, the editor's text width for a listing.
+        /// The window fills it in; `nil` in a test, where the picture is
+        /// taken at `width` like everything else.
+        var screenWidth: CGFloat?
+        /// What a picture is laid out to: the screen's measure where the
+        /// window said what it was, the page's otherwise.
+        var pictureWidth: CGFloat { screenWidth ?? width }
+        /// What a picture's colours resolve under. The window the export was
+        /// started from, so a reader in dark mode gets the dark page they are
+        /// looking at, and the app's own appearance where there is no window
+        /// — a test, a `nil` `NSApp`.
+        var pictureAppearance: NSAppearance? {
+            window?.effectiveAppearance ?? NSApp?.effectiveAppearance
+        }
         /// The view this tab is being read through, where there is one. The
         /// two PDFs Nota writes itself never look at it — a render is made
         /// from the note, not read off the screen — but an exporter that
@@ -106,7 +131,10 @@ enum Exporter {
         var progress: (String) -> Void = { _ in }
     }
 
-    enum Failure: Error {
+    /// Equatable so a test — and the window, which has one of them to tell
+    /// apart from the rest — can name the failure rather than match on its
+    /// text.
+    enum Failure: Error, Equatable {
         /// The target's own exporter has not been plugged in. Not something a
         /// reader can reach — a target with no hook is never listed — but the
         /// switch has to answer for it.
@@ -114,6 +142,11 @@ enum Exporter {
         /// The tab had nothing this target could be made from: an unreadable
         /// picture, a document that would not parse.
         case nothingToExport
+        /// The note is taller than any one picture may be
+        /// (`SnapshotPNG.maximumHeight`). The two PDFs would have paginated
+        /// it; a PNG has nowhere to break, so the export says so rather than
+        /// writing a file nothing can open.
+        case tooLongForAnImage
     }
 
     // MARK: - The hooks
@@ -123,7 +156,7 @@ enum Exporter {
     /// being read — including the pane in front of it, for an exporter whose
     /// answer is on screen rather than in the note.
     ///
-    /// Asynchronous, because three of the five are: a page and a book go
+    /// Asynchronous, because three of them are: a page and a book go
     /// through WebKit, and a `.tex` may have a download and a prompt in front
     /// of it. None of them can be waited on with a semaphore either — WebKit
     /// wants the main run loop, and a semaphore held on the main thread is
@@ -141,11 +174,6 @@ enum Exporter {
     /// A document into a book — the way back from `.pdf` to `.epub`.
     static var pdfToEPUB: Hook?
 
-    /// A `.sql` or `.csv` tab's rows written out as CSV. It is handed the
-    /// pane along with the note, since what a grid is showing — the query in
-    /// the box, the column a header click sorted by — lives on the pane.
-    static var csv: Hook?
-
     /// A `.tex` typeset by whichever engine is installed. With none, the tab
     /// still exports through Nota's own render, which is `.previewPDF`.
     static var texPDF: Hook?
@@ -154,24 +182,32 @@ enum Exporter {
     /// as the source listing it is in the editor.
     static var htmlPagePDF: Hook?
 
+    /// A `.sql` or `.csv` tab's grid on pages: the table itself, ruled,
+    /// rather than the source that spells it out. It is handed the pane
+    /// along with the note, since what the grid is showing — the query in the
+    /// box, the
+    /// column a header click sorted by — lives there and nowhere else.
+    /// Without it, and without a pane to read, a grid exports as the source
+    /// listing it is in the editor.
+    static var tablePDF: Hook?
+
     /// The hook a target waits on, or `nil` for the two that are written
     /// here and always available.
     static func hook(for target: ExportTarget) -> Hook? {
         switch target {
-        case .previewPDF, .editorPDF: nil
+        case .previewPDF, .editorPDF, .previewPNG, .editorPNG: nil
         case .bookPDF: bookPDF
         case .epub: pdfToEPUB
-        case .csv: csv
         case .texPDF: texPDF
         }
     }
 
-    /// Whether the sheet lists this target at all. The two PDFs Nota writes
-    /// itself always; every other target only once somebody has plugged its
-    /// exporter in.
+    /// Whether the sheet lists this target at all. The two PDFs and the two
+    /// pictures Nota writes itself always; every other target only once
+    /// somebody has plugged its exporter in.
     private static func isAvailable(_ target: ExportTarget) -> Bool {
         switch target {
-        case .previewPDF, .editorPDF: true
+        case .previewPDF, .editorPDF, .previewPNG, .editorPNG: true
         default: hook(for: target) != nil
         }
     }
@@ -179,8 +215,8 @@ enum Exporter {
     // MARK: - What a tab offers
 
     /// The targets this tab can be exported to, in the order the sheet lists
-    /// them — what the reader is looking at first, the source after it, and
-    /// the tab's own speciality last.
+    /// them — what the reader is looking at first, the source after it, the
+    /// same two as pictures, and the tab's own speciality last.
     static func targets(for note: Note) -> [ExportTarget] {
         var targets: [ExportTarget]
         switch note.kind {
@@ -191,14 +227,24 @@ enum Exporter {
             // same listing twice over, which is the honest answer: there is
             // nothing else to show.
             targets = [.previewPDF, .editorPDF]
+            // The pictures after the pages. Every text tab can be
+            // photographed as its editor; only a tab that draws a render of
+            // its own has a preview worth a picture — a page, a grid and a
+            // tree are drawn by views the snapshot cannot lay out, and their
+            // "preview" here would only be the listing again.
+            if snapshotsRender(note) { targets.append(.previewPNG) }
+            targets.append(.editorPNG)
             switch note.previewKind {
             case .latex: targets.append(.texPDF)
-            case .sql, .csv: targets.append(.csv)
             default: break
             }
-        case .rtf, .image:
-            // The document as the viewer shows it, and the picture on a page.
-            // Neither has a source to list.
+        case .rtf:
+            // The document as the viewer shows it, on a page and as a
+            // picture. It has no source to list.
+            targets = [.previewPDF, .previewPNG]
+        case .image:
+            // The picture on a page. It is a picture already, so there is
+            // nothing to photograph and nothing to list.
             targets = [.previewPDF]
         case .epub:
             targets = [.bookPDF]
@@ -209,13 +255,28 @@ enum Exporter {
         return targets.filter(isAvailable)
     }
 
+    /// Whether this tab's preview is a render Nota lays out itself — the two
+    /// grammars it renders and the rich text it reads — rather than a view
+    /// somebody else draws.
+    ///
+    /// The one question `.previewPNG` turns on, asked in two places: here, to
+    /// decide whether the target is offered, and by the window, to decide
+    /// which column's width the picture is taken at.
+    static func snapshotsRender(_ note: Note) -> Bool {
+        switch note.kind {
+        case .rtf: true
+        case .text: note.previewKind == .markdown || note.previewKind == .latex
+        case .image, .pdf, .epub: false
+        }
+    }
+
     // MARK: - Making the file
 
     /// Writes `target` for `note` into `url` and answers on the main thread.
     ///
-    /// One shape for all six, however long each takes: the two Nota writes
-    /// itself answer before the call returns, and the four that are hooks
-    /// answer whenever their own work is done.
+    /// One shape for all seven, however long each takes: the four Nota writes
+    /// itself — two PDFs and two pictures — answer before the call returns,
+    /// and the three that are hooks answer whenever their own work is done.
     static func export(
         _ note: Note, to target: ExportTarget, at url: URL, context: Context,
         completion: @escaping (Result<Void, Error>) -> Void
@@ -223,7 +284,9 @@ enum Exporter {
         switch target {
         case .previewPDF: writePreviewPDF(note, to: url, context: context, completion: completion)
         case .editorPDF: completion(Result { try writeListingPDF(note, to: url, context: context) })
-        case .bookPDF, .epub, .csv, .texPDF:
+        case .previewPNG: completion(Result { try writePreviewPNG(note, to: url, context: context) })
+        case .editorPNG: completion(Result { try writeListingPNG(note, to: url, context: context) })
+        case .bookPDF, .epub, .texPDF:
             guard let hook = hook(for: target) else {
                 completion(.failure(Failure.noExporter(target)))
                 return
@@ -248,7 +311,40 @@ enum Exporter {
             hook(note, url, context, completion)
             return
         }
+        // A grid as the grid, where the table exporter is plugged in and
+        // there is a pane to read the rows off. Without one — a test with no
+        // window, an exporter taken out — the source listing stands in.
+        //
+        // A pane in front of the tab is not the same as a pane that has read
+        // it: both grids' `show` returns without reading while the preview
+        // column is hidden, and a big file is not read until the button asks
+        // for it, so a tab exported or printed from editor mode has a pane
+        // with no table behind it. That answers `nothingToExport`, and the
+        // listing stands in for it exactly as it does for a tab with no pane
+        // at all — SPEC "## Export" promises the listing, not a failure.
+        if note.kind == .text, note.previewKind == .sql || note.previewKind == .csv,
+           let hook = tablePDF, context.previewContent != nil {
+            hook(note, url, context) { result in
+                guard case let .failure(error) = result, isNothingToExport(error) else {
+                    completion(result)
+                    return
+                }
+                completion(Result { try writeListingPDF(note, to: url, context: context) })
+            }
+            return
+        }
         completion(Result { try writePreviewPDFSynchronously(note, to: url, context: context) })
+    }
+
+    /// Whether an exporter's failure means "there was nothing on screen to
+    /// export", which is the one failure the listing stands in for. Both
+    /// spellings of it: the grids' own (`CSVExportError`) and the one this
+    /// file raises when there is no pane at all.
+    private static func isNothingToExport(_ error: Error) -> Bool {
+        switch error {
+        case CSVExportError.nothingToExport, Failure.nothingToExport: true
+        default: false
+        }
     }
 
     private static func writePreviewPDFSynchronously(
@@ -268,13 +364,18 @@ enum Exporter {
         case .text:
             switch note.previewKind {
             case .markdown:
-                try PDFPaginator.write(
-                    text: MarkdownRenderer.render(
-                        note.text, font: context.font,
-                        assets: context.assets, width: context.width
-                    ).text,
-                    to: url
-                )
+                // The render places its own pictures, so `.inline` is simply
+                // the render. Asked for plates, the note's pictures come out
+                // of the text the same way the listing's do — the tag stays
+                // on the line, the picture goes to the back.
+                let render = NSMutableAttributedString(attributedString: MarkdownRenderer.render(
+                    note.text, font: context.font,
+                    assets: context.assets, width: context.width
+                ).text)
+                let plates = context.images == .plates
+                    ? gatherPlates(in: render, of: note, context: context)
+                    : []
+                try PDFPaginator.write(text: render, plates: plates, to: url)
             case .latex:
                 try PDFPaginator.write(
                     text: LaTeXRenderer.render(
@@ -288,10 +389,11 @@ enum Exporter {
                 // was taken above — so the source listing stands in.
                 try writeListingPDF(note, to: url, context: context)
             default:
-                // A tree, a grid and a drawing all print badly as what they
-                // are — a table of rows is not a page — and the beautified
-                // source is the thing the reader agreed to. So the listing
-                // stands in, for those and for plain text.
+                // A tree and a drawing print badly as what they are, and the
+                // beautified source is the thing the reader agreed to. So the
+                // listing stands in, for those and for plain text — and for a
+                // grid with no pane to read, since a grid drawn onto pages is
+                // the table on screen and there is no table without one.
                 try writeListingPDF(note, to: url, context: context)
             }
         case .pdf, .epub:
@@ -307,6 +409,84 @@ enum Exporter {
     ) throws {
         let listing = listing(for: note, context: context)
         try PDFPaginator.write(text: listing.text, plates: listing.plates, to: url)
+    }
+
+    // MARK: - The screen, as a picture
+
+    /// The render, photographed: the same text the preview column is showing,
+    /// laid out at the column's own measure and drawn under the window's own
+    /// appearance (SPEC "## Export", Snapshots).
+    ///
+    /// Only offered where `snapshotsRender` says there is a render to take;
+    /// anything else falls through to the listing, exactly as `.previewPDF`
+    /// does, so the two halves of the export can never disagree about what a
+    /// tab's "preview" is.
+    private static func writePreviewPNG(
+        _ note: Note, to url: URL, context: Context
+    ) throws {
+        try SnapshotPNG.write(
+            text: try previewSnapshot(note, context: context),
+            width: context.pictureWidth,
+            appearance: context.pictureAppearance,
+            background: .textBackgroundColor,
+            to: url
+        )
+    }
+
+    /// The editor, photographed: the same listing `.editorPDF` builds, at the
+    /// editor's own measure.
+    ///
+    /// One difference, and it is the reader's Images row: a picture has no
+    /// pages, so there is nowhere to gather plates onto and nothing to turn
+    /// to. Every chip is drawn where it was written, whatever the sheet says
+    /// — which is why the sheet only offers the row for `.editorPDF`.
+    private static func writeListingPNG(
+        _ note: Note, to url: URL, context: Context
+    ) throws {
+        try SnapshotPNG.write(
+            text: listingSnapshot(note, context: context),
+            width: context.pictureWidth,
+            appearance: context.pictureAppearance,
+            background: .textBackgroundColor,
+            to: url
+        )
+    }
+
+    private static func previewSnapshot(
+        _ note: Note, context: Context
+    ) throws -> NSAttributedString {
+        switch note.kind {
+        case .rtf:
+            guard let rich = note.richText else { throw Failure.nothingToExport }
+            return rich
+        case .text:
+            switch note.previewKind {
+            case .markdown:
+                return MarkdownRenderer.render(
+                    note.text, font: context.font,
+                    assets: context.assets, width: context.pictureWidth
+                ).text
+            case .latex:
+                return LaTeXRenderer.render(
+                    note.text, font: context.font,
+                    baseURL: note.fileURL, width: context.pictureWidth
+                ).text
+            default:
+                return listingSnapshot(note, context: context)
+            }
+        case .pdf, .epub, .image:
+            // None of the three is offered a picture: two are documents with
+            // pages of their own, and the third is a picture already.
+            throw Failure.nothingToExport
+        }
+    }
+
+    private static func listingSnapshot(
+        _ note: Note, context: Context
+    ) -> NSAttributedString {
+        var context = context
+        context.images = .inline
+        return listing(for: note, context: context).text
     }
 
     // MARK: - The source listing
@@ -332,54 +512,108 @@ enum Exporter {
         ], range: whole)
 
         var plates: [PDFPaginator.Plate] = []
-        var spots: [(range: NSRange, assetID: String)] = []
-        listing.forEachAttachmentRun { value, range, _ in
-            guard let chip = value as? NotaImageAttachment else { return }
-            spots.append((range: range, assetID: chip.assetID))
-        }
-
-        // Backwards, so a replacement never moves the spot before it.
-        for (offset, spot) in spots.enumerated().reversed() {
-            let number = offset + 1
-            let name = name(ofAsset: spot.assetID, in: note, assets: context.assets)
-            let image = context.assets?.image(for: spot.assetID)
-            let replacement: NSAttributedString
-            switch context.images {
-            case .inline:
-                // The picture itself, fitted to the column: the line grows
-                // around it, and stays one line in the gutter.
-                guard let image else { continue }
-                replacement = NSAttributedString(
-                    attachment: fitted(image, to: context.width)
-                )
-            case .plates:
-                // The tag the editor draws, now saying which plate to turn to.
-                replacement = NSAttributedString(
-                    attachment: NotaImageAttachment.chipAttachment(
-                        text: "[\(number)] \(name)", font: context.font
-                    )
-                )
-            }
-            listing.replaceCharacters(in: spot.range, with: replacement)
-        }
-
-        if context.images == .plates {
-            for (offset, spot) in spots.enumerated() {
+        switch context.images {
+        case .inline:
+            // The picture itself, fitted to the column: the line grows
+            // around it, and stays one line in the gutter. Backwards, so a
+            // replacement never moves the spot before it.
+            for spot in pictureSpots(in: listing).reversed() {
                 guard let image = context.assets?.image(for: spot.assetID) else { continue }
-                plates.append(PDFPaginator.Plate(
-                    image: image,
-                    caption: caption(
-                        figure: offset + 1,
-                        name: name(ofAsset: spot.assetID, in: note, assets: context.assets),
-                        line: note.lineIndex.lineNumber(at: spot.range.location),
-                        font: context.font
-                    )
+                listing.replaceCharacters(in: spot.range, with: NSAttributedString(
+                    attachment: fitted(image, to: context.width)
                 ))
             }
+        case .plates:
+            plates = gatherPlates(in: listing, of: note, context: context)
         }
 
         guard context.showsLineNumbers else { return (listing, plates) }
         return (numbered(listing, context: context), plates)
+    }
+
+    /// One of the note's pictures on its way onto a page: where it stands in
+    /// the text being written, and which asset it is.
+    private struct PictureSpot {
+        let range: NSRange
+        let assetID: String
+    }
+
+    /// The note's own pictures in a piece of text, in the order they were
+    /// written. Two kinds of attachment are the same picture seen from
+    /// either half of the tab — the editor's chip in a listing, the
+    /// renderer's picture in a render — and nothing else in either (a
+    /// formula, a diagram) is a picture of the note's.
+    private static func pictureSpots(in text: NSAttributedString) -> [PictureSpot] {
+        var spots: [PictureSpot] = []
+        text.forEachAttachmentRun { value, range, _ in
+            switch value {
+            case let chip as NotaImageAttachment:
+                spots.append(PictureSpot(range: range, assetID: chip.assetID))
+            case let picture as MarkdownImageAttachment:
+                spots.append(PictureSpot(range: range, assetID: picture.assetID))
+            default:
+                break
+            }
+        }
+        return spots
+    }
+
+    /// Gathering the pictures at the end, the one way it is ever done: every
+    /// picture in `text` becomes the `[n] name` tag the reader turns by, and
+    /// the pictures themselves come back as the plates to follow the text.
+    ///
+    /// The listing and the render both come through here, which is why the
+    /// two of them tag a picture the same way and caption it the same way.
+    /// A line number is the note's, not the text's: a render's pictures are
+    /// laid out by the renderer and know nothing of the lines they were
+    /// written on, so they are looked up on the note itself.
+    private static func gatherPlates(
+        in text: NSMutableAttributedString, of note: Note, context: Context
+    ) -> [PDFPaginator.Plate] {
+        let spots = pictureSpots(in: text)
+        var lines = chipLines(of: note)
+
+        // Backwards, so a replacement never moves the spot before it.
+        for (offset, spot) in spots.enumerated().reversed() {
+            let name = name(ofAsset: spot.assetID, in: note, assets: context.assets)
+            text.replaceCharacters(in: spot.range, with: NSAttributedString(
+                attachment: NotaImageAttachment.chipAttachment(
+                    text: "[\(offset + 1)] \(name)", font: context.font
+                )
+            ))
+        }
+
+        var plates: [PDFPaginator.Plate] = []
+        for (offset, spot) in spots.enumerated() {
+            let line: Int
+            if let index = lines.firstIndex(where: { $0.assetID == spot.assetID }) {
+                line = lines.remove(at: index).line
+            } else {
+                line = 1
+            }
+            guard let image = context.assets?.image(for: spot.assetID) else { continue }
+            plates.append(PDFPaginator.Plate(
+                image: image,
+                caption: caption(
+                    figure: offset + 1,
+                    name: name(ofAsset: spot.assetID, in: note, assets: context.assets),
+                    line: line,
+                    font: context.font
+                )
+            ))
+        }
+        return plates
+    }
+
+    /// Where each of the note's pictures was written, in order: the one place
+    /// a plate's caption can get a line number from.
+    private static func chipLines(of note: Note) -> [(assetID: String, line: Int)] {
+        var lines: [(assetID: String, line: Int)] = []
+        note.storage.forEachAttachmentRun { value, range, _ in
+            guard let chip = value as? NotaImageAttachment else { return }
+            lines.append((chip.assetID, note.lineIndex.lineNumber(at: range.location)))
+        }
+        return lines
     }
 
     /// What a picture is called: the name the file itself links it by where

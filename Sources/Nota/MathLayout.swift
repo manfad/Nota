@@ -580,7 +580,15 @@ enum MathRenderer {
     }
 
     private static func measure(_ text: String, font: NSFont) -> Glyph {
-        let string = NSAttributedString(string: text, attributes: [.font: font])
+        // `kCTForegroundColorFromContext`: without it Core Text draws the line
+        // in its own black whatever the context is filled with, and the
+        // colour `draw(at:in:color:)` resolves at draw time never reaches the
+        // ink — which is how a dark window's formulas came out black on a
+        // dark page. The same attribute the Mermaid renderers' labels carry.
+        let string = NSAttributedString(string: text, attributes: [
+            .font: font,
+            kCTForegroundColorFromContextAttributeName as NSAttributedString.Key: true,
+        ])
         let line = CTLineCreateWithAttributedString(string)
         var ascent: CGFloat = 0
         var descent: CGFloat = 0

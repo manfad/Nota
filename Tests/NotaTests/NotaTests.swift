@@ -174,7 +174,7 @@ final class NotaTests: AppKitTestCase {
 
         XCTAssertEqual(
             controller.pageTitles,
-            ["General", "Appearance", "Editor", "Preview", "Tab bar", "Status bar",
+            ["General", "Appearance", "Editor", "Tab bar", "Status bar",
              "Shortcuts", "File types", "About"]
         )
 
@@ -188,18 +188,17 @@ final class NotaTests: AppKitTestCase {
         func titles(on page: Int) -> [String] {
             controller.rows(on: page).map(\.title)
         }
-        XCTAssertEqual(titles(on: 0), ["Language", "Theme"])
+        XCTAssertEqual(titles(on: 0), ["Language", "Theme", "Open supported files in"])
         XCTAssertEqual(titles(on: 1), ["Font", "Size", "Line spacing", "Padding", "Sidebar side"])
         XCTAssertEqual(titles(on: 2), ["Word wrap", "Line numbers", "Gutter separator",
                                        "Highlight current line", "Vim mode"])
-        XCTAssertEqual(titles(on: 3), ["Start supported files in preview mode"])
-        XCTAssertEqual(titles(on: 4), ["Show tab bar", "Auto-hide tab bar", "Traffic lights",
+        XCTAssertEqual(titles(on: 3), ["Show tab bar", "Auto-hide tab bar", "Traffic lights",
                                        "Bookmark button", "Bookmark dialog button",
                                        "Settings button"])
-        XCTAssertEqual(titles(on: 5), ["Show status bar", "Words", "Characters", "Images", "Lines",
+        XCTAssertEqual(titles(on: 4), ["Show status bar", "Words", "Characters", "Images", "Lines",
                                        "Format", "Text encoding", "Line endings",
                                        "Cursor position"])
-        for page in [2, 3, 4, 5] {
+        for page in [2, 3, 4] {
             for row in controller.rows(on: page) {
                 XCTAssertTrue(row.control is NSSwitch, "\(row.title) is not a switch")
             }
@@ -302,7 +301,7 @@ final class NotaTests: AppKitTestCase {
         ]
         for (title, state) in chrome {
             let control = try XCTUnwrap(
-                controller.rows(on: 4).first { $0.title == title }?.control as? NSSwitch
+                controller.rows(on: 3).first { $0.title == title }?.control as? NSSwitch
             )
             control.state = state
             _ = NSApp.sendAction(try XCTUnwrap(control.action), to: control.target, from: control)
@@ -333,7 +332,7 @@ final class NotaTests: AppKitTestCase {
         defer { controller.selectPage(at: 0) }
         XCTAssertTrue(controller.selectPage(titled: "Tab bar"))
 
-        let rows = controller.rows(on: 4)
+        let rows = controller.rows(on: 3)
         XCTAssertEqual(rows.map(\.title), [
             "Show tab bar", "Auto-hide tab bar", "Traffic lights",
             "Bookmark button", "Bookmark dialog button", "Settings button",
@@ -437,7 +436,7 @@ final class NotaTests: AppKitTestCase {
         XCTAssertEqual(controller.window?.title, "设置")
         // The sidebar and the rows are relabelled in place, not rebuilt.
         XCTAssertEqual(controller.pageTitles.first, "通用")
-        XCTAssertEqual(controller.rows(on: 0).map(\.title), ["语言", "主题"])
+        XCTAssertEqual(controller.rows(on: 0).map(\.title), ["语言", "主题", "以此方式打开支持的文件"])
 
         // The popups' own items are translated too (the General footnote that
         // used to be checked here went on 2026-09-07).

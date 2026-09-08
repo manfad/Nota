@@ -203,6 +203,7 @@ final class SQLDump {
             return
         }
         self.handle = handle
+        SQLDump.registerDialectFunctions(in: handle)
         let (failure, map) = SQLDump.run(sql, in: handle)
         self.failure = failure
         self.sourceMap = map
@@ -211,6 +212,143 @@ final class SQLDump {
 
     deinit {
         if let handle { sqlite3_close(handle) }
+    }
+
+    // MARK: - The functions another dialect writes
+
+    /// The handful of Oracle functions a SQL Developer export writes inside
+    /// its values — `to_date('05-JAN-24','DD-MON-RR')`, `to_timestamp`,
+    /// `to_char`, `to_number`, `nvl`, `hextoraw`, `empty_clob` — registered
+    /// on the database itself rather than rewritten out of the text.
+    ///
+    /// A door rather than an edit, for two reasons. A rewrite would have to
+    /// find each call's own parentheses in every statement of a file that is
+    /// almost nothing but inserts, and get the nesting right every time; a
+    /// function is registered once and costs nothing after. And a registered
+    /// function goes on standing when the run is over: a reader who types
+    /// `to_date(placed, 'DD-MON-RR')` into the query box beside an Oracle
+    /// dump — the spelling their own database taught them — gets an answer
+    /// rather than "no such function".
+    ///
+    /// None of them computes anything, and none pretends to. Nota reads a
+    /// dump; it does not keep Oracle's date arithmetic, and the string the
+    /// file wrote is exactly what the grid should show. So `to_date` and its
+    /// neighbours hand back their first argument as it came in, `to_number`
+    /// hands it back as a number where it reads as one, `hextoraw` decodes
+    /// its hex to the bytes it stands for, and the two `empty_` calls answer
+    /// with an empty value. All are deterministic — the same arguments
+    /// always give the same answer — and all are reachable from the query
+    /// box, whose authorizer already allows `SQLITE_FUNCTION`.
+    private static func registerDialectFunctions(in handle: OpaquePointer) {
+        // `SQLITE_DETERMINISTIC` rides along with the encoding, and is not
+        // exposed by name either.
+        let flags = SQLITE_UTF8 | 0x800
+
+        func define(
+            _ name: String, _ arguments: Int32,
+            _ body: @escaping @convention(c) (
+                OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?
+            ) -> Void
+        ) {
+            sqlite3_create_function_v2(handle, name, arguments, flags, nil, body, nil, nil, nil)
+        }
+
+        let first: @convention(c) (
+            OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?
+        ) -> Void = { context, count, values in
+            guard count > 0, let values, let value = values[0] else {
+                sqlite3_result_null(context)
+                return
+            }
+            sqlite3_result_value(context, value)
+        }
+        for name in ["to_date", "to_timestamp", "to_timestamp_tz", "to_char",
+                     "to_dsinterval", "to_yminterval", "to_clob", "to_nchar"] {
+            define(name, -1, first)
+        }
+
+        define("to_number", -1) { context, count, values in
+            guard count > 0, let values, let value = values[0] else {
+                sqlite3_result_null(context)
+                return
+            }
+            switch sqlite3_value_type(value) {
+            case SQLITE_INTEGER, SQLITE_FLOAT:
+                sqlite3_result_value(context, value)
+            case SQLITE_NULL:
+                sqlite3_result_null(context)
+            default:
+                guard let text = sqlite3_value_text(value) else {
+                    sqlite3_result_null(context)
+                    return
+                }
+                if let number = Double(String(cString: text)) {
+                    sqlite3_result_double(context, number)
+                } else {
+                    sqlite3_result_value(context, value)
+                }
+            }
+        }
+
+        // Oracle's own `ifnull`, and the two-argument one is the only shape
+        // an export ever writes.
+        define("nvl", 2) { context, count, values in
+            guard count == 2, let values, let value = values[0], let fallback = values[1] else {
+                sqlite3_result_null(context)
+                return
+            }
+            sqlite3_result_value(
+                context, sqlite3_value_type(value) == SQLITE_NULL ? fallback : value
+            )
+        }
+
+        define("hextoraw", 1) { context, count, values in
+            guard count == 1, let values, let value = values[0],
+                  let text = sqlite3_value_text(value) else {
+                sqlite3_result_null(context)
+                return
+            }
+            let digits = Array(String(cString: text).utf8)
+            var bytes: [UInt8] = []
+            bytes.reserveCapacity(digits.count / 2)
+            var index = 0
+            while index + 1 < digits.count {
+                guard let high = SQLDump.hexValue(digits[index]),
+                      let low = SQLDump.hexValue(digits[index + 1]) else {
+                    // Not hex after all — the text itself is the best answer
+                    // there is, and better than nothing.
+                    sqlite3_result_value(context, value)
+                    return
+                }
+                bytes.append(high << 4 | low)
+                index += 2
+            }
+            guard !bytes.isEmpty else {
+                sqlite3_result_zeroblob(context, 0)
+                return
+            }
+            bytes.withUnsafeBufferPointer { buffer in
+                sqlite3_result_blob(
+                    context, buffer.baseAddress, Int32(buffer.count), SQLDump.transient
+                )
+            }
+        }
+
+        define("empty_clob", 0) { context, _, _ in
+            sqlite3_result_text(context, "", 0, SQLDump.transient)
+        }
+        define("empty_blob", 0) { context, _, _ in
+            sqlite3_result_zeroblob(context, 0)
+        }
+    }
+
+    private static func hexValue(_ byte: UInt8) -> UInt8? {
+        switch byte {
+        case 48...57: byte - 48          // 0–9
+        case 65...70: byte - 65 + 10     // A–F
+        case 97...102: byte - 97 + 10    // a–f
+        default: nil
+        }
     }
 
     // MARK: - Running the file
@@ -253,6 +391,14 @@ final class SQLDump {
         // backslash escapes rather than leave a `pg_dump` export's own `\`
         // characters alone.
         var mysqlDetected = false
+        // Which exporter wrote the file, asked of the text once before the
+        // first statement is read rather than as the run goes. A `mysqldump`
+        // or `pg_dump` export ends every statement with a `;`, so MySQL can
+        // be recognised late and nothing is lost; an SSMS script ends its
+        // batches with a lone `GO` and a SQL*Plus one ends a `REM` at its
+        // line, so where the *first* statement ends already depends on the
+        // answer. See `SQLDumpDialect.detectFlavor`.
+        let flavor = SQLDumpDialect.detectFlavor(in: sql)
         // Which of a table's columns were declared `boolean`, kept beside
         // its name from the moment its `CREATE TABLE` runs — by the time a
         // `COPY` block for it is read, `boolean` has already become
@@ -289,6 +435,15 @@ final class SQLDump {
                     if cursor.pointee == 92 {
                         while cursor.pointee != 0, cursor.pointee != 10 { cursor += 1 }
                         cursor = skippingBlanks(cursor)
+                    }
+                    // SQL*Plus's own terminator: a line holding nothing but a
+                    // `/`, which ends the PL/SQL block above it. The blocks
+                    // themselves are skipped whole below, so by the time one
+                    // of these is reached on its own there is nothing left for
+                    // it to end — but it is not SQL either, and left standing
+                    // it would stop the run.
+                    if flavor == .oracle, let past = SQLDumpDialect.slashLineEnd(at: cursor) {
+                        cursor = skippingBlanks(past)
                     }
                     if cursor == before { break }
                 }
@@ -332,9 +487,25 @@ final class SQLDump {
                 // rewrite, above all) pays for nothing more than that.
                 // See `SQLDumpDialect`.
                 let leadingKeyword = SQLDumpDialect.leadingKeyword(at: cursor)
-                if SQLDumpDialect.handles(leadingKeyword) {
+
+                // A PL/SQL block — `CREATE OR REPLACE TRIGGER … END; /`, or
+                // an anonymous `BEGIN … END; /` — is not one statement and
+                // does not end like one: the `;`s in it are its own
+                // statements', and the block ends at the `/` on the line
+                // after it. SQLite has no procedural language at all, so the
+                // whole thing is stepped over as one unit, before anything
+                // asks where a statement would end.
+                if flavor == .oracle,
+                   let blockEnd = SQLDumpDialect.plsqlBlockEnd(
+                       from: cursor, keyword: leadingKeyword
+                   ) {
+                    cursor = blockEnd
+                    continue
+                }
+
+                if SQLDumpDialect.handles(leadingKeyword, flavor: flavor) {
                     let extentEnd = SQLDumpDialect.statementExtent(
-                        from: cursor, mysqlDetected: mysqlDetected
+                        from: cursor, mysqlDetected: mysqlDetected, flavor: flavor
                     )
                     // `INSERT` is the one keyword here that shows up once a
                     // row rather than once a table — a `.dump`'s worth of
@@ -350,19 +521,31 @@ final class SQLDump {
                     // one of the keywords `handles` answers yes to.
                     let looksAtThisStatement = leadingKeyword != "INSERT"
                         || SQLDumpDialect.mayNeedRewrite(
-                            from: cursor, to: extentEnd, mysqlDetected: mysqlDetected
+                            from: cursor, to: extentEnd, mysqlDetected: mysqlDetected,
+                            flavor: flavor
                         )
                     if looksAtThisStatement {
                         let rawText = SQLDumpDialect.string(from: cursor, to: extentEnd)
-                        if !mysqlDetected {
+                        if !mysqlDetected, flavor == .standard {
                             mysqlDetected = SQLDumpDialect.looksLikeMySQL(rawText)
                         }
                         if leadingKeyword == "CREATE",
                            let info = SQLDumpDialect.booleanColumns(inCreateTable: rawText) {
                             booleanColumnsByTable[info.table] = info.columns
                         }
-                        switch SQLDumpDialect.action(for: rawText, mysqlDetected: mysqlDetected) {
+                        switch SQLDumpDialect.action(
+                            for: rawText, mysqlDetected: mysqlDetected, flavor: flavor
+                        ) {
                         case .skip:
+                            cursor = extentEnd
+                            continue
+                        case .attempt(let rewritten):
+                            // Run it if it runs, and say nothing if it does
+                            // not. The one shape worth trying without
+                            // promising: an Oracle view, whose `SELECT` may
+                            // be written in a dialect nothing here
+                            // translates, and which no grid shows anyway.
+                            _ = runRewritten(rewritten, in: handle)
                             cursor = extentEnd
                             continue
                         case .rewrite(let rewritten):
@@ -375,29 +558,12 @@ final class SQLDump {
                             // whole dump exactly as an unrecognised
                             // statement always has, and shows the statement
                             // as the file itself wrote it.
-                            var rewrittenStatement: OpaquePointer?
-                            guard sqlite3_prepare_v2(
-                                handle, rewritten, -1, &rewrittenStatement, nil
-                            ) == SQLITE_OK else {
+                            guard runRewritten(rewritten, in: handle) else {
                                 failure = Failure(
                                     message: String(cString: sqlite3_errmsg(handle)),
                                     statement: rawText
                                 )
                                 return
-                            }
-                            if let rewrittenStatement {
-                                var stepped = sqlite3_step(rewrittenStatement)
-                                while stepped == SQLITE_ROW {
-                                    stepped = sqlite3_step(rewrittenStatement)
-                                }
-                                sqlite3_finalize(rewrittenStatement)
-                                guard stepped == SQLITE_DONE else {
-                                    failure = Failure(
-                                        message: String(cString: sqlite3_errmsg(handle)),
-                                        statement: rawText
-                                    )
-                                    return
-                                }
                             }
                             // A rewritten insert is an insert: its rows go
                             // on the map like every other row's, read off
@@ -453,6 +619,26 @@ final class SQLDump {
             }
         }
         return (failure, sourceMap(of: spans, in: sql, backslashEscapes: mysqlDetected))
+    }
+
+    /// One statement of text prepared and run on its own, away from the tail
+    /// loop — which is what a rewritten statement needs, its tail being a
+    /// position in a string that exists nowhere in the file.
+    ///
+    /// `false` for anything that will not prepare or will not step,
+    /// `sqlite3_errmsg` left set for a caller that means to make a `Failure`
+    /// of it — and ignored by the one caller that does not.
+    @discardableResult
+    private static func runRewritten(_ sql: String, in handle: OpaquePointer) -> Bool {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK else {
+            return false
+        }
+        guard let statement else { return true }
+        var stepped = sqlite3_step(statement)
+        while stepped == SQLITE_ROW { stepped = sqlite3_step(statement) }
+        sqlite3_finalize(statement)
+        return stepped == SQLITE_DONE
     }
 
     /// What the statement just run put in, for the source map: the table an

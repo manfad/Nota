@@ -182,12 +182,13 @@ final class LocalizationTests: AppKitTestCase {
         _ = NSApp.sendAction(try XCTUnwrap(popUp.action), to: popUp.target, from: popUp)
         XCTAssertEqual(Preferences.shared.language, .traditionalChinese)
         XCTAssertEqual(controller.window?.title, "設定")
-        XCTAssertEqual(controller.rows(on: 0).map(\.title), ["語言", "主題"])
+        XCTAssertEqual(controller.rows(on: 0).map(\.title), ["語言", "主題", "以此方式開啟支援的檔案"])
 
         popUp.selectItem(at: 4)
         _ = NSApp.sendAction(try XCTUnwrap(popUp.action), to: popUp.target, from: popUp)
         XCTAssertEqual(Preferences.shared.language, .malay)
         XCTAssertEqual(controller.window?.title, "Tetapan")
-        XCTAssertEqual(controller.rows(on: 0).map(\.title), ["Bahasa", "Tema"])
+        XCTAssertEqual(controller.rows(on: 0).map(\.title),
+                       ["Bahasa", "Tema", "Buka fail yang disokong dalam"])
     }
 }

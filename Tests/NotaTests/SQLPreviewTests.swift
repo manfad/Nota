@@ -1515,7 +1515,7 @@ final class SQLPreviewTests: AppKitTestCase {
         XCTAssertNil(try page(of: dump, table: "codes").rowids, "and no rowids on the page")
     }
 
-    func testAPageOfATableCarriesItsRowidsAndAJoinsResultDoesNot() throws {
+    func testAPageOfATableCarriesItsRowidsAndAnInnerJoinCarriesTheFromTables() throws {
         let dump = SQLDump(sql: try exampleText("Shop.sql"))
         let table = try page(of: dump, table: "customers")
         XCTAssertEqual(table.rowids?.count, 100)
@@ -1523,11 +1523,13 @@ final class SQLPreviewTests: AppKitTestCase {
         XCTAssertEqual(table.columns.map(\.name).first, "id", "the rowid is not a column")
         XCTAssertFalse(table.columns.contains { $0.name == "rowid" })
 
+        // Each row of the join is one row of `customers`, so it carries that
+        // table's rowid the same way a plain read of it does.
         let joined = try page(of: dump, query: """
             SELECT c.name, o.id FROM customers c JOIN orders o ON o.customer_id = c.id
             """)
-        XCTAssertNil(joined.rowids, "two tables' rows are neither table's")
-        XCTAssertNil(joined.rowidTable)
+        XCTAssertEqual(joined.rowidTable?.lowercased(), "customers")
+        XCTAssertEqual(joined.rowids?.count, joined.rows.count)
     }
 
     // MARK: - A query that reads one table
@@ -1581,7 +1583,7 @@ final class SQLPreviewTests: AppKitTestCase {
     /// written: no rowids, and no alert either — the query still runs.
     func testAQueryOfAnyOtherShapeIsLeftAsItWasWritten() throws {
         for query in [
-            "SELECT c.name, o.id FROM customers c JOIN orders o ON o.customer_id = c.id",
+            "SELECT c.name, o.id FROM customers c RIGHT JOIN orders o ON o.customer_id = c.id",
             "SELECT c.name, o.id FROM customers c, orders o WHERE o.customer_id = c.id",
             "SELECT city, COUNT(*) FROM customers GROUP BY city",
             "SELECT COUNT(*) FROM customers",
@@ -1724,10 +1726,11 @@ final class SQLPreviewTests: AppKitTestCase {
         XCTAssertEqual(reveals.count, 1, "and in split it says exactly once")
     }
 
-    /// A query that is not one table's rows has no rowid, so there is nothing
-    /// to take back to the file and a click on one is quiet.
+    /// An inner join is still one row of its `FROM` table, so a click on a
+    /// value in its result walks the editor to that table's own `INSERT`,
+    /// the same as a plain read of it would.
     @MainActor
-    func testClickingACellOfAJoinsResultSaysNothing() throws {
+    func testClickingACellOfAnInnerJoinsResultGoesToTheFromTablesRow() throws {
         let (pane, window) = try makePane()
         try show(try exampleNote("Shop.sql"), in: pane)
         try settle(pane) {
@@ -1741,7 +1744,7 @@ final class SQLPreviewTests: AppKitTestCase {
         pane.gridForTesting.mouseDown(
             with: try XCTUnwrap(cellEvent(.leftMouseDown, in: pane, window: window,
                                           row: 1, column: 1)))
-        XCTAssertTrue(reveals.isEmpty)
+        XCTAssertEqual(reveals.count, 1, "the row's own customer, through the join")
     }
 
     /// A query that reads one table is read like the table: a click on one of

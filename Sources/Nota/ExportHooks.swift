@@ -3,11 +3,12 @@ import AppKit
 /// The five exporters plugged into `Exporter` — SPEC "## Export".
 ///
 /// `Export.swift` says what a target *is* and writes the two PDFs Nota makes
-/// out of a note by itself; the other four live in modules of their own that
+/// out of a note by itself; the rest live in modules of their own that
 /// know nothing about tabs, panes or windows (`EPUBToPDF`, `PDFToEPUB`,
-/// `WebPDF`, `TeXExport`, and the two grids' own `exportCSV`). This file is
-/// the only place the two halves are introduced, and it is one call: what a
-/// note is, where the pane in front of it is, what the module wants instead.
+/// `WebPDF`, `TeXExport`, `TablePDF`).
+/// This file is the only place the two halves are introduced, and it is one
+/// call: what a note is, where the pane in front of it is, what the module
+/// wants instead.
 ///
 /// Installed once at launch by `AppDelegate`, and by any test that needs the
 /// targets those hooks unlock — `Exporter.targets(for:)` lists a target only
@@ -53,16 +54,23 @@ extension Exporter {
             })
         }
 
-        csv = { _, url, context, completion in
-            // What the grid is showing, not what the file holds: the query
-            // the reader typed and the column they sorted by live on the
-            // pane, and the pane is the one thing `Context` carries for it.
+        tablePDF = { _, url, context, completion in
+            // The grid as the reader has it — the same rows, the same order
+            // and the same font as the pane's own Export button writes out,
+            // drawn onto pages instead of into a CSV.
             completion(Result {
+                let rows: (header: [String], rows: [[String?]])
+                let font: NSFont
                 switch context.previewContent {
-                case let sql as SQLPreviewView: try sql.exportCSV(to: url)
-                case let table as CSVPreviewView: try table.exportCSV(to: url)
+                case let sql as SQLPreviewView:
+                    rows = try sql.exportTable()
+                    font = sql.gridCellFont
+                case let table as CSVPreviewView:
+                    rows = try table.exportTable()
+                    font = table.gridCellFont
                 default: throw Failure.nothingToExport
                 }
+                try TablePDF.write(header: rows.header, rows: rows.rows, font: font, to: url)
             })
         }
 

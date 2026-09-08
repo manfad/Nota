@@ -376,7 +376,18 @@ private final class PrintJob: NSObject, WKNavigationDelegate {
         // A job that reported success and wrote nothing is a failure: the
         // file is the whole of what was asked for.
         let wrote = FileManager.default.fileExists(atPath: destination.path)
-        finish(success && wrote ? .success(()) : .failure(WebPDF.Failure.couldNotPrint))
+        let result: Result<Void, Error> =
+            success && wrote ? .success(()) : .failure(WebPDF.Failure.couldNotPrint)
+        // The print operation runs the modal form on a thread of its own and
+        // says so from there. Everything after this — letting go of the
+        // window, the queue's next job, the caller's completion and the
+        // footer it updates — is main-thread work, so the hop is made here,
+        // once, before any of it.
+        if Thread.isMainThread {
+            finish(result)
+        } else {
+            DispatchQueue.main.async { [self] in finish(result) }
+        }
     }
 
     // MARK: - Ending

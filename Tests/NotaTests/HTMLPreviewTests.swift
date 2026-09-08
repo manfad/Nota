@@ -549,15 +549,16 @@ final class HTMLPreviewTests: AppKitTestCase {
         let controller = SettingsWindowController.shared
         _ = controller.window
         defer { controller.selectPage(at: 0) }
-        XCTAssertTrue(controller.selectPage(titled: "Preview"))
+        XCTAssertTrue(controller.selectPage(titled: "General"))
 
-        // The row is a label beside a switch, so the label is the setting's
-        // name — and it has to cover Markdown, LaTeX and HTML alike.
-        let row = try XCTUnwrap(controller.rows(on: 3).first)
-        XCTAssertEqual(row.title, "Start supported files in preview mode")
-        XCTAssertTrue(row.control is NSSwitch)
+        // The row is a label beside a segmented control, so the label is the
+        // setting's name — and it has to cover Markdown, LaTeX and HTML alike.
+        let row = try XCTUnwrap(controller.rows(on: 0).last)
+        XCTAssertEqual(row.title, "Open supported files in")
+        XCTAssertTrue(row.control is NSSegmentedControl)
         XCTAssertNotNil(
-            descendant(of: try XCTUnwrap(controller.window?.contentView), ofType: NSSwitch.self) {
+            descendant(of: try XCTUnwrap(controller.window?.contentView),
+                       ofType: NSSegmentedControl.self) {
                 $0 === row.control
             },
             "the row is on screen once its page is selected"

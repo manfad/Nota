@@ -33,9 +33,41 @@ enum SQLDumpDialect {
         /// `CREATE INDEX` with its decoration taken off, or a transaction
         /// verb spelled differently.
         case rewrite(String)
+        /// Run this text if it will run, and skip it without a word if it
+        /// will not. The one shape where a refusal is not worth stopping a
+        /// dump for: an Oracle view, whose `SELECT` may be written in a
+        /// dialect this file never claimed to translate, and which no grid
+        /// shows anyway — `SQLDump.tables` lists tables and not views, so a
+        /// view that runs is a convenience for the query box and a view that
+        /// does not is nothing lost.
+        case attempt(String)
         /// Run the statement exactly as it was written — nothing here
         /// applies to it.
         case run
+    }
+
+    /// Which exporter's spelling a file is written in.
+    ///
+    /// `standard` covers `mysqldump`, phpMyAdmin, `pg_dump` and a dump that
+    /// was already SQLite's own — everything this file read before the other
+    /// two were added, and all of it terminated by semicolons, which is what
+    /// lets one set of rules serve them. MySQL is a shade of `standard`
+    /// rather than a flavour of its own (`looksLikeMySQL`, and the
+    /// `mysqlDetected` flag threaded through this file), because the only
+    /// thing it changes is how a string literal ends.
+    ///
+    /// The other two are told apart from `standard` before the run starts
+    /// rather than statement by statement (`detectFlavor`), because in both
+    /// of them a statement does not have to end at a `;` at all — SSMS
+    /// writes whole scripts with no semicolon anywhere, ending each batch
+    /// with a lone `GO`, and SQL*Plus ends `REM` and `PROMPT` at the line
+    /// and a PL/SQL block at a lone `/`. Finding a statement's extent is the
+    /// first thing the run loop does, so what the file is has to be known
+    /// before the first one is read.
+    enum Flavor: Equatable {
+        case standard
+        case sqlServer
+        case oracle
     }
 
     /// Whether a statement's leading keyword is one this file has an
@@ -45,11 +77,33 @@ enum SQLDumpDialect {
     /// finding the statement's extent or materialising the rest of it.
     /// `COPY` is not among them — it is not one statement at all, and
     /// `SQLDump` looks for it on its own before this is ever asked.
-    static func handles(_ leadingKeyword: String) -> Bool {
+    /// The words the other two flavours add are theirs alone: a `BEGIN` in a
+    /// dump that is already SQLite's own is a transaction and must run, and
+    /// a `COMMIT` there is the one that ends it. Only a file that has shown
+    /// itself to be SSMS's or SQL*Plus's puts either up for skipping.
+    static func handles(_ leadingKeyword: String, flavor: Flavor = .standard) -> Bool {
         switch leadingKeyword {
         case "SET", "USE", "LOCK", "UNLOCK", "START", "CREATE", "ALTER",
-             "SELECT", "GRANT", "REVOKE", "INSERT", "COMMENT": true
-        default: false
+             "SELECT", "GRANT", "REVOKE", "INSERT", "COMMENT": return true
+        default: break
+        }
+        switch flavor {
+        case .standard:
+            return false
+        case .sqlServer:
+            switch leadingKeyword {
+            case "GO", "PRINT", "DECLARE", "EXEC", "EXECUTE", "IF", "WHILE",
+                 "BEGIN", "COMMIT", "ROLLBACK", "DENY", "DROP", "TRUNCATE",
+                 "RAISERROR": return true
+            default: return false
+            }
+        case .oracle:
+            switch leadingKeyword {
+            case "REM", "PROMPT", "SPOOL", "WHENEVER", "EXIT", "SHOW", "DEFINE",
+                 "CONNECT", "BEGIN", "DECLARE", "COMMIT", "ROLLBACK", "DROP",
+                 "TRUNCATE", "EXEC", "EXECUTE": return true
+            default: return false
+            }
         }
     }
 
@@ -96,7 +150,18 @@ enum SQLDumpDialect {
     /// escape one), so only `'` and `"` read this way, and only once the
     /// file has shown itself to be MySQL's own.
     static func statementExtent(
-        from cursor: UnsafePointer<CChar>, mysqlDetected: Bool = false
+        from cursor: UnsafePointer<CChar>, mysqlDetected: Bool = false,
+        flavor: Flavor = .standard
+    ) -> UnsafePointer<CChar> {
+        switch flavor {
+        case .standard: return standardExtent(from: cursor, mysqlDetected: mysqlDetected)
+        case .sqlServer: return sqlServerExtent(from: cursor)
+        case .oracle: return oracleExtent(from: cursor)
+        }
+    }
+
+    private static func standardExtent(
+        from cursor: UnsafePointer<CChar>, mysqlDetected: Bool
     ) -> UnsafePointer<CChar> {
         var cursor = cursor
         while cursor.pointee != 0 {
@@ -159,9 +224,17 @@ enum SQLDumpDialect {
     /// rewriting without ever being turned into a `String` at all: it falls
     /// straight through to the ordinary prepare/tail path below, exactly as
     /// an unhandled statement does.
+    ///
+    /// An SSMS or SQL*Plus export answers yes to all of them without a scan:
+    /// every `INSERT` either of those writes needs the closer look anyway —
+    /// a `[dbo].` schema to take off and an `N'…'` prefix to drop for one, a
+    /// `SHOP.` schema and Oracle's own bare `SYSDATE` for the other — so
+    /// there is nothing for a byte scan to rule out.
     static func mayNeedRewrite(
-        from cursor: UnsafePointer<CChar>, to end: UnsafePointer<CChar>, mysqlDetected: Bool
+        from cursor: UnsafePointer<CChar>, to end: UnsafePointer<CChar>, mysqlDetected: Bool,
+        flavor: Flavor = .standard
     ) -> Bool {
+        guard flavor == .standard else { return true }
         var p = cursor
         while p != end {
             if mysqlDetected, p.pointee == 92 { return true }  // \
@@ -195,7 +268,17 @@ enum SQLDumpDialect {
     /// all, and running the decoder over a `pg_dump` statement (where `\`
     /// is just a character) would corrupt exactly the strings it meant to
     /// fix.
-    static func action(for statement: String, mysqlDetected: Bool) -> Action {
+    static func action(
+        for statement: String, mysqlDetected: Bool, flavor: Flavor = .standard
+    ) -> Action {
+        switch flavor {
+        case .standard: return standardAction(for: statement, mysqlDetected: mysqlDetected)
+        case .sqlServer: return sqlServerAction(for: statement)
+        case .oracle: return oracleAction(for: statement)
+        }
+    }
+
+    private static func standardAction(for statement: String, mysqlDetected: Bool) -> Action {
         let base = (mysqlDetected && statement.utf8.contains(92))
             ? decodeMySQLBackslashEscapes(statement) : statement
         let changed = base != statement
@@ -551,7 +634,9 @@ enum SQLDumpDialect {
     /// whose column list's own parentheses do not balance — the caller runs
     /// the statement exactly as written rather than guess at one, which
     /// fails in exactly the way an unrecognised statement always has.
-    private static func rewriteCreateTable(_ statement: String) -> String? {
+    private static func rewriteCreateTable(
+        _ statement: String, flavor: Flavor = .standard
+    ) -> String? {
         let units = Array(statement.utf16)
         let tokens = scan(units)
 
@@ -601,8 +686,21 @@ enum SQLDumpDialect {
         guard let bodyEnd = closeIndex, bodyEnd >= bodyStart else { return nil }
 
         let items = splitItems(tokens, from: bodyStart, to: bodyEnd, units: units)
-        let kept = items.compactMap(rewriteItem)
+        let kept: [String]
+        switch flavor {
+        case .standard: kept = items.compactMap(rewriteItem)
+        case .sqlServer: kept = items.compactMap(rewriteSQLServerItem)
+        case .oracle: kept = items.compactMap(rewriteOracleItem)
+        }
         guard !kept.isEmpty else { return nil }
+        // Everything an SSMS or SQL*Plus export writes after the column list
+        // — `ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]`, `SEGMENT CREATION
+        // IMMEDIATE … STORAGE(…) TABLESPACE "USERS"`, a partition clause —
+        // is where the table's storage goes, and a database held in memory
+        // for as long as a tab is open has nowhere to put any of it.
+        guard flavor == .standard else {
+            return prefix + kept.joined(separator: ",") + ");"
+        }
         // Everything MySQL wrote after the column list — `ENGINE=InnoDB`,
         // `AUTO_INCREMENT=4`, `DEFAULT CHARSET=…`, `COLLATE=…` — goes
         // wholesale, none of it SQLite takes at all. `WITHOUT ROWID` and
@@ -1270,5 +1368,1036 @@ enum SQLDumpDialect {
             }
         }
         return result
+    }
+
+    // MARK: - Telling SSMS and SQL*Plus from everything else
+
+    /// Which exporter wrote this file, decided once before the run starts.
+    ///
+    /// MySQL is sniffed statement by statement (`looksLikeMySQL`) because
+    /// the only thing it changes is how a string literal ends, and a
+    /// statement read before the marker turns up is read no worse for it.
+    /// The other two cannot wait: in an SSMS script a statement often ends
+    /// at a lone `GO` and not at a `;` — most such scripts have no `;`
+    /// anywhere at all — and in a SQL*Plus script a `REM` ends at its line
+    /// and a PL/SQL block at a lone `/`. Read the first statement of either
+    /// with the standard rule and its extent runs to the next semicolon,
+    /// which may be the end of the file. So the question is asked of the
+    /// text itself, once, before anything is read.
+    ///
+    /// The file's own head is enough: every exporter here writes its
+    /// giveaways in the preamble and the first `CREATE TABLE`. A dump that
+    /// says outright it is `mysqldump`'s, phpMyAdmin's or `pg_dump`'s is
+    /// never one of these two, whatever else it holds — that is asked first,
+    /// so a Postgres dump with the word `TABLESPACE` in it, or a MySQL one
+    /// whose data happens to hold a line reading `GO`, is left exactly as it
+    /// was read before either flavour existed.
+    static func detectFlavor(in sql: String) -> Flavor {
+        let head = String(sql.prefix(120_000))
+        func has(_ marker: String) -> Bool {
+            head.range(of: marker, options: [.caseInsensitive]) != nil
+        }
+        for marker in ["ENGINE=", "AUTO_INCREMENT", "phpMyAdmin", "pg_dump",
+                       "FROM stdin", "`"] where has(marker) {
+            return .standard
+        }
+        for marker in ["SET ANSI_NULLS", "SET QUOTED_IDENTIFIER", "SET IDENTITY_INSERT",
+                       "[dbo].", "IDENTITY(", "NONCLUSTERED", "TEXTIMAGE_ON",
+                       "sp_addextendedproperty"] where has(marker) {
+            return .sqlServer
+        }
+        for marker in ["VARCHAR2", "SET DEFINE OFF", "SEGMENT CREATION", "REM INSERTING",
+                       "NUMBER(", "to_date(", "USING INDEX"] where has(marker) {
+            return .oracle
+        }
+        return .standard
+    }
+
+    // MARK: - Where a statement ends in SSMS and SQL*Plus
+
+    /// The end of an SSMS statement: its `;` where it has one, and the line
+    /// before the next lone `GO` where it has not.
+    ///
+    /// `GO` is not SQL and not a statement — it is where the client cuts the
+    /// script into batches — so it is left standing as its own "statement"
+    /// for the run loop to hand back here, recognise, and skip. Ending the
+    /// statement *before* it rather than past it is what makes that work,
+    /// and it keeps the statement's own characters — which is what the
+    /// source map is written from — free of a word the file's author never
+    /// meant as part of it.
+    ///
+    /// A batch that holds a block (`IF … BEGIN … END`, a procedure, a
+    /// trigger) is read to the `GO` and not to the first `;`: those
+    /// semicolons are inside the block, and cutting there would leave
+    /// fragments that prepare to nothing. Nothing is lost by reading such a
+    /// batch whole, because every one of them is skipped anyway.
+    private static func sqlServerExtent(from cursor: UnsafePointer<CChar>) -> UnsafePointer<CChar> {
+        if let end = batchSeparatorEnd(at: cursor) { return end }
+        let stopsAtSemicolon = !runsToBatchEnd(at: cursor)
+        var cursor = cursor
+        while cursor.pointee != 0 {
+            switch cursor.pointee {
+            case 59 where stopsAtSemicolon:  // ;
+                return cursor + 1
+            case 10, 13:  // a newline — is a `GO` standing on the next line?
+                let next = (cursor.pointee == 13 && cursor[1] == 10) ? cursor + 2 : cursor + 1
+                if batchSeparatorEnd(at: next) != nil { return cursor }
+                if stopsAtSemicolon, startsStatement(at: next) { return cursor }
+                cursor = next
+            case 39, 34, 91:  // ' " [
+                cursor = pastQuoted(cursor)
+            case 45 where cursor[1] == 45:  // --
+                cursor = pastLineComment(cursor)
+            case 47 where cursor[1] == 42:  // /*
+                cursor = pastBlockComment(cursor)
+            default:
+                cursor += 1
+            }
+        }
+        return cursor
+    }
+
+    /// The end of a SQL*Plus statement: its `;`, or the end of the line for
+    /// a SQL*Plus command — `REM`, `PROMPT`, `SET DEFINE OFF` and the rest
+    /// are the client's own words, not SQL, and none of them needs a
+    /// semicolon to end (`REM` may hold one and still mean nothing by it).
+    /// A lone `/` on the next line ends a statement too, for the file that
+    /// wrote one without a `;` before it.
+    private static func oracleExtent(from cursor: UnsafePointer<CChar>) -> UnsafePointer<CChar> {
+        if let end = slashLineEnd(at: cursor) { return end }
+        let endsAtLine = sqlPlusCommands.contains(leadingKeyword(at: cursor))
+        var cursor = cursor
+        while cursor.pointee != 0 {
+            switch cursor.pointee {
+            case 59 where !endsAtLine:  // ;
+                return cursor + 1
+            case 10, 13:
+                if endsAtLine { return cursor }
+                let next = (cursor.pointee == 13 && cursor[1] == 10) ? cursor + 2 : cursor + 1
+                if slashLineEnd(at: next) != nil { return cursor }
+                cursor = next
+            case 39, 34:  // ' "
+                cursor = pastQuoted(cursor)
+            case 45 where cursor[1] == 45:  // --
+                cursor = pastLineComment(cursor)
+            case 47 where cursor[1] == 42:  // /*
+                cursor = pastBlockComment(cursor)
+            default:
+                cursor += 1
+            }
+        }
+        return cursor
+    }
+
+    /// The SQL*Plus commands a script is driven by rather than made of. All
+    /// of them are skipped, and all of them end at their line.
+    private static let sqlPlusCommands: Set<String> = [
+        "REM", "PROMPT", "SET", "SPOOL", "WHENEVER", "EXIT", "QUIT", "SHOW",
+        "DEFINE", "UNDEFINE", "CONNECT", "TTITLE", "BTITLE", "ACCEPT", "PAUSE",
+        "COLUMN",
+    ]
+
+    /// Whether the batch starting here holds a block, and so has to be read
+    /// to its `GO` rather than to its first `;` — everything with a `BEGIN
+    /// … END` in it, and the four objects SSMS scripts with a body.
+    private static func runsToBatchEnd(at cursor: UnsafePointer<CChar>) -> Bool {
+        switch leadingKeyword(at: cursor) {
+        case "IF", "WHILE", "BEGIN", "DECLARE", "EXEC", "EXECUTE", "PRINT", "RAISERROR":
+            return true
+        case "CREATE", "ALTER":
+            switch secondKeyword(at: cursor) {
+            case "PROCEDURE", "PROC", "FUNCTION", "TRIGGER", "VIEW", "TYPE": return true
+            default: return false
+            }
+        default:
+            return false
+        }
+    }
+
+    /// Whether a new statement starts at `cursor` — which in a T-SQL script
+    /// is a question worth asking at every line, because SSMS's own data
+    /// script has no semicolons in it at all: `SET IDENTITY_INSERT … ON`, a
+    /// blank line, then one `INSERT` per line for a whole table, and a `GO`
+    /// only at the end of the lot. Read with the ordinary rule the first
+    /// `SET` would swallow every insert after it, and every insert but the
+    /// first would be lost without a word.
+    ///
+    /// So a line beginning with a word that can only *start* a statement
+    /// ends the one before it. Only where a statement is already known to
+    /// end at a semicolon: inside a block (`IF … BEGIN … END`) these same
+    /// words are its own body, and cutting there would leave fragments.
+    private static func startsStatement(at cursor: UnsafePointer<CChar>) -> Bool {
+        var p = cursor
+        while p.pointee == 32 || p.pointee == 9 { p += 1 }
+        switch leadingKeyword(at: p) {
+        case "INSERT", "UPDATE", "DELETE", "SET", "CREATE", "ALTER", "DROP",
+             "TRUNCATE", "EXEC", "EXECUTE", "PRINT", "USE", "GO", "IF", "BEGIN",
+             "COMMIT", "ROLLBACK", "GRANT", "DENY", "REVOKE", "DECLARE", "RAISERROR":
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Whether the line at `cursor` is a batch separator — `GO` alone, with
+    /// blanks and at most a trailing `;` for company — and where it ends.
+    /// `nil` for anything else, a longer word starting with those two
+    /// letters (`GOTO`) included.
+    static func batchSeparatorEnd(at cursor: UnsafePointer<CChar>) -> UnsafePointer<CChar>? {
+        var p = cursor
+        while p.pointee == 32 || p.pointee == 9 { p += 1 }
+        guard p.pointee != 0 else { return nil }
+        let first = UInt8(bitPattern: p.pointee)
+        guard first == 71 || first == 103 else { return nil }  // G g
+        let second = UInt8(bitPattern: p[1])
+        guard second == 79 || second == 111 else { return nil }  // O o
+        p += 2
+        guard !isWordByte(p.pointee) else { return nil }
+        while p.pointee == 32 || p.pointee == 9 { p += 1 }
+        if p.pointee == 59 {  // ;
+            p += 1
+            while p.pointee == 32 || p.pointee == 9 { p += 1 }
+        }
+        guard p.pointee == 0 || p.pointee == 10 || p.pointee == 13 else { return nil }
+        if p.pointee == 13 { p += 1 }
+        if p.pointee == 10 { p += 1 }
+        return p
+    }
+
+    /// Whether the line at `cursor` is SQL*Plus's own statement terminator —
+    /// a `/` alone — and where it ends. That is how a PL/SQL block is ended:
+    /// the block's own `END;` is not the end of anything, since a `;` inside
+    /// it is one of its statements' and not the block's.
+    static func slashLineEnd(at cursor: UnsafePointer<CChar>) -> UnsafePointer<CChar>? {
+        var p = cursor
+        while p.pointee == 32 || p.pointee == 9 { p += 1 }
+        guard p.pointee == 47 else { return nil }  // /
+        p += 1
+        while p.pointee == 32 || p.pointee == 9 { p += 1 }
+        guard p.pointee == 0 || p.pointee == 10 || p.pointee == 13 else { return nil }
+        if p.pointee == 13 { p += 1 }
+        if p.pointee == 10 { p += 1 }
+        return p
+    }
+
+    /// The end of a PL/SQL block starting at `cursor` — a `CREATE [OR
+    /// REPLACE] TRIGGER|PROCEDURE|FUNCTION|PACKAGE|TYPE`, or an anonymous
+    /// `DECLARE`/`BEGIN` — which is the line after it holding nothing but a
+    /// `/`. SQLite has no procedural language at all, so the whole block is
+    /// skipped as one; it is found here rather than through `statementExtent`
+    /// because a block is not one statement and does not end like one.
+    ///
+    /// `nil` for a `CREATE` that is not one of those (a table, an index, a
+    /// view), and for a block whose `/` never comes — a file that ends
+    /// mid-block is better read statement by statement, badly, than
+    /// swallowed whole.
+    static func plsqlBlockEnd(
+        from cursor: UnsafePointer<CChar>, keyword: String
+    ) -> UnsafePointer<CChar>? {
+        switch keyword {
+        case "BEGIN", "DECLARE":
+            break
+        case "CREATE":
+            let kind = createKind(of: headText(at: cursor, limit: 200),
+                                  modifiers: oracleCreateModifiers)
+            switch kind {
+            case "TRIGGER", "PROCEDURE", "FUNCTION", "PACKAGE", "TYPE", "LIBRARY": break
+            default: return nil
+            }
+        default:
+            return nil
+        }
+        var p = cursor
+        while p.pointee != 0 {
+            while p.pointee != 0, p.pointee != 10, p.pointee != 13 { p += 1 }
+            if p.pointee == 13 { p += 1 }
+            if p.pointee == 10 { p += 1 }
+            if let end = slashLineEnd(at: p) { return end }
+        }
+        return nil
+    }
+
+    /// The second word of the statement at `cursor`, upper-cased — read off
+    /// the raw buffer the way `leadingKeyword` reads the first.
+    private static func secondKeyword(at cursor: UnsafePointer<CChar>) -> String {
+        var p = cursor
+        while isASCIILetter(p.pointee) { p += 1 }
+        while p.pointee == 32 || p.pointee == 9 || p.pointee == 10 || p.pointee == 13 { p += 1 }
+        return leadingKeyword(at: p)
+    }
+
+    /// The first `limit` bytes at `cursor` as text — enough of a statement's
+    /// head to read the words that say what it creates, without copying out
+    /// a statement that may be a megabyte of rows.
+    private static func headText(at cursor: UnsafePointer<CChar>, limit: Int) -> String {
+        var p = cursor
+        var count = 0
+        while count < limit, p.pointee != 0 { p += 1; count += 1 }
+        return string(from: cursor, to: p)
+    }
+
+    private static func isWordByte(_ byte: CChar) -> Bool {
+        let value = UInt8(bitPattern: byte)
+        return isASCIILetter(byte) || (value >= 48 && value <= 57) || value == 95
+    }
+
+    /// Past a string literal or a quoted name starting at `cursor`, with a
+    /// doubled quote inside taken as one character of it. No backslash rule:
+    /// neither T-SQL nor Oracle has one.
+    private static func pastQuoted(_ cursor: UnsafePointer<CChar>) -> UnsafePointer<CChar> {
+        let opening = cursor.pointee
+        let closing: CChar = opening == 91 ? 93 : opening  // [ ]
+        var cursor = cursor + 1
+        while cursor.pointee != 0 {
+            if cursor.pointee == closing {
+                cursor += 1
+                if closing != 93, cursor.pointee == closing { cursor += 1; continue }
+                return cursor
+            }
+            cursor += 1
+        }
+        return cursor
+    }
+
+    private static func pastLineComment(_ cursor: UnsafePointer<CChar>) -> UnsafePointer<CChar> {
+        var cursor = cursor + 2
+        while cursor.pointee != 0, cursor.pointee != 10 { cursor += 1 }
+        return cursor
+    }
+
+    private static func pastBlockComment(_ cursor: UnsafePointer<CChar>) -> UnsafePointer<CChar> {
+        var cursor = cursor + 2
+        while cursor.pointee != 0, !(cursor.pointee == 42 && cursor[1] == 47) { cursor += 1 }
+        return cursor.pointee == 0 ? cursor : cursor + 2
+    }
+
+    // MARK: - Shared between the two
+
+    /// What a `CREATE` creates, past whatever modifiers stand in front of
+    /// the word: `CREATE OR REPLACE FORCE VIEW` creates a `VIEW`, `CREATE
+    /// UNIQUE NONCLUSTERED INDEX` an `INDEX`. `""` for anything that is not
+    /// a `CREATE` at all.
+    private static func createKind(of statement: String, modifiers: Set<String>) -> String {
+        let units = Array(statement.utf16)
+        var index = 0
+        guard let create = SQLSourceMap.nextToken(units, &index), create.kind == .word,
+              create.text.uppercased() == "CREATE" else { return "" }
+        while let token = SQLSourceMap.nextToken(units, &index), token.kind == .word {
+            let word = token.text.uppercased()
+            if modifiers.contains(word) { continue }
+            return word
+        }
+        return ""
+    }
+
+    private static let sqlServerCreateModifiers: Set<String> = [
+        "OR", "ALTER", "UNIQUE", "CLUSTERED", "NONCLUSTERED", "COLUMNSTORE",
+    ]
+
+    private static let oracleCreateModifiers: Set<String> = [
+        "OR", "REPLACE", "FORCE", "NOFORCE", "EDITIONABLE", "NONEDITIONABLE",
+        "PUBLIC", "GLOBAL", "PRIVATE", "TEMPORARY", "UNIQUE", "BITMAP",
+        "SHARDED", "DUPLICATED",
+    ]
+
+    /// Every `schema.name` in the statement with the schema taken off — the
+    /// same thing `stripPublicSchema` does for pg_dump, for the two dialects
+    /// that write a schema wherever they name a table: SSMS's `[dbo].[t]`
+    /// and SQL Developer's `"SHOP"."T"`. SQLite reads either as a *database*
+    /// prefix and there is no such database attached, so left in, every one
+    /// of them fails.
+    ///
+    /// Only where a dump ever writes one: after `INSERT`, `INTO`, `TABLE`,
+    /// `REFERENCES`, `INDEX`, `UPDATE`, and after the `ON` of a `CREATE
+    /// INDEX`, which is told from the `ON` of a join by the column list that
+    /// has to follow it. Everywhere else `a.b` is a column of a table and
+    /// taking the table off it would be the opposite of a fix.
+    static func stripSchemaQualifiers(_ statement: String) -> String {
+        let units = Array(statement.utf16)
+        let tokens = scan(units)
+        var replacements: [Int: String] = [:]
+        var i = 0
+        while i + 2 < tokens.count {
+            guard tokens[i].token.kind != .punctuation,
+                  tokens[i + 1].token.kind == .punctuation, tokens[i + 1].token.text == ".",
+                  tokens[i + 2].token.kind != .punctuation,
+                  i > 0, tokens[i - 1].token.kind == .word
+            else { i += 1; continue }
+            let qualifies: Bool
+            switch tokens[i - 1].token.text.uppercased() {
+            case "INSERT", "INTO", "TABLE", "REFERENCES", "INDEX", "UPDATE", "VIEW":
+                qualifies = true
+            case "ON":
+                qualifies = isPunctuation(tokens, i + 3, "(")
+            default:
+                qualifies = false
+            }
+            guard qualifies else { i += 1; continue }
+            replacements[i] = " "
+            replacements[i + 1] = ""
+            i += 3
+        }
+        guard !replacements.isEmpty else { return statement }
+        return rebuild(tokens, units, replacing: replacements)
+    }
+
+    /// `CREATE [UNIQUE] [NONCLUSTERED|BITMAP] INDEX ix ON t (cols) …` as
+    /// SQLite spells it: the words in front that name an implementation
+    /// SQLite does not have to be told about, dropped; everything after the
+    /// column list — `INCLUDE (…)`, `WITH (PAD_INDEX = OFF, …)`, `ON
+    /// [PRIMARY]`, Oracle's `PCTFREE 10 … TABLESPACE "USERS"` — dropped
+    /// wholesale, all of it storage.
+    ///
+    /// `nil` for anything that does not read as a `CREATE INDEX` with a
+    /// column list, which the caller skips rather than guesses at.
+    private static func rewriteDecoratedCreateIndex(_ statement: String) -> String? {
+        let units = Array(statement.utf16)
+        let tokens = scan(units)
+
+        func word(_ index: Int) -> String? {
+            guard index < tokens.count, tokens[index].token.kind == .word else { return nil }
+            return tokens[index].token.text.uppercased()
+        }
+
+        var i = 0
+        guard word(i) == "CREATE" else { return nil }
+        i += 1
+        var replacements: [Int: String] = [:]
+        while let next = word(i),
+              ["UNIQUE", "CLUSTERED", "NONCLUSTERED", "BITMAP", "COLUMNSTORE"].contains(next) {
+            if next != "UNIQUE" { replacements[i] = " " }
+            i += 1
+        }
+        guard word(i) == "INDEX" else { return nil }
+        while i < tokens.count, !isPunctuation(tokens, i, "(") { i += 1 }
+        guard i < tokens.count else { return nil }
+        var depth = 1
+        var closeIndex: Int?
+        var j = i + 1
+        while j < tokens.count {
+            if tokens[j].token.kind == .punctuation {
+                if tokens[j].token.text == "(" {
+                    depth += 1
+                } else if tokens[j].token.text == ")" {
+                    depth -= 1
+                    if depth == 0 { closeIndex = j; break }
+                }
+            }
+            j += 1
+        }
+        guard let close = closeIndex else { return nil }
+        for k in (close + 1)..<tokens.count { replacements[k] = "" }
+        return rebuild(tokens, units, replacing: replacements) + ";"
+    }
+
+    private static func isPunctuation(_ tokens: [Scanned], _ index: Int, _ text: String) -> Bool {
+        guard index < tokens.count, tokens[index].token.kind == .punctuation else { return false }
+        return tokens[index].token.text == text
+    }
+
+    /// The quote a token was written with — `'` for a string, `"`, `` ` ``
+    /// or `[` for a name — since `Token` itself keeps only what was inside
+    /// it. That is the difference between the `N` of `N'Alice'`, which has
+    /// to go, and a column called `n` standing in front of a bracketed name.
+    private static func openingQuote(_ scanned: Scanned, in units: [UInt16]) -> UInt16? {
+        for unit in units[scanned.range] where unit == 39 || unit == 34 || unit == 96
+            || unit == 91 {
+            return unit
+        }
+        return nil
+    }
+
+    // MARK: - SQL Server
+
+    /// What to do with one statement of an SSMS "Generate Scripts" or
+    /// "Script Table as" export.
+    ///
+    /// Most of such a script is not the database: `GO` cuts it into batches,
+    /// `USE [db]` and the `SET`s put the session in a known state, `PRINT`
+    /// talks to the reader, and `EXEC sys.sp_addextendedproperty` files a
+    /// description away in a catalogue SQLite has no equivalent of. None of
+    /// it holds a row, and none of it runs here.
+    ///
+    /// What is left is a `CREATE TABLE` and a `CREATE INDEX` with their
+    /// decoration taken off, and the `INSERT`s — see
+    /// `sqlServerInsertAction`. Everything SSMS adds after the fact —
+    /// `ALTER TABLE … ADD CONSTRAINT`, `ALTER TABLE … CHECK CONSTRAINT`,
+    /// `ALTER TABLE … ADD DEFAULT` — is skipped for the same reason
+    /// pg_dump's is: the rows are already in, and a database only ever read
+    /// does not need a constraint enforced on it.
+    private static func sqlServerAction(for statement: String) -> Action {
+        let units = Array(statement.utf16)
+        var index = 0
+        guard let first = SQLSourceMap.nextToken(units, &index), first.kind == .word else {
+            return .run
+        }
+        switch first.text.uppercased() {
+        case "GO", "USE", "SET", "PRINT", "DECLARE", "EXEC", "EXECUTE", "IF", "WHILE",
+             "RAISERROR", "GRANT", "REVOKE", "DENY", "DROP", "TRUNCATE", "ALTER",
+             "LOCK", "UNLOCK", "START", "ROLLBACK", "COMMENT":
+            return .skip
+        case "BEGIN":
+            return isWord(units, index, "TRANSACTION") || isWord(units, index, "TRAN")
+                ? .rewrite("BEGIN;") : .skip
+        case "COMMIT":
+            return isWord(units, index, "TRANSACTION") || isWord(units, index, "TRAN")
+                ? .rewrite("COMMIT;") : .run
+        case "CREATE":
+            return sqlServerCreateAction(statement)
+        case "INSERT":
+            return sqlServerInsertAction(statement)
+        default:
+            return .run
+        }
+    }
+
+    /// A `CREATE` in an SSMS script: a table and an index are rewritten, and
+    /// everything else — a database, a schema, a login, a view, a procedure,
+    /// a trigger, a type — is skipped. T-SQL's own body language is not
+    /// something this file translates, and the run stops at the first thing
+    /// that will not go in, so an object SQLite has no notion of is better
+    /// left out than tried.
+    private static func sqlServerCreateAction(_ statement: String) -> Action {
+        let destemmed = stripSchemaQualifiers(statement)
+        switch createKind(of: destemmed, modifiers: sqlServerCreateModifiers) {
+        case "TABLE":
+            guard let rewritten = rewriteCreateTable(destemmed, flavor: .sqlServer) else {
+                return .skip
+            }
+            return .rewrite(rewritten)
+        case "INDEX":
+            guard let rewritten = rewriteDecoratedCreateIndex(destemmed) else { return .skip }
+            return .rewrite(rewritten)
+        default:
+            return .skip
+        }
+    }
+
+    /// `INSERT [dbo].[Customers] ([Id], [Name], [Joined]) VALUES (1,
+    /// N'Alice', CAST(N'2024-01-05T00:00:00.000' AS DateTime))` as SQLite
+    /// takes it. Four things stand between the two:
+    /// - the `[dbo].` schema, taken off with everything else's;
+    /// - the missing `INTO`, which T-SQL makes optional and SQLite does not;
+    /// - the `N` in front of a string, which says the literal is national
+    ///   character data. Every string SQLite holds is Unicode already, so
+    ///   the prefix says nothing here — and it does not parse, either;
+    /// - `CAST(x AS DateTime)`, whose wrapper is dropped and whose literal
+    ///   is kept. The date SSMS wrote is an ISO 8601 string and stays one,
+    ///   which is what the column became too (`[datetime2]` is `TEXT`), so
+    ///   there is nothing left for the cast to do.
+    ///
+    /// A `0x…` binary literal becomes SQLite's own `X'…'`. Strings escape a
+    /// quote by doubling it in both dialects, so nothing there needs
+    /// touching.
+    private static func sqlServerInsertAction(_ statement: String) -> Action {
+        let destemmed = stripSchemaQualifiers(statement)
+        let units = Array(destemmed.utf16)
+        let tokens = scan(units)
+        let unchanged: Action = destemmed == statement ? .run : .rewrite(destemmed)
+        guard let verb = tokens.firstIndex(where: { $0.token.kind != .punctuation }),
+              tokens[verb].token.kind == .word,
+              tokens[verb].token.text.uppercased() == "INSERT"
+        else { return unchanged }
+
+        var replacements: [Int: String] = [:]
+        if !isWordAt(tokens, verb + 1, "INTO") {
+            replacements[verb] = text(units, tokens[verb].range) + " INTO"
+        }
+        var i = verb + 1
+        while i < tokens.count {
+            guard tokens[i].token.kind == .word else { i += 1; continue }
+            let word = tokens[i].token.text.uppercased()
+            if word == "N", i + 1 < tokens.count, tokens[i + 1].token.kind == .quoted,
+               openingQuote(tokens[i + 1], in: units) == 39 {
+                replacements[i] = " "
+                i += 1
+                continue
+            }
+            if word == "CAST", isPunctuation(tokens, i + 1, "(") {
+                i = unwrapCast(tokens, at: i, into: &replacements)
+                continue
+            }
+            if let literal = hexLiteral(word) {
+                replacements[i] = " " + literal
+                i += 1
+                continue
+            }
+            i += 1
+        }
+        guard !replacements.isEmpty else { return unchanged }
+        return .rewrite(rebuild(tokens, units, replacing: replacements))
+    }
+
+    /// A `CAST(value AS type)` with the wrapper dropped and the value left
+    /// standing — the index to go on with is the value's own, so an `N'…'`
+    /// inside is still seen by the walk that drops those.
+    private static func unwrapCast(
+        _ tokens: [Scanned], at index: Int, into replacements: inout [Int: String]
+    ) -> Int {
+        var depth = 0
+        var keyword: Int?
+        var closeIndex: Int?
+        var j = index + 1
+        while j < tokens.count {
+            if tokens[j].token.kind == .punctuation {
+                if tokens[j].token.text == "(" {
+                    depth += 1
+                } else if tokens[j].token.text == ")" {
+                    depth -= 1
+                    if depth == 0 { closeIndex = j; break }
+                }
+            } else if depth == 1, keyword == nil, tokens[j].token.kind == .word,
+                      tokens[j].token.text.uppercased() == "AS" {
+                keyword = j
+            }
+            j += 1
+        }
+        guard let close = closeIndex, let asIndex = keyword else { return index + 1 }
+        replacements[index] = " "
+        replacements[index + 1] = " "
+        for k in asIndex...close { replacements[k] = " " }
+        return index + 2
+    }
+
+    /// `0x1F8B…` as SQLite's own `X'1F8B…'`, or `nil` for a word that only
+    /// looks like one — an odd number of digits, or a digit that is not one.
+    private static func hexLiteral(_ word: String) -> String? {
+        guard word.count > 2, word.hasPrefix("0X") else { return nil }
+        let digits = word.dropFirst(2)
+        guard digits.count % 2 == 0, digits.allSatisfy(\.isHexDigit) else { return nil }
+        return "X'" + digits + "'"
+    }
+
+    /// One item of an SSMS `CREATE TABLE`'s column list. An inline `INDEX`
+    /// and a `PERIOD FOR SYSTEM_TIME` are dropped whole — SQLite has neither
+    /// — and everything else keeps what it means and loses what it is stored
+    /// with.
+    private static func rewriteSQLServerItem(_ item: String) -> String? {
+        let units = Array(item.utf16)
+        let tokens = scan(units)
+        guard let first = tokens.firstIndex(where: { $0.token.kind != .punctuation })
+        else { return item }
+        let leading = tokens[first].token.kind == .word
+            ? tokens[first].token.text.uppercased() : ""
+        switch leading {
+        case "INDEX", "PERIOD":
+            return nil
+        case "CONSTRAINT", "PRIMARY", "UNIQUE", "FOREIGN", "CHECK":
+            return sqlServerStripped(tokens, units, typeIndex: nil)
+        default:
+            return sqlServerStripped(tokens, units, typeIndex: first + 1)
+        }
+    }
+
+    /// A column or a table constraint with T-SQL's storage words taken off:
+    /// - `IDENTITY(1,1)` — a counter SQLite spells `INTEGER PRIMARY KEY`,
+    ///   and which the column's own `PRIMARY KEY` already says;
+    /// - `CLUSTERED`/`NONCLUSTERED`, which is how an index is stored;
+    /// - `WITH (PAD_INDEX = OFF, …)`, `ON [PRIMARY]`, `TEXTIMAGE_ON
+    ///   [PRIMARY]`, `FILESTREAM_ON …` — where it all lives on disk;
+    /// - `ROWGUIDCOL`, `SPARSE`, `NOT FOR REPLICATION`;
+    /// - a `COLLATE` naming a collation SQLite has not got, and a `DEFAULT
+    ///   ((0))` or `DEFAULT (getdate())`, whose parenthesised expression is
+    ///   T-SQL's and not always SQLite's. A default never fires in a
+    ///   database only ever read.
+    ///
+    /// `ON DELETE`/`ON UPDATE` are a foreign key's own words and stay: the
+    /// `ON` that goes is the one naming a filegroup.
+    private static func sqlServerStripped(
+        _ tokens: [Scanned], _ units: [UInt16], typeIndex: Int?
+    ) -> String {
+        var replacements: [Int: String] = [:]
+        var i = 0
+        while i < tokens.count {
+            if i == typeIndex {
+                i = rewriteSQLServerType(tokens, at: i, into: &replacements)
+                continue
+            }
+            guard tokens[i].token.kind == .word else { i += 1; continue }
+            switch tokens[i].token.text.uppercased() {
+            case "IDENTITY":
+                replacements[i] = " "
+                i = dropOptionalParenthesised(tokens, from: i + 1, into: &replacements)
+            case "CLUSTERED", "NONCLUSTERED", "ROWGUIDCOL", "SPARSE", "FILESTREAM":
+                replacements[i] = " "
+                i += 1
+            case "NOT" where isWordAt(tokens, i + 1, "FOR") && isWordAt(tokens, i + 2, "REPLICATION"):
+                replacements[i] = " "; replacements[i + 1] = " "; replacements[i + 2] = " "
+                i += 3
+            case "WITH" where isPunctuation(tokens, i + 1, "("):
+                replacements[i] = " "
+                i = dropOptionalParenthesised(tokens, from: i + 1, into: &replacements)
+            case "ON" where isFileGroup(tokens, i + 1), "TEXTIMAGE_ON", "FILESTREAM_ON":
+                replacements[i] = " "
+                if i + 1 < tokens.count { replacements[i + 1] = " " }
+                i += 2
+            case "COLLATE" where i + 1 < tokens.count:
+                if tokens[i + 1].token.kind == .word,
+                   sqliteCollations.contains(tokens[i + 1].token.text.uppercased()) {
+                    i += 2
+                } else {
+                    replacements[i] = " "; replacements[i + 1] = " "
+                    i += 2
+                }
+            case "DEFAULT" where isPunctuation(tokens, i + 1, "("):
+                replacements[i] = " "
+                i = dropOptionalParenthesised(tokens, from: i + 1, into: &replacements)
+            default:
+                i += 1
+            }
+        }
+        guard !replacements.isEmpty else { return text(units, 0..<units.count) }
+        return rebuild(tokens, units, replacing: replacements)
+    }
+
+    /// Whether what stands after an `ON` is a filegroup's name rather than
+    /// the `DELETE` or `UPDATE` of a foreign key's own clause.
+    private static func isFileGroup(_ tokens: [Scanned], _ index: Int) -> Bool {
+        guard index < tokens.count else { return false }
+        switch tokens[index].token.kind {
+        case .quoted: return true
+        case .word:
+            let word = tokens[index].token.text.uppercased()
+            return word != "DELETE" && word != "UPDATE"
+        case .punctuation: return false
+        }
+    }
+
+    /// A T-SQL type as the SQLite type whose affinity reads the same data
+    /// the same way, with the size or precision after it dropped —
+    /// `[nvarchar](100)` and `[varchar](max)` are both just `TEXT`, and
+    /// SQLite has no `max` to write anyway. A type this table does not know
+    /// (a user-defined one, `[dbo].[Money]` with the schema already off) is
+    /// left exactly as written: SQLite takes any word at all as a type name.
+    private static func rewriteSQLServerType(
+        _ tokens: [Scanned], at index: Int, into replacements: inout [Int: String]
+    ) -> Int {
+        guard index < tokens.count, tokens[index].token.kind != .punctuation else {
+            return index + 1
+        }
+        guard let mapped = sqlServerTypes[tokens[index].token.text.uppercased()] else {
+            return index + 1
+        }
+        replacements[index] = " " + mapped
+        return dropOptionalParenthesised(tokens, from: index + 1, into: &replacements)
+    }
+
+    private static let sqlServerTypes: [String: String] = [
+        "INT": "INTEGER", "BIGINT": "INTEGER", "SMALLINT": "INTEGER",
+        "TINYINT": "INTEGER", "BIT": "INTEGER",
+        "DECIMAL": "NUMERIC", "NUMERIC": "NUMERIC", "MONEY": "NUMERIC",
+        "SMALLMONEY": "NUMERIC",
+        "FLOAT": "REAL", "REAL": "REAL",
+        "CHAR": "TEXT", "NCHAR": "TEXT", "VARCHAR": "TEXT", "NVARCHAR": "TEXT",
+        "TEXT": "TEXT", "NTEXT": "TEXT", "XML": "TEXT", "SYSNAME": "TEXT",
+        "UNIQUEIDENTIFIER": "TEXT", "DATE": "TEXT", "TIME": "TEXT",
+        "DATETIME": "TEXT", "DATETIME2": "TEXT", "SMALLDATETIME": "TEXT",
+        "DATETIMEOFFSET": "TEXT", "SQL_VARIANT": "TEXT",
+        "BINARY": "BLOB", "VARBINARY": "BLOB", "IMAGE": "BLOB",
+        "TIMESTAMP": "BLOB", "ROWVERSION": "BLOB", "GEOGRAPHY": "BLOB",
+        "GEOMETRY": "BLOB", "HIERARCHYID": "BLOB",
+    ]
+
+    // MARK: - Oracle
+
+    /// What to do with one statement of a SQL Developer "Export → Insert" or
+    /// SQL*Plus script.
+    ///
+    /// The SQL*Plus commands that drive the script (`REM`, `PROMPT`, `SET
+    /// DEFINE OFF`, `SPOOL`, `WHENEVER`) are not SQL and are skipped, and so
+    /// is everything Oracle has that SQLite has not: a sequence, a synonym,
+    /// a tablespace, a user, a grant, a trigger, a package. A `COMMIT` goes
+    /// too — nothing here opened a transaction, and SQLite refuses one that
+    /// ends nothing.
+    ///
+    /// What is left is a `CREATE TABLE` and a `CREATE INDEX` with their
+    /// storage clauses taken off, a view tried on the chance that it runs,
+    /// and the `Insert into`s — see `oracleInsertAction`.
+    private static func oracleAction(for statement: String) -> Action {
+        let units = Array(statement.utf16)
+        var index = 0
+        guard let first = SQLSourceMap.nextToken(units, &index), first.kind == .word else {
+            return .run
+        }
+        switch first.text.uppercased() {
+        case "REM", "PROMPT", "SET", "SPOOL", "WHENEVER", "EXIT", "QUIT", "SHOW",
+             "DEFINE", "UNDEFINE", "CONNECT", "TTITLE", "BTITLE", "ACCEPT", "PAUSE",
+             "COLUMN", "USE", "GRANT", "REVOKE", "ALTER", "DROP", "TRUNCATE",
+             "LOCK", "UNLOCK", "START", "EXEC", "EXECUTE", "BEGIN", "DECLARE",
+             "COMMIT", "ROLLBACK", "COMMENT":
+            return .skip
+        case "CREATE":
+            return oracleCreateAction(statement)
+        case "INSERT":
+            return oracleInsertAction(statement)
+        default:
+            return .run
+        }
+    }
+
+    private static func oracleCreateAction(_ statement: String) -> Action {
+        let destemmed = stripSchemaQualifiers(statement)
+        switch createKind(of: destemmed, modifiers: oracleCreateModifiers) {
+        case "TABLE":
+            guard let rewritten = rewriteCreateTable(destemmed, flavor: .oracle) else {
+                return .skip
+            }
+            return .rewrite(rewritten)
+        case "INDEX":
+            guard let rewritten = rewriteDecoratedCreateIndex(destemmed) else { return .skip }
+            return .rewrite(rewritten)
+        case "VIEW":
+            // SQLite has views, and a view over tables that are all here may
+            // well run. Its `SELECT` is Oracle's, though, and nothing in this
+            // file translates that — so it is tried rather than promised, and
+            // a refusal is skipped rather than shown.
+            return .attempt(rewriteOracleView(destemmed))
+        default:
+            return .skip
+        }
+    }
+
+    /// `CREATE OR REPLACE FORCE EDITIONABLE VIEW "V" ("A") AS SELECT …` with
+    /// the four words in front of `VIEW` dropped — SQLite's own `CREATE
+    /// VIEW` takes a column list and an `AS SELECT`, and nothing else of
+    /// what Oracle writes there.
+    private static func rewriteOracleView(_ statement: String) -> String {
+        let units = Array(statement.utf16)
+        let tokens = scan(units)
+        guard !tokens.isEmpty, tokens[0].token.kind == .word,
+              tokens[0].token.text.uppercased() == "CREATE" else { return statement }
+        var replacements: [Int: String] = [:]
+        var i = 1
+        while i < tokens.count, tokens[i].token.kind == .word {
+            let word = tokens[i].token.text.uppercased()
+            guard ["OR", "REPLACE", "FORCE", "NOFORCE", "EDITIONABLE", "NONEDITIONABLE"]
+                .contains(word) else { break }
+            replacements[i] = " "
+            i += 1
+        }
+        guard !replacements.isEmpty else { return statement }
+        return rebuild(tokens, units, replacing: replacements)
+    }
+
+    /// `Insert into SHOP.ORDERS (ID,PLACED) values (1, to_date('05-JAN-24',
+    /// 'DD-MON-RR'));` as SQLite takes it — which is almost as written.
+    ///
+    /// The schema goes, the same as everywhere else. `SYSDATE` and
+    /// `SYSTIMESTAMP` become `CURRENT_TIMESTAMP`: they are bare words in
+    /// Oracle rather than calls, so SQLite reads them as a column that is
+    /// not there and refuses the statement — the one thing here that cannot
+    /// be answered with a function. Everything else Oracle writes in a value
+    /// — `to_date`, `to_timestamp`, `to_char`, `to_number`, `hextoraw`,
+    /// `nvl` — *is* a call, and `SQLDump` registers all of them on the
+    /// database when it opens it, so they run as written and go on running
+    /// for a reader who types one into the query box.
+    ///
+    /// `INSERT ALL … SELECT 1 FROM DUAL` is skipped: it is many inserts in
+    /// one statement, in a shape SQLite has no equivalent for.
+    private static func oracleInsertAction(_ statement: String) -> Action {
+        let destemmed = stripSchemaQualifiers(statement)
+        let units = Array(destemmed.utf16)
+        let tokens = scan(units)
+        let unchanged: Action = destemmed == statement ? .run : .rewrite(destemmed)
+        guard let verb = tokens.firstIndex(where: { $0.token.kind != .punctuation })
+        else { return unchanged }
+        if isWordAt(tokens, verb + 1, "ALL") || isWordAt(tokens, verb + 1, "FIRST") {
+            return .skip
+        }
+        var replacements: [Int: String] = [:]
+        for i in tokens.indices where tokens[i].token.kind == .word {
+            switch tokens[i].token.text.uppercased() {
+            case "SYSDATE", "SYSTIMESTAMP":
+                replacements[i] = " CURRENT_TIMESTAMP"
+            default:
+                break
+            }
+        }
+        guard !replacements.isEmpty else { return unchanged }
+        return .rewrite(rebuild(tokens, units, replacing: replacements))
+    }
+
+    /// One item of an Oracle `CREATE TABLE`'s column list. A partition or a
+    /// supplemental-log clause is dropped whole; everything else keeps what
+    /// it means and loses the storage words around it.
+    private static func rewriteOracleItem(_ item: String) -> String? {
+        let units = Array(item.utf16)
+        let tokens = scan(units)
+        guard let first = tokens.firstIndex(where: { $0.token.kind != .punctuation })
+        else { return item }
+        let leading = tokens[first].token.kind == .word
+            ? tokens[first].token.text.uppercased() : ""
+        switch leading {
+        case "SUPPLEMENTAL", "PERIOD", "PARTITION":
+            return nil
+        case "CONSTRAINT", "PRIMARY", "UNIQUE", "FOREIGN", "CHECK":
+            return oracleStripped(tokens, units, typeIndex: nil)
+        default:
+            return oracleStripped(tokens, units, typeIndex: first + 1)
+        }
+    }
+
+    /// A column or a table constraint with Oracle's own words taken off:
+    /// - `ENABLE`, `DISABLE`, `VALIDATE`, `NOVALIDATE`, `RELY`, `VISIBLE` —
+    ///   whether a constraint is being enforced, which is not a question a
+    ///   database only ever read has to answer;
+    /// - everything from a `USING INDEX` to the end of the item, which is
+    ///   where the constraint's own index is stored (`PCTFREE 10 INITRANS 2
+    ///   … STORAGE(…) TABLESPACE "USERS"`);
+    /// - `GENERATED [ALWAYS|BY DEFAULT] AS IDENTITY (…)`, a counter SQLite
+    ///   already has in `INTEGER PRIMARY KEY`;
+    /// - the `ON NULL` of a `DEFAULT ON NULL 0`, and a `DEFAULT` that calls
+    ///   a function, which is the same thing `pg_dump`'s `DEFAULT now()` is
+    ///   and goes the same way.
+    ///
+    /// `SYSDATE` standing as a default becomes `CURRENT_TIMESTAMP` for the
+    /// same reason it does inside an insert: it is a word and not a call.
+    private static func oracleStripped(
+        _ tokens: [Scanned], _ units: [UInt16], typeIndex: Int?
+    ) -> String {
+        var replacements: [Int: String] = [:]
+        var i = 0
+        while i < tokens.count {
+            if i == typeIndex {
+                i = rewriteOracleType(tokens, at: i, into: &replacements)
+                continue
+            }
+            guard tokens[i].token.kind == .word else { i += 1; continue }
+            switch tokens[i].token.text.uppercased() {
+            case "ENABLE", "DISABLE", "NOVALIDATE", "VALIDATE", "RELY", "NORELY",
+                 "VISIBLE", "INVISIBLE":
+                replacements[i] = " "
+                i += 1
+            case "USING":
+                for k in i..<tokens.count { replacements[k] = "" }
+                i = tokens.count
+            case "GENERATED":
+                var end = i + 1
+                while end < tokens.count, tokens[end].token.kind == .word,
+                      ["ALWAYS", "BY", "DEFAULT", "ON", "NULL", "AS", "IDENTITY"]
+                          .contains(tokens[end].token.text.uppercased()) {
+                    end += 1
+                }
+                for k in i..<end { replacements[k] = " " }
+                i = dropOptionalParenthesised(tokens, from: end, into: &replacements)
+            case "DEFAULT" where isWordAt(tokens, i + 1, "ON") && isWordAt(tokens, i + 2, "NULL"):
+                replacements[i + 1] = " "; replacements[i + 2] = " "
+                i += 3
+            case "DEFAULT" where i + 2 < tokens.count && tokens[i + 1].token.kind == .word
+                && isPunctuation(tokens, i + 2, "("):
+                replacements[i] = " "; replacements[i + 1] = " "
+                i = dropOptionalParenthesised(tokens, from: i + 2, into: &replacements)
+            case "SYSDATE", "SYSTIMESTAMP":
+                replacements[i] = " CURRENT_TIMESTAMP"
+                i += 1
+            case "COLLATE" where i + 1 < tokens.count:
+                if tokens[i + 1].token.kind == .word,
+                   sqliteCollations.contains(tokens[i + 1].token.text.uppercased()) {
+                    i += 2
+                } else {
+                    replacements[i] = " "; replacements[i + 1] = " "
+                    i += 2
+                }
+            default:
+                i += 1
+            }
+        }
+        guard !replacements.isEmpty else { return text(units, 0..<units.count) }
+        return rebuild(tokens, units, replacing: replacements)
+    }
+
+    /// An Oracle type as the SQLite type whose affinity reads the same data
+    /// the same way. `NUMBER` is the one that has to be read and not just
+    /// looked up: `NUMBER(10,0)` counts whole things and is an `INTEGER`,
+    /// `NUMBER(12,2)` is money and is `NUMERIC`, and a bare `NUMBER` is
+    /// whatever anybody put in it.
+    ///
+    /// A length is dropped along with the word, `VARCHAR2(100 BYTE)`'s unit
+    /// among it; `TIMESTAMP (6) WITH LOCAL TIME ZONE` loses all four words
+    /// after it, and `LONG RAW` is bytes where a bare `LONG` is a very long
+    /// string.
+    private static func rewriteOracleType(
+        _ tokens: [Scanned], at index: Int, into replacements: inout [Int: String]
+    ) -> Int {
+        guard index < tokens.count, tokens[index].token.kind != .punctuation else {
+            return index + 1
+        }
+        switch tokens[index].token.text.uppercased() {
+        case "NUMBER", "DECIMAL", "DEC", "NUMERIC":
+            let scale = parenthesisedScale(tokens, from: index + 1)
+            replacements[index] = scale == 0 ? " INTEGER" : " NUMERIC"
+            return dropOptionalParenthesised(tokens, from: index + 1, into: &replacements)
+        case "INTEGER", "INT", "SMALLINT":
+            replacements[index] = " INTEGER"
+            return dropOptionalParenthesised(tokens, from: index + 1, into: &replacements)
+        case "FLOAT", "BINARY_FLOAT", "BINARY_DOUBLE", "DOUBLE":
+            replacements[index] = " REAL"
+            var next = index + 1
+            if isWordAt(tokens, next, "PRECISION") {
+                replacements[next] = " "
+                next += 1
+            }
+            return dropOptionalParenthesised(tokens, from: next, into: &replacements)
+        case "VARCHAR2", "NVARCHAR2", "VARCHAR", "NVARCHAR", "CHAR", "NCHAR",
+             "CHARACTER", "CLOB", "NCLOB", "ROWID", "UROWID", "XMLTYPE":
+            replacements[index] = " TEXT"
+            return dropOptionalParenthesised(tokens, from: index + 1, into: &replacements)
+        case "LONG":
+            if isWordAt(tokens, index + 1, "RAW") {
+                replacements[index] = " BLOB"
+                replacements[index + 1] = " "
+                return index + 2
+            }
+            replacements[index] = " TEXT"
+            return index + 1
+        case "DATE":
+            replacements[index] = " TEXT"
+            return index + 1
+        case "TIMESTAMP":
+            replacements[index] = " TEXT"
+            var next = dropOptionalParenthesised(tokens, from: index + 1, into: &replacements)
+            if isWordAt(tokens, next, "WITH") {
+                var end = next + 1
+                if isWordAt(tokens, end, "LOCAL") { end += 1 }
+                if isWordAt(tokens, end, "TIME"), isWordAt(tokens, end + 1, "ZONE") {
+                    end += 2
+                    for k in next..<end { replacements[k] = " " }
+                    next = end
+                }
+            }
+            return next
+        case "INTERVAL":
+            var end = index + 1
+            while end < tokens.count, tokens[end].token.kind == .word,
+                  ["YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "TO"]
+                      .contains(tokens[end].token.text.uppercased()) {
+                end = dropOptionalParenthesised(tokens, from: end + 1, into: &replacements)
+            }
+            replacements[index] = " TEXT"
+            for k in (index + 1)..<end { replacements[k] = " " }
+            return end
+        case "RAW", "BLOB", "BFILE":
+            replacements[index] = " BLOB"
+            return dropOptionalParenthesised(tokens, from: index + 1, into: &replacements)
+        default:
+            return index + 1
+        }
+    }
+
+    /// The scale of a `NUMBER(p,s)` — `0` for a `NUMBER(10)`, which has none
+    /// and means whole numbers, and `nil` for a bare `NUMBER` with no
+    /// parentheses at all, which means anything.
+    private static func parenthesisedScale(_ tokens: [Scanned], from index: Int) -> Int? {
+        guard isPunctuation(tokens, index, "(") else { return nil }
+        var numbers: [String] = []
+        var j = index + 1
+        while j < tokens.count {
+            let token = tokens[j].token
+            if token.kind == .punctuation, token.text == ")" { break }
+            if token.kind == .word { numbers.append(token.text) }
+            j += 1
+        }
+        guard numbers.count > 1 else { return numbers.isEmpty ? nil : 0 }
+        return Int(numbers[1]) ?? 0
     }
 }

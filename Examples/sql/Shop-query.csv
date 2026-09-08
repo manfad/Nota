@@ -1,0 +1,81 @@
+id,customer_id,placed,status,note
+1,3,2026-02-07,packed,
+8,1,2026-04-08,packed,
+14,11,2026-04-04,packed,
+32,5,2026-09-04,packed,
+33,17,2026-09-20,packed,
+44,37,2026-09-23,packed,
+45,31,2026-01-22,packed,Leave with the neighbour
+53,94,2026-03-08,packed,
+57,88,2026-08-16,packed,
+62,11,2026-04-05,packed,
+65,92,2026-06-09,packed,Ring twice
+72,115,2026-09-17,packed,
+76,30,2026-03-06,packed,
+77,100,2026-08-20,packed,
+118,1,2026-06-14,packed,
+120,64,2026-09-10,packed,No paper receipt
+122,23,2026-03-19,packed,
+124,32,2026-09-06,packed,
+125,21,2026-03-09,packed,Gift wrap
+127,35,2026-07-04,packed,
+132,40,2026-02-26,packed,
+138,31,2026-05-28,packed,
+141,86,2026-03-18,packed,
+143,106,2026-02-18,packed,
+144,73,2026-03-11,packed,
+150,57,2026-07-23,packed,Leave with the neighbour
+156,115,2026-05-07,packed,
+157,46,2026-04-09,packed,
+160,89,2026-07-24,packed,Leave with the neighbour
+165,117,2026-08-14,packed,Ring twice
+173,54,2026-01-22,packed,
+175,55,2026-04-18,packed,Second attempt
+176,87,2026-07-07,packed,
+180,36,2026-01-17,packed,Gift wrap
+186,4,2026-08-24,packed,
+197,10,2026-04-02,packed,
+199,46,2026-02-23,packed,
+205,53,2026-01-08,packed,Ring twice
+211,2,2026-07-07,packed,
+216,60,2026-07-15,packed,
+223,110,2026-06-01,packed,
+226,51,2026-09-13,packed,
+236,10,2026-07-04,packed,
+237,62,2026-08-27,packed,
+245,61,2026-09-22,packed,Gift wrap
+254,54,2026-03-27,packed,
+263,14,2026-05-27,packed,
+267,2,2026-05-08,packed,
+276,13,2026-02-07,packed,
+279,24,2026-05-08,packed,
+287,6,2026-08-14,packed,
+290,14,2026-01-02,packed,Second attempt
+291,4,2026-03-27,packed,
+296,108,2026-02-21,packed,
+298,84,2026-09-07,packed,
+299,38,2026-02-14,packed,
+307,107,2026-01-22,packed,
+308,117,2026-06-11,packed,
+311,36,2026-06-26,packed,
+314,57,2026-02-19,packed,
+318,61,2026-03-11,packed,
+325,72,2026-04-10,packed,Gift wrap
+326,117,2026-09-05,packed,
+360,107,2026-06-06,packed,Leave with the neighbour
+365,104,2026-08-06,packed,Gift wrap
+367,71,2026-08-21,packed,
+370,63,2026-09-09,packed,Gift wrap
+373,24,2026-05-13,packed,
+375,46,2026-06-15,packed,No paper receipt
+380,61,2026-08-04,packed,No paper receipt
+381,41,2026-07-28,packed,
+384,12,2026-07-24,packed,
+389,3,2026-04-05,packed,
+391,83,2026-02-22,packed,
+392,41,2026-06-27,packed,
+393,72,2026-09-20,packed,
+400,18,2026-03-14,packed,Ring twice
+402,24,2026-09-20,packed,
+406,41,2026-08-25,packed,
+417,82,2026-09-21,packed,

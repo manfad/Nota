@@ -71,6 +71,25 @@ enum SaveNameComposer {
         return "\(trimmedName).\(trimmedExtension)"
     }
 
+    /// The same composition where the extension is *pinned* rather than
+    /// picked — the Export sheet, whose target is the format and whose
+    /// `.pdf` is a label rather than a popup. The name field's own extension
+    /// wins only when it is already the pinned one, so `notes.pdf` stays
+    /// `notes.pdf` while `report.v2` becomes `report.v2.pdf` rather than a
+    /// PDF called `.v2`.
+    static func composedName(name: String, pinnedExtension ext: String) -> String {
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let trimmedExtension = ext
+            .trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard !trimmedExtension.isEmpty else { return trimmedName }
+        if let own = split(name: trimmedName).extension,
+           own.caseInsensitiveCompare(trimmedExtension) == .orderedSame {
+            return trimmedName
+        }
+        return "\(trimmedName).\(trimmedExtension)"
+    }
+
     /// `composedName`, turned into the URL Save is about to write — what the
     /// dialog checks for an existing file at, since its name field never
     /// carries the extension the write actually lands on.

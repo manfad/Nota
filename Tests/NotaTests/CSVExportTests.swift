@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import PDFKit
 import XCTest
 @testable import Nota
 
@@ -255,9 +256,9 @@ final class CSVExportTests: XCTestCase {
         let directory = try makeTemporaryDirectory()
         let destination = directory.appendingPathComponent("customers.csv")
         var askedName: String?
-        pane.exportDestination = { name in
+        pane.exportDestination = { name, columns in
             askedName = name
-            return destination
+            return CSVExportChoice(url: destination, columns: Array(columns.indices))
         }
         pane.pressExportForTesting()
 
@@ -274,7 +275,7 @@ final class CSVExportTests: XCTestCase {
         let (pane, _) = try makeSQLPane()
         let note = try exampleSQLNote("Shop.sql")
         try showSQL(note, in: pane)
-        pane.exportDestination = { _ in nil }
+        pane.exportDestination = { _, _ in nil }
         pane.pressExportForTesting()
         // No crash, and nothing to assert a file against — the destination
         // was never handed out.
@@ -294,9 +295,9 @@ final class CSVExportTests: XCTestCase {
         let directory = try makeTemporaryDirectory()
         let destination = directory.appendingPathComponent("query.csv")
         var askedName: String?
-        pane.exportDestination = { name in
+        pane.exportDestination = { name, columns in
             askedName = name
-            return destination
+            return CSVExportChoice(url: destination, columns: Array(columns.indices))
         }
         pane.pressExportForTesting()
 
@@ -336,9 +337,9 @@ final class CSVExportTests: XCTestCase {
         let directory = try makeTemporaryDirectory()
         let destination = directory.appendingPathComponent("Products.csv")
         var askedName: String?
-        pane.exportDestination = { name in
+        pane.exportDestination = { name, columns in
             askedName = name
-            return destination
+            return CSVExportChoice(url: destination, columns: Array(columns.indices))
         }
         pane.pressExportForTesting()
 
@@ -358,70 +359,76 @@ final class CSVExportTests: XCTestCase {
         let directory = try makeTemporaryDirectory()
         let destination = directory.appendingPathComponent("rows.csv")
         var askedName: String?
-        pane.exportDestination = { name in
+        pane.exportDestination = { name, columns in
             askedName = name
-            return destination
+            return CSVExportChoice(url: destination, columns: Array(columns.indices))
         }
         pane.pressExportForTesting()
         XCTAssertEqual(askedName, "rows.csv")
     }
 
-    // MARK: - The button and the sheet agree
+    // MARK: - Preview as PDF — the grid on pages
 
-    /// The pane's own Export button and File › Export… → Table (CSV) are two
-    /// doors onto one exporter, so they must write the same bytes — including
-    /// the sort a header click put on the grid and the query in the box,
-    /// neither of which is anywhere but on the pane.
+    /// A `.csv` tab's `Preview as PDF` is the grid itself, ruled onto pages,
+    /// and not the source listing it used to fall to: the cells are on the
+    /// page and the line they were written on as one comma-joined record is
+    /// not. The sort a header click put on the grid comes with them, since
+    /// the rows are read off the pane rather than off the file.
     @MainActor
-    func testTheSQLPaneButtonAndTheExportSheetWriteTheSameFile() throws {
-        Exporter.installDefaultHooks()
-        let (pane, _) = try makeSQLPane()
-        let note = try exampleSQLNote("Shop.sql")
-        try showSQL(note, in: pane)
-        try settleSQL(pane) {
-            pane.setQueryForTesting("SELECT name, city FROM customers ORDER BY name DESC")
-        }
-
-        let directory = try makeTemporaryDirectory()
-        let fromButton = directory.appendingPathComponent("button.csv")
-        pane.exportDestination = { _ in fromButton }
-        pane.pressExportForTesting()
-
-        let fromSheet = directory.appendingPathComponent("sheet.csv")
-        try exportThroughTheSheet(note, pane: pane, to: fromSheet)
-
-        XCTAssertEqual(try Data(contentsOf: fromButton), try Data(contentsOf: fromSheet),
-                       "the same query, the same rows, the same bytes")
-        XCTAssertFalse(try String(contentsOf: fromSheet, encoding: .utf8).isEmpty)
-        XCTAssertEqual(pane.defaultExportName(), "Shop-query.csv",
-                       "and the sheet opens on the name the button would have used")
-    }
-
-    /// The same, for a `.csv` tab: the table pane's button and the sheet.
-    @MainActor
-    func testTheCSVPaneButtonAndTheExportSheetWriteTheSameFile() throws {
+    func testACSVTabExportsItsGridOntoPagesRatherThanItsSource() throws {
         Exporter.installDefaultHooks()
         let (pane, _) = try makeCSVPane()
-        let note = makeCSVNote(named: "Products.csv", text: try exampleText("Products.csv"))
+        let note = makeCSVNote(named: "People.csv", text: "name,city\nAda,London\nGrace,Paris\n")
         try showCSV(note, in: pane)
 
         let directory = try makeTemporaryDirectory()
-        let fromButton = directory.appendingPathComponent("button.csv")
-        pane.exportDestination = { _ in fromButton }
-        pane.pressExportForTesting()
+        var text = try previewPDFText(of: note, pane: pane,
+                                      at: directory.appendingPathComponent("grid.pdf"))
+        for cell in ["name", "city", "Ada", "London", "Grace", "Paris"] {
+            XCTAssertTrue(text.contains(cell), "“\(cell)” is missing from the page")
+        }
+        XCTAssertFalse(text.contains("Ada,London"),
+                       "the grid on pages, not the source listing")
 
-        let fromSheet = directory.appendingPathComponent("sheet.csv")
-        try exportThroughTheSheet(note, pane: pane, to: fromSheet)
+        // The same tab, sorted by name the other way round: the pages follow
+        // the grid, so the rows come out in the order on screen.
+        try settleCSV(pane) { pane.clickHeaderForTesting(at: 0) }
+        try settleCSV(pane) { pane.clickHeaderForTesting(at: 0) }
+        XCTAssertEqual(pane.shownSort, CSVTable.Sort(column: 0, ascending: false))
 
-        XCTAssertEqual(try Data(contentsOf: fromButton), try Data(contentsOf: fromSheet))
+        text = try previewPDFText(of: note, pane: pane,
+                                  at: directory.appendingPathComponent("sorted.pdf"))
+        let grace = try XCTUnwrap(text.range(of: "Grace"))
+        let ada = try XCTUnwrap(text.range(of: "Ada"))
+        XCTAssertLessThan(grace.lowerBound, ada.lowerBound,
+                          "descending by name puts Grace on the row above Ada")
     }
 
-    /// What File › Export… does once the reader has picked Table (CSV) and a
-    /// destination: `Exporter.export` with the pane in front of the tab.
+    /// A pane in front of the tab is not a pane that has read it: the column
+    /// being hidden — the tab exported or printed from editor mode — leaves
+    /// the pane with no table behind it, and a big file is not read until the
+    /// button asks for it either. The listing stands in for both, the way it
+    /// does for a tab with no pane at all, rather than the export failing.
     @MainActor
-    private func exportThroughTheSheet(
-        _ note: Note, pane: any PreviewContent, to url: URL
-    ) throws {
+    func testACSVTabWithAnUnreadPaneFallsBackToTheSourceListing() throws {
+        Exporter.installDefaultHooks()
+        let (pane, _) = try makeCSVPane()
+        let note = makeCSVNote(named: "People.csv", text: "name,city\nAda,London\nGrace,Paris\n")
+        // No settle: nothing is read, so the pane never finishes anything.
+        pane.show(note, in: csvContext(visible: false))
+
+        let url = try makeTemporaryDirectory().appendingPathComponent("listing.pdf")
+        let text = try previewPDFText(of: note, pane: pane, at: url)
+        XCTAssertTrue(text.contains("Ada,London"),
+                      "the source listing, comma-joined line and all")
+    }
+
+    /// File › Export… → Preview as PDF, with the pane in front of the tab,
+    /// and the one page it wrote read back.
+    @MainActor
+    private func previewPDFText(
+        of note: Note, pane: any PreviewContent, at url: URL
+    ) throws -> String {
         var context = Exporter.Context(
             font: .monospacedSystemFont(ofSize: 11, weight: .regular),
             paragraphStyle: NSParagraphStyle.default,
@@ -433,12 +440,16 @@ final class CSVExportTests: XCTestCase {
 
         let finished = expectation(description: "export finished")
         var outcome: Result<Void, Error>?
-        Exporter.export(note, to: .csv, at: url, context: context) { result in
+        Exporter.export(note, to: .previewPDF, at: url, context: context) { result in
             outcome = result
             finished.fulfill()
         }
         wait(for: [finished], timeout: 30)
         try XCTUnwrap(outcome, "the export never answered").get()
+
+        let document = try XCTUnwrap(PDFDocument(url: url), "no readable PDF was written")
+        XCTAssertEqual(document.pageCount, 1)
+        return try XCTUnwrap(XCTUnwrap(document.page(at: 0)).string)
     }
 
     // MARK: - SQL pane helpers

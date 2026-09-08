@@ -17,12 +17,12 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 |---|---|
 | A menu item, its key, or app launch / windows / summon | `AppDelegate.swift`, keys in `Shortcuts.swift` |
 | Anything in the main window: footer, split, modes, tabs, opening files, saving | `MainWindowController.swift` (see its sections below) |
-| The Save dialog: its rows, its Format popup, or the extensions it offers | `SaveDialog.swift` (the dialog itself), `SaveNameComposer.swift` (pure logic), `MainWindowController.presentSavePanel` (which puts it up) |
-| File › Export…: what a tab can be exported to, the sheet that asks, the pages themselves | `Export.swift` (the targets and the hooks other exporters plug into), `ExportHooks.swift` (the five exporters plugged in, one call), `ExportDialog.swift` (the sheet), `PDFPaginator.swift` (text and plates onto pages), `MainWindowController` "Export" |
+| The Save dialog: its rows, its Format popup, or the extensions it offers | `SaveDialog.swift` (the dialog itself), `LocationRow.swift` (the `Location:` row it shares with the export sheet), `SaveNameComposer.swift` (pure logic), `MainWindowController.presentSavePanel` (which puts it up) |
+| File › Export…: what a tab can be exported to, the one sheet that asks (shape, pictures, name, folder), the pages themselves | `Export.swift` (the targets and the hooks other exporters plug into), `ExportHooks.swift` (the six exporters plugged in, one call), `ExportDialog.swift` (the sheet), `LocationRow.swift` (its `Location:` row), `PDFPaginator.swift` (text and plates onto pages), `SnapshotPNG.swift` (the same text as one tall picture of the screen), `TablePDF.swift` (a grid onto pages), `MainWindowController` "Export" |
 | File › Print… (⌥⌘P): the PDF the tab's first target makes, handed to the system dialog | `MainWindowController` "Print" (`canPrintCurrentTab`, `printCurrentTab`, `printOperationRunner`), the key in `Shortcuts.swift` (`ShortcutAction.printTab`) |
 | The tab strip (drawing, drag, close, +, tear-off) | `TabBarView.swift`, geometry in `TabStripLayout.swift` |
 | ⇧⌘J switcher, `@` headings (text notes only), bookmarks dialog, ⇧⌘F search dialog, hover/arrow selection | `TabPickerPanel.swift` (also `refocusIfShowing`: the caret back in the field when Nota returns from another app or space), ranking in `FuzzyMatch.swift` |
-| Settings window (live apply, no Save; sidebar pages) | `SettingsWindowController.swift`, values in `Preferences.swift` |
+| Settings window (live apply, no Save; sidebar pages) | `SettingsWindowController.swift`, the File types list in `SettingsOutlineView.swift`, values in `Preferences.swift` |
 | Settings › File types: which extensions Nota is the default app for | the list and the Launch Services door `DefaultApp.swift`, the page `SettingsWindowController.fileTypesPage`, what was default before `Preferences.previousDefaultApps` |
 | "Check for Updates" on the About page | `UpdateCheck.swift` (the request, the comparison, Homebrew detection), the button and its line in `SettingsWindowController.aboutPage` |
 | A new preference | `Preferences.swift` (key + property + `announce()`), then Settings UI |
@@ -37,9 +37,9 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | Preview column plumbing (which view shows, zoom, scroll memory) | `PreviewPaneView.swift`, `PreviewContent.swift`, `RenderedPreviewView.swift` |
 | PDF / picture / HTML / EPUB / RTF viewer tabs | `PDFPreviewView.swift`, `ImagePreviewView.swift`, `HTMLPreviewView.swift`, `EPUBPreviewView.swift` + `EPUBBook.swift`, `RTFPreviewView.swift` |
 | Converting between the things Nota reads: a book or a page printed as a PDF, a PDF read back as a book | `WebPDF.swift` (WebKit's print operation, headless), `EPUBToPDF.swift` (chapters printed and bound), `PDFToEPUB.swift` (a text layer reflowed into EPUB 3) |
-| A `.sql` dump's grid: running it, paging it, sorting it, picking cells out of it, ⌘F over it | `SQLPreviewView.swift` (the pane), `SQLGridView.swift` (the grid, its header and its cells), `SQLQueryBox.swift` (the query editor), `SQLDump.swift` (the database), `SQLDumpDialect.swift` (a MySQL or Postgres dump made SQLite's), `SQLSourceMap.swift` (which line of the file a row was written on, and where in it a cell's own value is), `SQLQueryRewrite.swift` (the rowid spliced into a query so its rows point at the file too), `GridFindSession.swift` (⌘F over the grid; `SQLDump.hits` is the one statement that answers it) |
+| A `.sql` dump's grid: running it, paging it, sorting it, picking cells out of it, ⌘F over it | `SQLPreviewView.swift` (the pane), `SQLGridView.swift` (the grid, its header and its cells), `SQLQueryBox.swift` (the query editor; its dropdown is `SQLCompletionPopup.swift` over `SQLCompletion.swift`, which also colours the keywords), `SQLDump.swift` (the database), `SQLDumpDialect.swift` (a MySQL, MariaDB, Postgres, SQL Server or Oracle dump made SQLite's), `SQLSourceMap.swift` (which line of the file a row was written on, and where in it a cell's own value is), `SQLQueryRewrite.swift` (the rowid spliced into a query so its rows point at the file too), `GridFindSession.swift` (⌘F over the grid; `SQLDump.hits` is the one statement that answers it) |
 | A `.csv` / `.tsv` file's grid: reading it, paging it, sorting it, ⌘F over it | `CSVPreviewView.swift` (the pane, over `SQLGridView`), `CSVTable.swift` (the RFC 4180 reader, `ordering` — the order the grid and its ⌘F walk — and where each record and each field of it is written) |
-| The Export button on a `.sql` or `.csv` grid, or the CSV a table writes out | `CSVWriter.swift` (the RFC 4180 writer, in-memory and streaming), `SQLDump.forEachRow` / `CSVTable.exportRows` (every row, in the grid's sort order, no page cut out of it), `SQLPreviewView.exportCSV(to:)` / `CSVPreviewView.exportCSV(to:)` (the plain functions behind the button), `MainWindowController.runExportSavePanel(suggestedName:extension:existingFileURL:)` / `exportPanelProvider` (the destination, Nota's own `SaveDialog` with the extension pinned — one door for the buttons and for File › Export…) |
+| The Export CSV button on a `.sql` or `.csv` grid, its sheet, or the CSV a table writes out | `CSVExportDialog.swift` (the sheet: `Export with` over the grid's columns ticked or not, Save As pinned to `csv`, the shared `LocationRow`, `CSVExportChoice` back), `CSVWriter.swift` (the RFC 4180 writer, in-memory and streaming), `SQLDump.forEachRow` / `CSVTable.exportRows` (every row, in the grid's sort order, no page cut out of it), `SQLPreviewView.exportCSV(to:columns:)` / `CSVPreviewView.exportCSV(to:columns:)` (the plain functions behind the button, the chosen columns only) and `exportTable()` beside each (the same rows handed back rather than written, for `TablePDF`), `MainWindowController.runCSVExportDialog(suggestedName:columns:existingFileURL:)` / `csvExportDialogProvider` (the sheet on the window, and its test seam). File › Export… no longer offers a CSV: the button is the one way to one. |
 | ⌘F find bar and its match bands (incl. dark-mode colours) | `FindBar.swift` (chrome), `FindSession.swift` (editor; the fallback every column hands an unwanted Find item back to is `MainWindowController.performTextFinderAction`), `HTMLFindSession.swift` (`find(_:)` puts a ⇧⌘F hit's query to the page), `PDFFindSession.swift` (`reveal(_:for:)` lands on a ⇧⌘F hit), `TreeFindSession.swift` (a tree preview's rows), `GridFindSession.swift` (a `.csv` or `.sql` grid) |
 | ⌘J go to line | `GoToLine.swift`, line table `LineIndex.swift` |
 | Floating pill chrome shared by find / go-to-line / external-change / the format offer | `Pill.swift`, `ExternalChangePill.swift`, `FormatOfferPill.swift` |
@@ -81,13 +81,14 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `Version.swift` — `AppVersion.current`; bumped with `Info.plist` by `.githooks/pre-commit` on every commit (`git config core.hooksPath .githooks`).
 - `UpdateCheck.swift` (~190) — the About page's "Check for Updates": one anonymous request to GitHub's `releases/latest`, `Release` (tag without its `v`, page URL, name, date), `compare` over dotted integers, `Result` / `Reason` (offline, rate-limited, another status, unreadable, a tag that is not a version), and `installedWithHomebrew` — a `/Caskroom/` in the bundle path, or a `Caskroom/nota` under a Homebrew prefix. The transport is a closure, so no test reaches the network.
 - `Localization.swift` (~545) — `L10n.text` and one table per language, all keyed by the English string: 简体中文, 繁體中文, Bahasa Melayu. `AppLanguage.resolved` (in `Preferences.swift`) says which one, resolving `.system` against the Mac's preferred language.
-- `SettingsWindowController.swift` (~1690) — Settings: a sidebar source list over nine pages (General, Appearance, Editor, Preview, Tab bar, Status bar, Shortcuts, File types, About), each page's controls in inset rounded groups of 44pt rows (File types says a Launch Services refusal on the row rather than swallowing it, and carries a Restore previous apps button beside the claim-them-all one) (`SettingsRowView`: label, optional `accessory` such as the `?` a row's help sits behind, control at the trailing edge); `row(help:)` + `showHelp` put a sentence in one transient `NSPopover`; no Save button — every control writes its own preference on the change (`apply {}` guards the notification coming back), language and theme `refresh()` afterwards, and a clashing shortcut is refused rather than written. Version shown on About comes from `Version.swift`; the update line there is a plain wrapping label with a fixed `preferredMaxLayoutWidth`, since the centred About stack gives a `WrappingLabel` no width.
+- `SettingsWindowController.swift` (~1700) — Settings: a sidebar source list over eight pages (General, Appearance, Editor, Tab bar, Status bar, Shortcuts, File types, About), each page's controls in inset rounded groups of 44pt rows (`SettingsRowView`: label, optional `accessory` such as the `?` a row's help sits behind, control at the trailing edge) — except File types, which is one `SettingsOutlineView` (it says a Launch Services refusal on the row rather than swallowing it, and carries a Restore previous apps button beside the claim-them-all one); `row(help:)` + `showHelp` put a sentence in one transient `NSPopover`; no Save button — every control writes its own preference on the change (`apply {}` guards the notification coming back), language and theme `refresh()` afterwards, and a clashing shortcut is refused rather than written. General's third row, `openingModeControl`, is the Editor / Split / Preview segmented control for `Preferences.openingMode`. Version shown on About comes from `Version.swift`; the update line there is a plain wrapping label with a fixed `preferredMaxLayoutWidth`, since the centred About stack gives a `WrappingLabel` no width.
 - `DefaultApp.swift` (~180) — Settings › File types, everything but the page: `DefaultAppTypes.groups` (the four
   groups and their forty extensions, the one place to add one), `extensions(sharingTypeWith:)` (Launch Services keeps
   one default per *type*, so `.md` and `.markdown` are one setting wearing two rows), `DefaultAppBundle` (an app's
   URL, name and identifier), the `DefaultAppRegistry` protocol — the one door to Launch Services — and
   `SystemDefaultAppRegistry` over `NSWorkspace`, which refuses to set anything under XCTest, since a machine's
   default apps are the clipboard rule one shelf up.
+- `SettingsOutlineView.swift` (~360) — the folding list Settings › File types is made of: `SettingsOutlineItem` (tick box, title, optional `?`, trailing text, children), `SettingsOutlineCellView`, banded `SettingsOutlineRowView`, and the `NSOutlineView` in its rounded card. Every row's controls belong to the item and every cell is built with the page, so a page can write a row that has never been drawn.
 - `ShortcutRecorderField.swift` (~150) — press-a-key field; records a global hotkey (key code) or an app `KeyCombo` (character).
 - `GlobalHotKey.swift` (~170) — Carbon hotkey; `KeyCodeNames` (key code / key-equivalent display names).
 
@@ -139,39 +140,84 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   nothing of AppKit, of a file, or of a note.
 - `TextFile.swift` (~430) — `LineEnding`, `TextFileFormat`, encoding detection, `FileSniff.classify` (PDF, image, EPUB, RTF, text, binary), `FileClass`, `isDrawing` (an `.svg` is text, not a picture — `Note.isImageFile` and the exclusions ask it).
 - `Session.swift` (~580) — `TextStats` (footer count phrases incl. pages/chapters/tables, a table's rows and columns, and a row range), `SessionTab` / `SessionWindow` codables (`sqlTable` / `sqlQuery` for a dump's tab, `formatOverride` for a tab the footer was told what to be), `SessionStore`.
-- `SaveNameComposer.swift` (~80) — pure logic for the Save dialog's Format popup: known extensions, the list one
+- `SaveNameComposer.swift` (~100) — pure logic for the Save dialog's Format popup: known extensions, the list one
   the popup does not know is put in front of (`formatOptions(including:)`), splitting a name from its extension,
-  composing the final name.
-- `SaveDialog.swift` (~380) — Nota's own Save dialog in place of `NSSavePanel`: the sheet's two rows (name with the
-  Format popup at its end, read-only location with `Choose…`), Cancel and a default Save, `runSheet(on:)` pumping
+  composing the final name — and `composedName(name:pinnedExtension:)`, the export sheet's own rule, where the
+  extension is the target's and the name never talks it out of one.
+- `LocationRow.swift` (~115) — the `Location:` row both of Nota's own file dialogs wear: the read-only field with
+  the folder's own icon and name and the whole path behind its tooltip, the `Choose…` button and the `NSOpenPanel`
+  it runs inside the dialog's own modal session, `openingURL(existingFileURL:lastDirectory:)` — the file's folder,
+  else the remembered one, else Documents — and the `onChange` a dialog whose buttons depend on the folder hangs
+  off it.
+- `SaveDialog.swift` (~440) — Nota's own Save dialog in place of `NSSavePanel`: the sheet's two rows (name with the
+  Format popup at its end, the shared `LocationRow`), Cancel and a default Save, `runSheet(on:)` pumping
   `NSApp.runModal` so the window still sees one synchronous `URL?`, the replace question handed back to the window,
   the `Preferences.didChange` relabelling that lets a language change land while it is open, and the popup's
   `None` and `Other…` tail (a field for an extension the list does not carry).
 - `Export.swift` (~360) — File › Export…'s core (SPEC "## Export"): `ExportTarget` (what a tab can be
   exported to) and `Exporter` — the targets each kind offers in the sheet's own order, the two PDFs Nota
   writes itself (the render, the document or the picture as shown; the editor's source listing, with its
-  gutter's numbers and its pictures inline or as plates), and the empty hooks the other exporters plug into
-  (`bookPDF`, `pdfToEPUB`, `csv`, `texPDF`, and `htmlPagePDF` for a page as WebKit draws it — a target whose
-  hook is nil is never listed). A hook is `(Note, URL, Context, @escaping (Result<Void, Error>) -> Void)`:
-  asynchronous throughout, since three of the five go through WebKit or a download and none may be waited on
+  gutter's numbers and its pictures inline or as plates), the two PNGs it also writes itself through
+  `SnapshotPNG` (the same two, as the screen has them rather than as paper — `snapshotsRender` decides which
+  tabs have a preview worth photographing, and `Context.screenWidth` / `pictureAppearance` say at what measure
+  and under which appearance), and the empty hooks the other exporters plug into
+  (`bookPDF`, `pdfToEPUB`, `csv`, `texPDF`, `htmlPagePDF` for a page as WebKit draws it, and `tablePDF` for a
+  grid as the grid, whose `nothingToExport` — a pane that has not read its tab — falls back to the listing at the
+  same destination — a target whose hook is nil is never listed). A hook is
+  `(Note, URL, Context, @escaping (Result<Void, Error>) -> Void)`:
+  asynchronous throughout, since three of them go through WebKit or a download and none may be waited on
   with a semaphore. The context carries the live pane for an exporter whose answer is on screen rather than in
   the note, the window a prompt would be a sheet on, and the `progress` closure a long export talks to the
-  footer through. `ExportImagePlacement` is the sheet's second row and `Preferences.exportEditorImages`.
-- `ExportHooks.swift` (~110) — the one place the five exporters are introduced to `Exporter`:
+  footer through. `ExportImagePlacement` is the sheet's `Image` row and `Preferences.exportEditorImages`;
+  `gatherPlates` is the one way pictures are ever moved to the back — the `[n] name` tag left on the line, the
+  plate and its `Figure n · name · line n` caption at the end — and both the listing and the Markdown render
+  come through it, so a note's pictures are gathered the same way whichever half of the tab is being written.
+- `ExportHooks.swift` (~130) — the one place the six exporters are introduced to `Exporter`:
   `installDefaultHooks()`, called by `AppDelegate` at launch and by the tests that need those targets listed.
-  A book through `EPUBToPDF`, a document through `PDFToEPUB`, a grid through the pane's own `exportCSV(to:)`,
+  A book through `EPUBToPDF`, a document through `PDFToEPUB`, a grid through the pane's own `exportCSV(to:)`
+  and, onto pages, through its `exportTable()` and `TablePDF`,
   a `.tex` through `TeXExport` (falling back to the `.previewPDF` render at the same destination on
   `useNativeRender`, and passing `.cancelled` through untouched), a page through `WebPDF`. `texInstallPresenter`
   and `texSeams` are the seams a test replaces so no alert is raised and no engine is looked for.
-- `ExportDialog.swift` (~280) — the export sheet: `SaveDialog`'s form with one row of targets and, only while
-  `Editor as PDF` is selected, a second row of `Inline` / `Plates at the end`; run the same synchronous way,
-  and it hands back an `ExportChoice`. `MainWindowController.exportSheetProvider` is the seam a test answers
-  it through, as `savePanelProvider` is for the dialog after it.
+- `CSVExportDialog.swift` (~600) — the grid's own Export CSV sheet: `Export with` over a banded list of the grid's columns (a tick each, the declared type dimmed at the right, eight rows visible then a scroll, Save off with none ticked), Save As with a muted `.csv` after the name, the shared `LocationRow` opening on the file's folder or `Preferences.lastExportDirectory`, the window's `confirmReplace` for an existing file; `runSheet(on:)` hands back a `CSVExportChoice` (url and ticked indices) or nil. `CSVExportColumnListView` at its foot draws the list in the Settings › File types shape.
+- `ExportDialog.swift` (~540) — the export sheet, the whole question asked once (SPEC Done 62): `SaveDialog`'s form
+  with an `Export as` row of segments — one per extension the tab's targets write, `PDF`, `PNG`, `EPUB` — a
+  `View` row of segments under it (`ExportViewChoice`: `Editor`, `Preview`, `TeX`), an `Image` row of
+  `Inline` / `End` radios, a
+  `Save As:` row of the base name with the target's extension after it as a label rather than a popup — the target
+  *is* the format — and the shared `LocationRow`. The two segment rows resolve to one `ExportTarget`
+  (`chosenTarget`); the View row is hidden while PNG is selected (a picture is always the source) and wherever
+  the extension has a single view, and the Image row shows for `.editorPDF` and for `.previewPDF` on a note with
+  chips (`hasImageChips`). A hidden row keeps its place — its controls hide inside a stack that does not let go
+  of them, its grid row's `height` is pinned — and the panel is sized once at build, so the sheet never grows or
+  shrinks under the reader. The name follows the target's own default (`suggestedNames`,
+  the window's `exportName(for:target:)` per target, a grid's CSV among them) until `hasTypedName`; Export greys
+  out on an empty name; an existing file goes to the window's `confirmReplace` and a `no` leaves the sheet up. Run
+  the same synchronous way, and it hands back an `ExportChoice` — the target, the pictures and the destination.
+  `MainWindowController.exportSheetProvider` is the one seam a test answers all of it through.
+- `TablePDF.swift` (~380) — a grid onto pages, which is what a `.sql` or `.csv` tab's `Preview as PDF` is:
+  `write(header:rows:font:to:)` and nothing else, knowing nothing of notes, tabs or panes. The font (the grid's
+  family and weight, the size capped at 10 pt), the paper (turned on its side where the columns want more than a
+  portrait page, on this job's own copy of the print info), the column widths (widest cell on one line, capped at
+  half the page, and what will not fit taken off the *widest* columns alone down to one shared threshold, so a
+  narrow column keeps its width and never wraps — an equal proportional share only where nothing else fits at
+  all), the row heights (the tallest wrapped cell; a row taller than a page clipped to one), the break between
+  rows, the header repeated at the top of every page, the rule around every cell and the `nil` that draws as
+  nothing. Every cell is measured on one line once, while the columns are sized, and one that fits its column is
+  one line tall without a `boundingRect` of its own — only the cells that wrap are laid out. The paper, the margins, the silent print job and the light appearance are all `PDFPaginator`'s
+  (`printInfo(savingTo:)`, `run`, `light`), and the view paginates itself with `knowsPageRange` as the plates do.
 - `PDFPaginator.swift` (~310) — the only place Nota makes a PDF: an attributed string paginated by a silent
   `NSPrintOperation` (`jobDisposition = .save`, the file in `jobSavingURL`), plates drawn one picture to a
   page (`knowsPageRange`) and joined onto the text with PDFKit, Letter or A4 from `NSPrintInfo.shared`,
   margins from the render's inset, and the whole run under the light appearance with the text's dynamic
   colours resolved first.
+- `SnapshotPNG.swift` (~150) — the only place Nota makes a picture of a document, and `PDFPaginator`'s opposite
+  in every way (SPEC "## Export", Snapshots): an attributed string laid into an offscreen `NSTextView` at the
+  screen's own measure and the preview pane's own insets, wearing the window's appearance and painting the
+  pane's background behind its whole height, then `cacheDisplay(in:to:)` into an `NSBitmapImageRep` — 2x while
+  the long side stays inside 16,384px, 1x past it — and written as PNG. Nothing is lightened and nothing is
+  paginated. A document over 30,000pt tall throws `Exporter.Failure.tooLongForAnImage`. It knows nothing of
+  notes: `Export.swift` decides whether the picture is the render or the listing.
 - `FileWatcher.swift` (~230) — `FileStamp`, watching a path for change.
 - `Bookmarks.swift` (~120) — pinned paths store. `BookmarksMenu.swift` (~130) — the File submenu + ⇧⌘D toggle.
 - `RecentDocumentsMenu.swift` (~55) — File › Open Recent.
@@ -313,7 +359,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   page's read with the `LIMIT`/`OFFSET` and the rowid dance both taken out — the whole table or query, in sort
   order, `onColumns` once and `onRow` per row — for the Export button's `CSVWriter` to stream straight to a file.
   Knows nothing of AppKit.
-- `SQLDumpDialect.swift` — the MySQL and Postgres spellings a dump carries, turned into SQLite's before
+- `SQLDumpDialect.swift` (~2400) — the MySQL, Postgres, SQL Server (SSMS) and Oracle (SQL Developer / SQL*Plus) spellings a dump carries, turned into SQLite's before
   `sqlite3_prepare_v2` sees them: which statements to skip (session state, ownership, sequences, grants, psql `\`
   meta-commands), `CREATE TABLE` decoration and type mapping, MySQL backslash escapes in row strings, and a
   `pg_dump` `COPY … FROM stdin` block read into batched inserts with one source-map span per row.
@@ -348,13 +394,28 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   SQLite.
 - `SQLQueryRewrite.swift` (~175) — the loose read of a query that says whether it is plainly one table's rows, and
   the same query with that table's rowid spliced in after the `SELECT` keyword, so a cell of a query's result walks
-  the editor to its `INSERT` the way a table's does. What it refuses — a join, a `GROUP BY`, an aggregate, a
+  the editor to its `INSERT` the way a table's does. An `[INNER]` / `LEFT [OUTER] JOIN` chain is one table's rows
+  too — the first `FROM` table's — so it carries that table's rowid (`hasDisallowedJoin` refuses `RIGHT` / `FULL` /
+  `CROSS` / `NATURAL` and a join onto a sub-select). What else it refuses — a `GROUP BY`, an aggregate, a
   sub-select — and what SQLite refuses are both answered by running the reader's own query untouched. Pure text and
   no SQLite; it borrows `SQLSourceMap`'s scanner.
-- `SQLQueryBox.swift` (~275) — the five-row query editor: rounded bezel, `SELECT …` placeholder, Return a newline,
+- `SQLQueryBox.swift` (~500) — the five-row query editor: rounded bezel, `SELECT …` placeholder, Return a newline,
   ⌘↩ the run, Esc the cancel, no rich text and no substitutions, and the Find menu handed to the grid's session in
   reading mode and back up the responder chain out of it, so AppKit's own find bar never opens over five lines of
-  SQL.
+  SQL. Also the two helps that change no character: the keyword / string / number / comment colours (temporary
+  attributes over the layout manager, `refreshHighlighting`) and the completion dropdown — `insertText` opens it
+  on a name character or a `.`, `keyDown` routes ↑↓ / Tab / ↩ / Esc to it while it is up, `didChangeText` narrows
+  it, `setSelectedRanges` closes it when the caret leaves the word; `completionSchema` is the snapshot the pane
+  hands it.
+- `SQLCompletion.swift` (~420) — pure logic behind both helps: `Schema` (tables → ordered columns, case-insensitive
+  lookup), `suggestions(in:caret:schema:)` (the word under the caret, or the `alias.` before it, against the
+  grammar's keywords, the tables and the columns — the named tables' columns first), `references(in:)` (the `FROM`
+  / `JOIN` / comma-list scan that says what `o` stands for), `highlights(in:)` (the coloured runs). No AppKit, no
+  SQLite; `SQLSourceMap.nextToken` for the alias scan.
+- `SQLCompletionPopup.swift` (~300) — the list under the caret: a borderless non-activating child `NSPanel` that
+  never becomes key, a rounded frame view in the box's own bezel, a hand-drawn flipped list (eight rows visible, the
+  hint word at the right, the accent behind the pick), `show(_:font:under:in:)` placing it under the caret's line
+  and flipping above when there is no room, a click on a row the one thing it does itself.
 - `CSVTable.swift` (~330) — a `.csv` or `.tsv` read as the table it is: Nota's own RFC 4180 scanner (quoted fields,
   `""` escapes, newlines inside quotes, CRLF / CR / LF, a trailing newline, a BOM, blank lines skipped), the first
   record as the header with blanks named `Column 3`, ragged rows padded and widened, the `NSRange` of the lines each
@@ -513,7 +574,19 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   exporting comma-separated), and the button itself — its place before the pager, and a click through the stubbed
   `exportDestination` seam writing the file. Last, the two doors agreeing: the pane's button and
   `Exporter.export(…, to: .csv, …)` over the same pane write byte-for-byte the same file, query and sort
-  included, and the sheet opens on the name the button would have used.
+  included, and the sheet opens on the name the button would have used. And one for the other export a grid has:
+  `Exporter.export(…, to: .previewPDF, …)` over a `.csv` pane draws the cells onto a page and not the source's
+  comma-joined line, in the order a header click left the grid in — and over a pane shown with the column hidden,
+  which has read nothing, it is the source listing that lands instead.
+- `TablePDFTests.swift` (11) — `TablePDF` on its own, every PDF read back with PDFKit: a small table on one page
+  with every header and cell on it, 400 rows over more than one page with the header repeated on the last, a
+  `nil` cell drawing neither `nil` nor `NULL`, twelve columns of long values fitted onto the paper with every
+  header still there, a row taller than a page clipped rather than looping, 5,000 short rows written well inside
+  a loose wall-clock bound (the guard on measuring every cell twice), no columns refused as `nothingToDraw`, and
+  a header with no rows as one page. Then the three fitting rules: a narrow column left at its natural width
+  while the long one beside it wraps (a value that comes back whole from the page's text was never broken), a
+  fourteen-column table on a page wider than it is tall with `NSPrintInfo.shared` left as it was found, and a
+  three-column one on the paper as it stands.
 - `TeXEngineTests.swift` (40) — the TeX export: the search order and paths, the four command lines, the log's `! ` and
   `l.N` lines, the folder copied in beside the source, the build picked per Mac (Rosetta included), the sha256 and the
   byte count passing and failing on a tarball the test makes, unpack/chmod/version on that fake binary in a temp bin,
@@ -571,6 +644,13 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   the native render at TeX's own destination — and Cancel landing nothing at all. Print: the item enabled where
   the tab makes a PDF, a note's dialog built over exactly the pages the export would have written, and a
   document printing its own, all through `printOperationRunner` so no panel appears.
+- `SnapshotPNGTests.swift` (12) — the two PNG targets: where they are listed and where they are not (a tree and a
+  plain note have no preview to photograph; a picture, a document and a book have none at all), the file read
+  back with `NSBitmapImageRep` — as wide as the measure asked for plus the pane's margins, times the scale it
+  chose; taller with more paragraphs — the corner pixel light under Aqua and dark under `darkAqua`, a formula's
+  ink following the same appearance (darkest and brightest pixel, as in `MathTests`), the gutter's numbers as
+  extra ink with the text moved right to make their column, the Images row never offered for a picture and its
+  answer making no difference, the 30,000pt refusal leaving no file behind, and the 2x/1x rule at its boundary.
 - `TabHoverTests.swift` (3) — the strip's three greys: selected fill, the pointer's wash on an unselected tab, nothing at rest.
 - `FileTypesTests.swift` (15) — Settings › File types, all of it against a fake `DefaultAppRegistry`: the page's
   place in the sidebar, the rows in the table's order under their group titles, a row ticked when the registry says

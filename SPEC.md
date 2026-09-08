@@ -275,16 +275,22 @@
   makes Nota the app the Mac opens a kind of file in, without going through the Finder's Get Info for
   each one. One sentence at the top ("A ticked row means the Mac opens that kind of file in Nota.
   Unticking one hands it back to the app that had it before."), then two buttons, a `?` beside each —
-  **Use Nota for all text types** and **Restore previous apps** — then the four groups, each a caption
-  over an inset rounded card of 44pt rows, the same card every other page uses.
+  **Use Nota for all text types** and **Restore previous apps** — then the four groups as one folding
+  outline (rebuilt 2026-09-08, Done 64): a group row with a disclosure triangle and a tick box, its
+  extensions indented under it, 34pt each, banded, in a rounded card. Text opens with the page; the rest
+  are folded. A group's tick claims every extension under it and unticking hands back every one this page
+  took, mixed while only some of them are Nota's — Documents and pictures is asked for by name that way,
+  which is why the button above the list still leaves it alone.
 - The groups, and the whole list, live in one table — `DefaultAppTypes.groups` in `DefaultApp.swift` —
   so adding an extension is one line and the row, its icon and the button all follow. **Text**: txt, md,
   markdown, log, rtf. **Data**: json, yaml, yml, toml, ini, csv, tsv, sql, xml. **Code**: html, htm, css,
   js, ts, py, sh, swift, go, rs, rb, java, c, h, cpp, tex. **Documents and pictures**: pdf, epub, png,
   jpg, jpeg, gif, webp, heic, tiff, svg.
-- A row is the kind icon (`FileKindIcon`, the same art the tabs wear), the extension with its dot, the
-  name of the app that opens it today in the muted colour at the trailing side — `None` where nothing
-  claims it — and a checkbox at the trailing edge. Ticked means Nota is the handler.
+- A row is a checkbox, the extension with its dot, a `?` where the row is locked, and the name of the app
+  that opens it today in the muted colour at the trailing edge — `None` where nothing claims it. Ticked
+  means Nota is the handler. The kind icon (`FileKindIcon`, the art the tabs wear) was on the row until
+  2026-09-08 and came off with the rebuild: at list density a badge per row read as noise, and the
+  extension beside it already says the same thing.
 - The first button claims the first three groups only. Documents and pictures stay per-row, so Nota never
   takes over a PDF or a photograph unasked; the button's `?` says exactly that.
 - **Restore previous apps** is the way out of the whole page in one press: every extension with something
@@ -417,7 +423,11 @@
   TeX subset into attributed text — Greek and symbols by Unicode, `^` `_` as real super/subscript, `\frac` stacked with
   a hairline, `\sqrt` with a vinculum, `\sum` `\int` `\prod` with limits, `\left(` `\right)` sized to what they
   hold, `\text{}`, `\mathbf` `\mathit`, spacing `\,` `\;` `\quad`. No WebView and no dependency (so no KaTeX /
-  MathJax / iosMath), and the same monochrome as everything else in the pane.
+  MathJax / iosMath), and the same monochrome as everything else in the pane. The ink is `labelColor` resolved at
+  draw time, and it reaches the glyphs only because every Core Text line the layout measures carries
+  `kCTForegroundColorFromContext` — without it Core Text draws in its own black whatever the context is filled
+  with, which is how a dark window's formulas came out black on a dark page until 2026-09-08 (`MathTests` checks a
+  formula of letters alone in both appearances; the fraction's rule, a filled rectangle, had hidden it).
 - The maths is taken out of the source before Foundation's parser sees it, each formula standing as an image token in
   its place — otherwise `$a_1$` and `$b_2$` would pair their underscores into an emphasis and the formulas would be
   gone before the render began.
@@ -1347,14 +1357,27 @@
 - File › Export…, ⇧⌘E (adjustable, `ShortcutAction.export`; ⌘E is the Mac's Use Selection for Find and stays where
   it is). Offered in every mode — editor, split, reading — since the export is about the tab and not about which
   half of it is on screen, and greyed only when the window has no tab at all.
-- Two questions, then the file. The first is Nota's own small sheet in the shape of the Save dialog (Done 51):
-  a row `Export:` with the tab's targets in a popup, the first one selected, and — only while `Editor as PDF` is
-  the one selected — a second row `Images:` reading `Inline` or `Plates at the end`. The pictures are a question
-  the listing asks and a render does not, so the sheet grows and shrinks around that row. The answer is remembered
-  in `Preferences.exportEditorImages` and posted like every other preference. The second question is the Save
-  dialog itself, opened on the tab's own base name with the target's extension in place of the note's — a
-  `notes.md` exports as `notes.pdf` — and that extension is *not* remembered as the last save extension, since
-  exporting must not offer `pdf` the next time ⌘S asks about the note.
+- One sheet, then the file (Done 62; it used to ask twice, the shape and then the Save dialog). Nota's own small
+  sheet in the shape of the Save dialog (Done 51), carrying everything the export needs, in this order: `Export:`,
+  the tab's targets in a popup with the first one selected; `Images:`, `Inline` or `Plates at the end`, and only
+  while `Editor as PDF` is the one selected — the pictures are a question the listing asks and a render does not,
+  so the sheet grows and shrinks around that row; `Save As:`, the file's base name in a field with the extension
+  after it as a plain label; and `Location:`, the folder the file is going into and a `Choose…` that opens the
+  system's folder picker, which is the Save dialog's own row shared with it (`LocationRow`). There is no Format
+  popup: the **target is the format**, so `.pdf`, `.csv` or `.epub` is a label the reader reads rather than a
+  control they answer, and it changes with the popup above it.
+- What the sheet opens on. The name is the target's own — the tab's own base name under the target's extension, so
+  a `notes.md` exports as `notes.pdf`, except a grid's `Table (CSV)`, which is the name the pane's own Export
+  button would have used (`Shop-query.csv`) — and it goes on following the target until the reader types in the
+  field, after which it stands where they put it. The folder is the note's own when it has a file, else
+  `Preferences.lastExportDirectory` — where the last export landed, remembered when the sheet is answered — else
+  Documents, which is the Save dialog's own rule. Export is unavailable while the name is empty, a name that is
+  already a file on disk asks the same "already exists, replace?" alert a save raises and a `no` leaves the sheet
+  standing, and Return and Escape are Export and Cancel.
+- The images answer is remembered in `Preferences.exportEditorImages` and posted like every other preference. The
+  folder and the extension are *not* `lastSaveDirectory` and `lastSaveExtension`: exporting as PDF into some other
+  folder must not change what ⌘S offers the next time the note itself is saved, which is why the export keeps a
+  key of its own.
 - What a tab offers, in the order the popup lists them (`Exporter.targets(for:)`): every text tab — Markdown,
   LaTeX, plain, HTML, the four tree formats, SQL, CSV, an untitled note — offers `Preview as PDF` then
   `Editor as PDF`; an `.rtf` and a picture offer `Preview as PDF` alone, since neither has a source to list; a
@@ -1365,13 +1388,22 @@
   to write and the window's own `Exporter.Context` — which carries the pane the tab is being read through, since
   an exporter whose answer is on screen rather than in the note (a dump's rows are the query typed into the box
   and the column a header click sorted by) has nowhere else to get it.
+- After the pages come the pictures, preview first: `PNG of the preview` for a tab that lays out a render of its
+  own — Markdown, LaTeX and an `.rtf` — and `PNG of the editor` for every text tab. A picture tab is a picture
+  already, and a book and a document have pages rather than a screen, so none of the three is offered either.
+  Both are Nota's own, written by `SnapshotPNG` before the call returns, and both are listed before the tab's
+  speciality: a `.tex` reads `Preview as PDF · Editor as PDF · PNG of the preview · PNG of the editor ·
+  PDF through TeX`. The `Images:` row stays with `Editor as PDF` alone — see Snapshots below.
 - What each PDF holds. `Preview as PDF` is what the reader is looking at: for Markdown and LaTeX the same
   `RenderedDocument` the preview shows, laid out at the page's measure so pictures wider than the column are
   scaled down to it, with formulas and Mermaid diagrams drawing as the attachments they already are; for an
   `.rtf` the document's own attributed string; for a picture one page with the picture fitted inside the margins
-  and nothing written under it. A `.html` uses the page hook where one is plugged in. Plain text, the tree tabs,
-  a dump, a table, a drawing and an unhooked page all fall to the **source listing** instead — a tree of rows and
-  a grid print badly as what they are, and the beautified source is the thing the reader agreed to.
+  and nothing written under it. A `.html` uses the page hook where one is plugged in. A `.sql` or `.csv` tab is
+  **the grid on pages** (`TablePDF`, below): the rows in the grid's own sort, the query's own result where the box
+  is what the grid shows, every row rather than a page's hundred, the header repeated at the top of every page and
+  the columns fitted to the paper. Plain text, the tree tabs, a drawing, an unhooked page, and a grid with no pane
+  in front of it or with a pane that has not read it, all fall to the **source listing** instead — a tree of rows
+  prints badly as what it is, and the beautified source is the thing the reader agreed to.
 - The source listing (`Editor as PDF`, and the fallback above) is the editor's own text: its font at its size, its
   wrapping, its tabs, and its line numbers where the gutter setting is on. The gutter is text on a printed page —
   there is no ruler beside it — so each hard line starts with its number, right-aligned in a column of its own,
@@ -1409,6 +1441,37 @@
   blameless failure gets, never an alert and never a crash. One failure says nothing at all: a reader who pressed
   Cancel in the TeX question (`TeXExportError.cancelled`) has already been told, and the window stays silent.
 
+### Snapshots — PNG of the preview, PNG of the editor (done 2026-09-08, Todo 1)
+- The screen, not paper. Everything above this line is a page: white, cut into sheets, every dynamic colour
+  resolved to its light value first because a sheet has no background to read white words against. A snapshot is
+  the opposite of all of it — one tall picture of the whole document exactly as it stands on screen, in the
+  window's own appearance, on the pane's own ground, at the pane's own measure. `PDFPaginator.lightened` and its
+  light run are never used here.
+- `PNG of the preview` is the render the preview column is showing: the same `RenderedDocument` text for Markdown
+  and LaTeX (`MarkdownRenderer.render` / `LaTeXRenderer.render` at the screen's measure), and an `.rtf`'s own
+  attributed string. `PNG of the editor` is the source listing `Editor as PDF` builds — the same text, the same
+  gutter numbers, the same font — with one difference: **plates never**. A picture has no pages, so there is
+  nowhere to gather figures onto and nothing to turn to, and every chip is drawn where it was written whatever
+  the sheet's last answer was. That is why the `Images:` row is offered for `Editor as PDF` and for nothing else.
+- Appearance is the window's (`Exporter.Context.window`'s `effectiveAppearance`, the app's where there is no
+  window). The text is laid into an offscreen `NSTextView` wearing that appearance, drawing its own background —
+  `textBackgroundColor`, the colour the pane itself paints — so a reader in dark mode gets a dark picture with
+  light ink, and every formula, chip and Mermaid diagram resolves its colours for that appearance at draw time
+  rather than for whatever the process happens to be in. The insets are the preview pane's own,
+  `RenderStyle.previewHorizontalInset` and `previewVerticalInset`, so the text starts as far from the edge as it
+  does on screen; the width handed in is the *text's* measure and the picture comes out that plus a margin each
+  side.
+- The measure is the screen's, not the paper's. `Exporter.Context.screenWidth` is filled in by the window — the
+  preview column's own content width for a picture of the preview, the editor's text width for a picture of the
+  listing — and the export falls back to `Context.width`, the page measure, where the window said nothing (a
+  test, a column not laid out yet).
+- Scale is 2x while the picture still opens: Retina wherever the image at 2x stays inside 16,384px on its long
+  side, and 1x past that, which is the ceiling every image reader on the Mac keeps. A document taller than
+  30,000pt even at 1x is refused outright — `Exporter.Failure.tooLongForAnImage`, and the footer's quiet word is
+  `Too long for one image.` rather than the usual `Couldn’t export “…”.`, since a reader told only that it failed
+  would try the same note again. Nothing is written by a refusal.
+- The file opens in a tab beside the source like every other export, which for a `.png` is the picture viewer.
+
 ### Table (CSV) — a `.sql` or `.csv` tab's rows
 Both grids — the dump's and the table's — carry the same Export button, immediately before the pager on its leading
 side: `square.and.arrow.up` with the word `Export` beside it — the one button in the bar that wears a word, since the
@@ -1416,8 +1479,9 @@ side: `square.and.arrow.up` with the word `Export` beside it — the one button 
   nothing on screen to export.
 It asks the window for a destination pinned to `csv`
 (`MainWindowController.runExportSavePanel(suggestedName:extension:existingFileURL:)` — Nota's own `SaveDialog`
-with the extension pinned, the one door File › Export… goes through too, since Done 51 retired `NSSavePanel` from
-saving and an export is a save; `exportPanelProvider` is the one test seam behind all three ways in) and writes
+with the extension pinned, since Done 51 retired `NSSavePanel` from saving and an export is a save;
+`exportPanelProvider` is the one test seam behind both buttons. File › Export… does not come this way any more:
+since Done 62 its own sheet asks the name and the folder itself) and writes
 every row with the streaming half of `CSVWriter`, Nota's own RFC 4180
 writer and no dependency: `write(header:rows:) -> String` builds the whole file in memory for a caller that wants
 it that way, and the streaming pair `write(header:to:)` / `write(row:to:)` write straight to a `FileHandle` one row
@@ -1446,6 +1510,67 @@ for it, since until now it had never had anything of its own to fail at. `SQLPre
 `CSVPreviewView.exportCSV(to:)` are the plain, throwing functions behind the button, so a File menu item can reach
 either directly without going through the button at all.
 
+### Preview as PDF of a grid — the table itself, ruled (done 2026-09-08, Done 61)
+A `.sql` or `.csv` tab's `Preview as PDF` used to fall to the source listing with the tree tabs. It is now the
+grid drawn onto pages — `TablePDF.write(header:rows:font:to:)`, a module that knows nothing of notes, tabs or
+panes and is handed a header, rows of optional strings and the font the grid draws its cells in. The rows are the
+pane's own (`SQLPreviewView.exportTable()` / `CSVPreviewView.exportTable()`, the gathering half of the same
+`exportCSV` the Export button writes with), so the query in the box and the column a header click sorted by come
+with them, and `Exporter.tablePDF` is the hook they arrive through — the pane is in `Context.previewContent` and a
+tab with no pane in front of it still gets the listing.
+
+The layout. Three rules decide it before a page is drawn, and all three are the same rule wearing different
+clothes: a table is readable only while its narrow columns are left alone.
+- **The size.** The grid's own font family and weight, at the size the grid draws it, but never larger than
+  **10 pt** on paper. A printed table is not the screen: thirteen point monospaced is what made six ordinary
+  columns not fit across a page. The header is the semibold system font at that same capped size.
+- **The paper.** The columns are asked what they want *before* the paper is chosen. Wanting more than a portrait
+  page turns the sheet on its side — `NSPrintInfo.orientation = .landscape`, on this job's own copy of the print
+  info, so the next listing still exports portrait. Everything else works off the swapped size unchanged: the
+  margins, `knowsPageRange`, the header repeat.
+- **Columns.** Each column's natural width is its widest cell — the header included — measured on one line, capped
+  at half the page's content width, so one long note in one row cannot squeeze every other column to nothing.
+  Summing to less than the page, those widths stand as they are: a two-column table is two columns wide and is not
+  stretched across the paper. Summing to more, **the squeeze comes off the widest columns only**: there is one
+  threshold `T` at which the widths, each held to at most `T`, sum to exactly the content width, and every column
+  is `min(natural, T)`. A column narrower than `T` keeps precisely the width it asked for and never wraps — an
+  `id`, a `balance`, a `12.50`, a `Kuala Lumpur` all read on one line however long the note beside them is — and
+  the columns above `T` are the ones cut, which is where the room was. Scaling every column by the same factor,
+  which is what a proportional share does, is what broke `id` into `i / d`; it is now the last resort, kept for
+  the one table that cannot be laid out any other way — more columns than the page could hold at one character
+  each, at any threshold at all. The font is never scaled to make a table fit.
+- **Rows.** A row is as tall as the tallest cell on it, wrapped inside its own column. A page break falls between
+  rows, never through one; a single row taller than a page's content height is clipped to it, since there is
+  nowhere else for it to go and an unclipped one would ask for pages for ever.
+- **The header** is drawn again at the top of every page, on a light grey wash in the semibold system font at the
+  cell font's size.
+- **Every cell** is ruled on all four sides with a 0.5 pt grey line, its text left-aligned inside the rule and
+  clipped to it. A `nil` cell — a SQL `NULL`, or a ragged CSV row's own trailing field it never wrote that far
+  into — draws as nothing at all rather than as a word, the same way `CSVWriter` writes it as an empty field.
+- **The sheet** is `NSPrintInfo.shared`'s paper like every other export (turned on its side where the columns
+  asked for it), the margins and the silent `NSPrintOperation`
+  are `PDFPaginator`'s (`printInfo(savingTo:)`, `light {}`, `run`), and the view paginates itself with
+  `knowsPageRange` the way the plates do. Colours are fixed light values — black ink on white — since the run is
+  under the light appearance and a page is paper. A table with no columns is `nothingToDraw`; a header with no
+  rows under it is one page with the header on it; a job that left no readable pages is `noPages`.
+
+And the fallback, since a pane in front of a tab is not a pane that has read it: both grids' `show` returns
+without reading while the preview column is hidden, and a big file is not read until the Refresh button asks for
+it, so a `.csv` or `.sql` tab exported or printed **from editor mode**, or a big one, has a pane with no table
+behind it. That answers `nothingToExport`, and `writePreviewPDF` writes the source listing to the same
+destination instead and hands that result back — the listing the SPEC promises rather than a failure in the
+footer. Any other failure passes through untouched. (`Table (CSV)` has the same exposure and keeps its own
+behaviour: with nothing read there is no table to write out, and a CSV of the source listing would be nonsense.)
+
+The measure is taken once. Every cell is sized on a single line while the columns are being worked out, and that
+width is kept: a cell no wider than the room inside its column cannot wrap, so it is one line tall and is never
+laid out again. Only the cells that must wrap are asked how tall they became — which on a table of short values
+is none of them, and is the difference between a quarter of a million text layouts on the main thread before the
+first page and none.
+
+Print (⌥⌘P) takes the tab's first target, which for these tabs is `Preview as PDF`, so a grid prints as the grid
+with nothing else to wire.
+
 ### Book as PDF — a book onto pages
 - A book exports as a PDF: every chapter printed the way it is read, bound end to end in spine order, the book's own
   contents as the document's outline and its title as the document's title.
@@ -1457,6 +1582,13 @@ either directly without going through the button at all.
   window and the view to Aqua and the reader stylesheet is not injected at all.
 - One chapter at a time. Two WebKit print operations at once is where WebKit stops being reliable, so the chapters
   queue and the merge happens when the last one lands.
+- The completion arrives on the main thread, always. `NSPrintOperation.runModal(for:delegate:didRun:)` runs the
+  web view's print on a thread of its own and calls `didRun` from there; before the fix of 2026-09-08 every
+  `WebPDF` and `EPUBToPDF` completion — and the footer update the window does in it, which is Auto Layout —
+  ran on that thread, and Auto Layout off the main thread is an abort: File › Export… of a page or a book, and
+  File › Print… of either, wrote the file and then took the app down. `PrintJob.printOperationDidRun` hops to
+  main once, before letting go of the window, before the queue's next job and before the caller is told.
+  `BookExportTests` asserts the thread in both helpers.
 - Each contents line becomes an outline entry pointing at the first page of the chapter it names, nested the way the
   contents are nested. An entry naming an `#anchor` partway into a chapter lands on the chapter: where in a printed
   sheet that anchor ended up is not something the PDF knows.
@@ -1777,6 +1909,130 @@ either directly without going through the button at all.
    as shells and read on selection or in an idle pass.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+67. **Oracle and SQL Server exports load too (done 2026-09-08, first pass).** Beside `mysqldump`, phpMyAdmin and
+    `pg_dump`, a `.sql` written by SSMS ("Generate Scripts") or by SQL Developer / SQL*Plus now runs into the same
+    in-memory SQLite, so every query, the completion and the jump work over it unchanged. Both are told apart from
+    the semicolon-terminated dumps *before* the run starts (`SQLDumpDialect.detectFlavor`, off the file's head: a
+    dump that says it is MySQL's or Postgres's is never one of these), because in neither does a statement have to
+    end at a `;` at all. SSMS: a lone `GO` cuts a batch (`batchSeparatorEnd`) and is itself run as nothing, a line
+    starting with a word that can only start a statement ends the one before it (SSMS's data script has no `;`
+    anywhere), `[dbo].` comes off every name, `IDENTITY(…)`, `CLUSTERED`, `WITH (…)`, `ON [PRIMARY]` and the rest of
+    the decoration come off a `CREATE TABLE` / `CREATE INDEX`, bracketed types map to SQLite's, `INSERT` without
+    `INTO` gains it, `N'…'` loses its `N`, `CAST(x AS DateTime)` is unwrapped, `0x…` becomes `X'…'`, and `USE`,
+    `SET`, `EXEC`, `PRINT`, `IF … BEGIN … END`, `CREATE DATABASE` and a constraint added after the fact are skipped.
+    Oracle: `REM`, `PROMPT`, `SET DEFINE OFF` and the other SQL*Plus commands end at their line, a lone `/`
+    (`slashLineEnd`) ends a PL/SQL block — a trigger, a procedure, a package, an anonymous `BEGIN` — which is
+    skipped whole (`plsqlBlockEnd`), `"SHOP".` comes off every name, `VARCHAR2(n BYTE)`, `NUMBER(p,s)`, `CLOB`,
+    `RAW`, `TIMESTAMP(6)` map to SQLite's, `ENABLE`, `USING INDEX …`, `SEGMENT CREATION …`, `PCTFREE … TABLESPACE`
+    and the storage clauses come off, `CREATE SEQUENCE` / `SYNONYM` / `ALTER TABLE … ADD CONSTRAINT` are skipped
+    and a view is tried. Oracle's `to_date`, `to_timestamp[_tz]`, `to_char`, `to_number`, `to_clob`, `to_nchar`,
+    `hextoraw`, `empty_clob`/`empty_blob`, `nvl` and the interval pair are registered on the database as SQLite
+    functions handing back their first argument (`sqlite3_create_function_v2`, deterministic), rather than stripped
+    from the text — so they also run when typed in the query box. Examples: `Examples/sql/SQLServer.sql` and
+    `Examples/sql/Oracle.sql`, the shop schema in each exporter's own style. First pass: the worker was stopped
+    at the user's word once it built, so what a real export trips on is the next round.
+66. **The query box helps while it is typed (done 2026-09-08).** A dropdown under the caret, and colour over the
+    text, and neither changes a character: what is typed is still what is run. Typing one character a name is
+    made of puts a list up of what could go there — the keywords of the grammar the box is for (`SELECT`,
+    `DISTINCT`, `FROM`, `AS`, `INNER`/`LEFT JOIN`, `ON`, `WHERE`, `GROUP BY`, `HAVING`, `UNION [ALL]`,
+    `ORDER BY`, `ASC`/`DESC`, `LIMIT`/`OFFSET`, `AND`/`OR`/`NOT`, `IS [NOT] NULL`, `IN`, `BETWEEN`, `LIKE`,
+    `CASE`/`WHEN`/`THEN`/`ELSE`/`END`, `COUNT`/`SUM`/`AVG`/`MIN`/`MAX`), the dump's tables, and their columns,
+    the columns of tables the query already names first — so `sel` offers `SELECT` and `ord` offers `ORDER BY`
+    over the `orders` table. A dot after a table or an alias offers only that table's columns: `FROM orders o`
+    and `o.` is the four columns of `orders`, read off the query's own `FROM`, `JOIN` and comma lists
+    (`SQLCompletion.references`). ↑↓ pick, Tab and ↩ accept (a keyword in capitals, the typed prefix replaced),
+    Esc closes the list and only the list, ⌘↩ closes it and runs, a click elsewhere or the caret leaving the
+    word closes it, a delete narrows it but never opens one, and with the list down Return is still a newline
+    and Esc still puts the question down. The list is a non-activating child panel (`SQLCompletionPopup`) that
+    never becomes key — the caret stays in the box and the keys are read there and forwarded — eight rows at
+    most, the box's monospaced font, a grey word at the right saying keyword, table, or which table a column is
+    of, the accent behind the picked row, the box's own bezel radius and hairline, light and dark. The names
+    are a snapshot (`SQLCompletion.Schema`): `SQLDump.tables` and a `PRAGMA table_info` per table read on the
+    pane's serial queue when a dump lands and handed to the box on the main queue under the run token, emptied
+    when the dump is dropped, so the box never holds the database. Keywords are purple, `'…'` red, numbers
+    teal, `--` and `/* … */` comments secondary — temporary attributes over the layout manager (TextKit 1, made
+    so by reading it in the box's init), never the text storage, so undo never sees a colour and session
+    restore, a font change and an appearance change all keep them. Pure logic in `SQLCompletion.swift`
+    (`suggestions(in:caret:schema:)`, `highlights(in:)`), no AppKit and no SQLite; it borrows `SQLSourceMap`'s
+    scanner the way `SQLQueryRewrite` does.
+65. **A join's rows still jump to the file (done 2026-09-08).** `SQLQueryRewrite` refused every `JOIN`, so a
+    query over two tables drew a grid whose cells went nowhere. An `[INNER] JOIN` or `LEFT [OUTER] JOIN` chain,
+    with `ON` or `USING`, is now read the way a plain table read is: each result row is exactly one row of the
+    first `FROM` table, so that table's rowid — its alias's, when one was given — is spliced in after `SELECT`
+    exactly as before and `Rewrite.table` stays the `FROM` table, so a click in the result lands on the left
+    table's `INSERT`. `RIGHT`, `FULL`, `CROSS` and `NATURAL` joins can hand back a row with nothing on that side
+    and are still refused (`hasDisallowedJoin`, walking the qualifier words back from each `JOIN`), and so is a
+    join onto a sub-select in parentheses; `DISTINCT`, `GROUP BY`, `UNION`, an aggregate and the rest refuse as
+    they did. Everything on the list — `WHERE`, `ORDER BY`, `LIMIT`/`OFFSET`, the joins, `GROUP BY`/`HAVING`,
+    `UNION [ALL]`, the aggregates, `IN`, `BETWEEN`, `LIKE`, `IS NULL`, `CASE WHEN`, arithmetic — already *ran*,
+    since the box hands its text to SQLite itself; what this changes is only which of them keep the jump. The
+    three existing tests that said a join is refused now say what a join carries.
+64. **Settings › File types became one outline (done 2026-09-08).** The page was four inset cards under
+    four small captions, one per kind of file. It is now a single `SettingsOutlineView` — a group row with
+    a disclosure triangle and a tick box, its extensions indented under it, 34pt each, banded over the same
+    `SettingsPalette.groupFill` card, in the shape System Settings gives its own tiling shortcuts. Text
+    opens with the page and the rest are folded. The kind icon came off the row with the rebuild.
+    A group's tick claims every extension folded under it and unticking hands back every one the page took;
+    the row reads mixed while only some of them are Nota's, which is also what an extension nobody owned
+    before leaves behind — there is nothing to hand it back to, so it stays ticked and locked.
+    Two things about the component are deliberate. A row's controls belong to its `SettingsOutlineItem`
+    rather than to the cell the outline lends it, and every cell is built when the page is: a page can then
+    write a row's state without asking whether it is on screen, and a test can reach the twenty-eighth
+    extension without scrolling to it. And a group's tick box ignores the three-state cycle AppKit would
+    run — mixed is not something a reader can mean by a click — and reads the opposite of where the row
+    stood instead.
+    The Shortcuts page was rebuilt the same way on the same day and put back: the list carried a tick per
+    command saying whether it answered to a key at all, and that is not wanted. Shortcuts keeps its stack
+    of cards, its recorder per row and Summon's **Clear** button.
+63. **Snapshots — PNG of the preview, PNG of the editor (done 2026-09-08, Todo 1).** File › Export… grew two
+    targets that are not paper. Every export before them makes a page: white, cut into sheets, dark mode's
+    colours resolved back to their light ones because a sheet has nothing behind the words. These two make the
+    *screen* — one tall picture of the whole document as it stands, in the window's own appearance, on the pane's
+    own ground, at the pane's own measure. `PNG of the preview` is the render the column is showing, for the
+    tabs that lay one out: Markdown, LaTeX and an `.rtf`'s own attributed string. `PNG of the editor` is the
+    source listing `Editor as PDF` builds, gutter numbers and all, for every text tab. A picture tab is a picture
+    already and a book and a document have pages rather than a screen, so none of the three is offered either.
+    Both are listed after the two PDFs and before the tab's speciality, and both are Nota's own: `SnapshotPNG`
+    lays the text into an offscreen `NSTextView` wearing the window's appearance, painting `textBackgroundColor`
+    behind the whole height, at the preview pane's own insets, and takes it with `cacheDisplay(in:to:)` into an
+    `NSBitmapImageRep` — 2x wherever the picture still stays inside 16,384px on its long side, 1x past that.
+    A note taller than 30,000pt even at 1x is refused rather than half-written, and the footer says
+    `Too long for one image.` instead of the usual word. The measure is the screen's:
+    `Exporter.Context.screenWidth`, filled by the window with the render column's content width or the editor's
+    text width, falling back to the page measure where there is no window to ask. Plates never — an image has no
+    pages to gather figures onto, so a chip is always drawn where it was written and the sheet's `Images:` row
+    stays with `Editor as PDF` alone. Pinned by `SnapshotPNGTests` and the target lists in `ExportTests`.
+62. **The export sheet writes the file itself (done 2026-09-08).** File › Export… used to ask twice: a sheet for
+    the shape, and then Nota's own Save dialog for the name and the folder. It is one sheet now, and the second
+    dialog is gone from that path. Under the `Export:` popup — and the `Images:` row the listing still puts beside
+    it — stand `Save As:`, the base name in a field with the target's extension after it as a label, and
+    `Location:`, the folder with its Finder icon and a `Choose…`. There is no Format popup, because the target
+    already said what the file is; the label follows the popup, and so does the name, which opens on the target's
+    own default — the pane's own name for a grid's `Table (CSV)` — until the reader types one of their own. Export
+    greys out on an empty name, a name already taken asks the window's own replace alert and a `no` leaves the
+    sheet up, and the folder is the note's own, else the new `Preferences.lastExportDirectory`, else Documents.
+    The export's folder is a key of its own on purpose: `lastSaveDirectory` and `lastSaveExtension` are what ⌘S
+    offers next and an export may not move either. The `Location:` row is now one type both dialogs wear
+    (`LocationRow`) rather than two copies of a folder picker. `ExportChoice` carries the destination, so
+    `exportSheetProvider` is the one seam a test answers the whole question through; `runExportSavePanel` and
+    `exportPanelProvider` stay exactly as they were for the two grids' own Export buttons, which still ask the
+    Save dialog with the extension pinned.
+61. **A grid's Preview as PDF is the grid (done 2026-09-08).** A `.sql` or `.csv` tab exported or printed as
+    `Preview as PDF` used to fall to the source listing, which is the file's own text and not the table the
+    reader is looking at. It is now the grid on pages: `TablePDF`, a module beside `PDFPaginator` that is handed a
+    header, rows of optional strings and the grid's own font and leaves a PDF behind — every cell ruled, the
+    header repeated on every page in semibold on a grey wash, a `NULL` or a ragged row's unwritten field drawn as
+    nothing, columns as wide as their widest cell up to half the page and scaled down proportionally to fit when
+    they ask for more, text wrapping inside them rather than the font shrinking, the break between rows and a row
+    taller than a page clipped to one. The rows are the pane's, through the new `exportTable()` beside each
+    grid's `exportCSV(to:)` — the query in the box and the column a header click sorted by, every row and no page
+    cut out of it — and they arrive through `Exporter.tablePDF`, so a tab with no pane in front of it, or one
+    whose pane has not read it (the column hidden in editor mode, a big file untouched), still gets the listing.
+    Every cell is measured on one line once, when the columns are sized, and a cell that fits its column is one
+    line tall without being laid out again, so a table of a hundred thousand short rows costs no text layout at
+    all. The page is set at 10 pt at most whatever the grid is showing, turns on its side where the columns want
+    more than a portrait sheet, and takes what will not fit off the widest columns alone — a narrow `id` or
+    `balance` keeps the width it asked for and the long note beside it is the one that wraps.
 60. **Export and Print (done 2026-09-08, Todo 1).** File › Export… (⇧⌘E, adjustable) on every tab in every
     mode: a sheet asking what shape, Nota's own Save dialog asking where, and the file opening in a tab beside the
     one it came from. Six shapes. Two are Nota's own — the render, the document or the picture as the reader is

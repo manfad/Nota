@@ -12,13 +12,19 @@ final class ExportTests: AppKitTestCase {
     private var temporaryDirectories: [URL] = []
     private var placement: ExportImagePlacement = .inline
     private var gutter = true
+    private var exportDirectory: URL?
+    private var saveDirectory: URL?
+    private var saveExtension = ""
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        // The export writes both of these; the suite must not leave the
-        // reader's own settings changed behind it.
+        // The export writes these; the suite must not leave the reader's own
+        // settings changed behind it.
         placement = Preferences.shared.exportEditorImages
         gutter = Preferences.shared.showsLineNumbers
+        exportDirectory = Preferences.shared.lastExportDirectory
+        saveDirectory = Preferences.shared.lastSaveDirectory
+        saveExtension = Preferences.shared.lastSaveExtension
         // The same call the app makes at launch: without it a tab offers the
         // two PDFs Nota writes itself and nothing else.
         Exporter.installDefaultHooks()
@@ -27,6 +33,9 @@ final class ExportTests: AppKitTestCase {
     override func tearDownWithError() throws {
         Preferences.shared.exportEditorImages = placement
         Preferences.shared.showsLineNumbers = gutter
+        Preferences.shared.lastExportDirectory = exportDirectory
+        Preferences.shared.lastSaveDirectory = saveDirectory
+        Preferences.shared.lastSaveExtension = saveExtension
         for directory in temporaryDirectories {
             try? FileManager.default.removeItem(at: directory)
         }
@@ -46,12 +55,18 @@ final class ExportTests: AppKitTestCase {
         let dump = try makeNote(named: "shop.sql", text: "SELECT 1;", in: directory)
         let table = try makeNote(named: "rows.csv", text: "a,b\n1,2\n", in: directory)
 
-        XCTAssertEqual(Exporter.targets(for: markdown), [.previewPDF, .editorPDF])
-        XCTAssertEqual(Exporter.targets(for: plain), [.previewPDF, .editorPDF],
+        XCTAssertEqual(Exporter.targets(for: markdown),
+                       [.previewPDF, .editorPDF, .previewPNG, .editorPNG])
+        XCTAssertEqual(Exporter.targets(for: plain),
+                       [.previewPDF, .editorPDF, .editorPNG],
                        "a tab with no render still has the source to list")
-        XCTAssertEqual(Exporter.targets(for: tex), [.previewPDF, .editorPDF, .texPDF])
-        XCTAssertEqual(Exporter.targets(for: dump), [.previewPDF, .editorPDF, .csv])
-        XCTAssertEqual(Exporter.targets(for: table), [.previewPDF, .editorPDF, .csv])
+        XCTAssertEqual(Exporter.targets(for: tex),
+                       [.previewPDF, .editorPDF, .previewPNG, .editorPNG, .texPDF])
+        XCTAssertEqual(Exporter.targets(for: dump),
+                       [.previewPDF, .editorPDF, .editorPNG],
+                       "a grid's rows are the pane's own Export CSV button, not a target")
+        XCTAssertEqual(Exporter.targets(for: table),
+                       [.previewPDF, .editorPDF, .editorPNG])
 
         let picture = Note(id: UUID(), fileURL: exampleURL("Picture.png"), untitledName: nil,
                            text: "", attributes: [:], assets: nil, kind: .image)
@@ -63,7 +78,7 @@ final class ExportTests: AppKitTestCase {
                         text: "", attributes: [:], assets: nil, kind: .epub)
 
         XCTAssertEqual(Exporter.targets(for: picture), [.previewPDF])
-        XCTAssertEqual(Exporter.targets(for: rich), [.previewPDF])
+        XCTAssertEqual(Exporter.targets(for: rich), [.previewPDF, .previewPNG])
         XCTAssertEqual(Exporter.targets(for: document), [.epub],
                        "the one export that is not a PDF: a document is one already")
         XCTAssertEqual(Exporter.targets(for: book), [.bookPDF])
@@ -80,17 +95,20 @@ final class ExportTests: AppKitTestCase {
                         text: "", attributes: [:], assets: nil, kind: .epub)
 
         Exporter.texPDF = nil
-        Exporter.csv = nil
         Exporter.bookPDF = nil
         defer { Exporter.installDefaultHooks() }
 
-        XCTAssertEqual(Exporter.targets(for: tex), [.previewPDF, .editorPDF])
-        XCTAssertEqual(Exporter.targets(for: dump), [.previewPDF, .editorPDF])
+        XCTAssertEqual(Exporter.targets(for: tex),
+                       [.previewPDF, .editorPDF, .previewPNG, .editorPNG])
+        XCTAssertEqual(Exporter.targets(for: dump),
+                       [.previewPDF, .editorPDF, .editorPNG])
         XCTAssertEqual(Exporter.targets(for: book), [])
 
         Exporter.installDefaultHooks()
-        XCTAssertEqual(Exporter.targets(for: tex), [.previewPDF, .editorPDF, .texPDF])
-        XCTAssertEqual(Exporter.targets(for: dump), [.previewPDF, .editorPDF, .csv])
+        XCTAssertEqual(Exporter.targets(for: tex),
+                       [.previewPDF, .editorPDF, .previewPNG, .editorPNG, .texPDF])
+        XCTAssertEqual(Exporter.targets(for: dump),
+                       [.previewPDF, .editorPDF, .editorPNG])
         XCTAssertEqual(Exporter.targets(for: book), [.bookPDF])
     }
 
@@ -257,14 +275,16 @@ final class ExportTests: AppKitTestCase {
     func testTheSheetShowsTheImagesRowOnlyForTheListing() {
         let dialog = ExportDialog(targets: [.previewPDF, .editorPDF], images: .inline)
 
-        XCTAssertEqual(dialog.targetPopUp.itemTitles,
-                       [ExportTarget.previewPDF.title, ExportTarget.editorPDF.title])
+        XCTAssertEqual(labels(of: dialog.formatSegments), ["PDF"],
+                       "one file, so one segment")
+        XCTAssertEqual(labels(of: dialog.viewSegments),
+                       [ExportViewChoice.editor.title, ExportViewChoice.preview.title])
         XCTAssertEqual(dialog.chosenTarget, .previewPDF, "the first target is the one selected")
         XCTAssertFalse(dialog.isImagesRowShown)
 
         dialog.choose(.editorPDF)
         XCTAssertTrue(dialog.isImagesRowShown)
-        XCTAssertEqual(dialog.imagesPopUp.itemTitles,
+        XCTAssertEqual([dialog.inlineButton.title, dialog.platesButton.title],
                        [ExportImagePlacement.inline.title, ExportImagePlacement.plates.title])
 
         dialog.choose(.previewPDF)
@@ -272,14 +292,164 @@ final class ExportTests: AppKitTestCase {
     }
 
     /// The sheet opens on the remembered answer and hands back what was
-    /// chosen.
+    /// chosen — the shape, the pictures and the file all three.
     @MainActor
-    func testTheSheetOpensOnTheRememberedPlacementAndHandsBackTheChoice() {
-        let dialog = ExportDialog(targets: [.previewPDF, .editorPDF], images: .plates)
+    func testTheSheetOpensOnTheRememberedPlacementAndHandsBackTheChoice() throws {
+        let folder = try makeTemporaryDirectory()
+        let dialog = makeSheet(
+            targets: [.previewPDF, .editorPDF], images: .plates,
+            names: [.previewPDF: "notes.pdf", .editorPDF: "notes.pdf"], in: folder
+        )
         dialog.choose(.editorPDF)
 
         XCTAssertEqual(dialog.chosenImages, .plates)
-        XCTAssertEqual(dialog.export(), ExportChoice(target: .editorPDF, images: .plates))
+        XCTAssertEqual(dialog.export(), ExportChoice(
+            target: .editorPDF, images: .plates,
+            destination: folder.appendingPathComponent("notes.pdf")
+        ))
+    }
+
+    /// The extension after the name is the target's own, and it changes with
+    /// the popup: there is no format to pick, because the target is one.
+    @MainActor
+    func testTheExtensionLabelFollowsTheTarget() throws {
+        let folder = try makeTemporaryDirectory()
+        let dialog = makeSheet(
+            targets: [.previewPDF, .editorPDF, .epub], images: .inline,
+            names: [.previewPDF: "rows.pdf", .editorPDF: "rows.pdf", .epub: "rows.epub"],
+            in: folder
+        )
+
+        XCTAssertEqual(dialog.extensionLabel.stringValue, ".pdf")
+        dialog.choose(.epub)
+        XCTAssertEqual(dialog.extensionLabel.stringValue, ".epub")
+        XCTAssertEqual(dialog.composedURL, folder.appendingPathComponent("rows.epub"))
+
+        let book = makeSheet(
+            targets: [.epub], images: .inline, names: [.epub: "Demo.epub"], in: folder
+        )
+        XCTAssertEqual(book.extensionLabel.stringValue, ".epub")
+    }
+
+    /// The name follows the target's own default — each target names the file
+    /// its own way — until the reader types one of their own, and then it
+    /// stays where they put it.
+    @MainActor
+    func testTheNameFollowsTheTargetUntilTheReaderTypesOne() throws {
+        let folder = try makeTemporaryDirectory()
+        let dialog = makeSheet(
+            targets: [.previewPDF, .editorPDF, .epub], images: .inline,
+            names: [.previewPDF: "Shop.pdf", .editorPDF: "Shop.pdf",
+                    .epub: "Shop-book.epub"],
+            in: folder
+        )
+
+        XCTAssertEqual(dialog.nameField.stringValue, "Shop",
+                       "the base alone; the extension is the label beside it")
+        dialog.choose(.epub)
+        XCTAssertEqual(dialog.nameField.stringValue, "Shop-book",
+                       "the target the reader picked names the file")
+
+        dialog.type(name: "for the accountant")
+        dialog.choose(.previewPDF)
+        XCTAssertEqual(dialog.nameField.stringValue, "for the accountant",
+                       "a name the reader typed is not taken away by the popup")
+        XCTAssertEqual(dialog.composedURL,
+                       folder.appendingPathComponent("for the accountant.pdf"))
+    }
+
+    /// Export with nothing in the field would write a file called `.pdf`, so
+    /// the button is simply not available until there is a name.
+    @MainActor
+    func testExportIsUnavailableWithoutAName() throws {
+        let folder = try makeTemporaryDirectory()
+        let dialog = makeSheet(
+            targets: [.previewPDF], images: .inline, names: [.previewPDF: "notes.pdf"],
+            in: folder
+        )
+        XCTAssertTrue(dialog.exportButton.isEnabled)
+
+        dialog.type(name: "   ")
+        XCTAssertFalse(dialog.exportButton.isEnabled)
+        XCTAssertNil(dialog.export(), "and Return means nothing either")
+
+        dialog.type(name: "notes")
+        XCTAssertTrue(dialog.exportButton.isEnabled)
+    }
+
+    /// A name that is already a file on disk asks the window's own replace
+    /// question. A "no" leaves the sheet standing and hands nothing back; a
+    /// "yes" goes through to exactly that file.
+    @MainActor
+    func testAnExistingFileIsAskedAboutAndANoKeepsTheSheetUp() throws {
+        let folder = try makeTemporaryDirectory()
+        let taken = folder.appendingPathComponent("notes.pdf")
+        try "already here".write(to: taken, atomically: true, encoding: .utf8)
+
+        let dialog = makeSheet(
+            targets: [.previewPDF], images: .inline, names: [.previewPDF: "notes.pdf"],
+            in: folder
+        )
+        var asked: [URL] = []
+        var answer = false
+        dialog.confirmReplace = { url in
+            asked.append(url)
+            return answer
+        }
+
+        XCTAssertNil(dialog.export(), "a refused replacement is not a choice")
+        XCTAssertEqual(asked, [taken])
+        XCTAssertEqual(try String(contentsOf: taken, encoding: .utf8), "already here",
+                       "and nothing was written over it")
+
+        answer = true
+        XCTAssertEqual(dialog.export()?.destination, taken)
+        XCTAssertEqual(asked.count, 2)
+    }
+
+    /// A name nobody else has is written without a word.
+    @MainActor
+    func testAFreeNameAsksNothing() throws {
+        let folder = try makeTemporaryDirectory()
+        let dialog = makeSheet(
+            targets: [.previewPDF], images: .inline, names: [.previewPDF: "notes.pdf"],
+            in: folder
+        )
+        dialog.confirmReplace = { _ in
+            XCTFail("nothing is there to replace")
+            return false
+        }
+        XCTAssertEqual(dialog.export()?.destination,
+                       folder.appendingPathComponent("notes.pdf"))
+    }
+
+    /// Where the sheet opens: the note's own folder when it has a file, else
+    /// the folder the last export landed in, and `Choose…` moves it.
+    @MainActor
+    func testTheSheetOpensInTheNotesOwnFolderThenTheLastExportFolder() throws {
+        let beside = try makeTemporaryDirectory()
+        let remembered = try makeTemporaryDirectory()
+        let named = ExportDialog(
+            targets: [.previewPDF], images: .inline,
+            suggestedNames: [.previewPDF: "notes.pdf"],
+            existingFileURL: beside.appendingPathComponent("notes.md"),
+            lastDirectory: remembered
+        )
+        XCTAssertEqual(named.locationURL.standardizedFileURL, beside.standardizedFileURL,
+                       "a note exports beside itself, not where the last export went")
+
+        let untitled = ExportDialog(
+            targets: [.previewPDF], images: .inline,
+            suggestedNames: [.previewPDF: "Untitled.pdf"],
+            existingFileURL: nil, lastDirectory: remembered
+        )
+        XCTAssertEqual(untitled.locationURL.standardizedFileURL,
+                       remembered.standardizedFileURL)
+
+        let elsewhere = try makeTemporaryDirectory()
+        untitled.choose(elsewhere)
+        XCTAssertEqual(untitled.composedURL,
+                       elsewhere.appendingPathComponent("Untitled.pdf"))
     }
 
     // MARK: - The window
@@ -301,14 +471,20 @@ final class ExportTests: AppKitTestCase {
         var asked: [ExportTarget] = []
         controller.exportSheetProvider = { _, targets in
             asked = targets
-            return ExportChoice(target: .previewPDF, images: .inline)
+            return ExportChoice(
+                target: .previewPDF, images: .inline, destination: destination
+            )
         }
-        controller.exportPanelProvider = { _, _ in destination }
+        controller.exportPanelProvider = { _, _ in
+            XCTFail("File › Export… asks in its own sheet; there is no second dialog")
+            return nil
+        }
 
         XCTAssertTrue(controller.canExportCurrentTab)
         controller.exportCurrentTab()
 
-        XCTAssertEqual(asked, [.previewPDF, .editorPDF], "the sheet was asked about this tab")
+        XCTAssertEqual(asked, [.previewPDF, .editorPDF, .previewPNG, .editorPNG],
+                       "the sheet was asked about this tab")
         XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
         XCTAssertEqual(controller.openNotes.last?.title, "notes.pdf")
         XCTAssertEqual(controller.currentTabState.kind, .pdf,
@@ -328,13 +504,39 @@ final class ExportTests: AppKitTestCase {
         let tabs = controller.openNotes.count
 
         controller.exportSheetProvider = { _, _ in nil }
-        controller.exportPanelProvider = { _, _ in
-            XCTFail("the save dialog must not be reached from a cancelled sheet")
-            return nil
-        }
         controller.exportCurrentTab()
 
         XCTAssertEqual(controller.openNotes.count, tabs)
+    }
+
+    /// An export remembers its own folder and leaves the save dialog's
+    /// memory alone: exporting as PDF must not offer `pdf`, or that folder,
+    /// the next time ⌘S asks about the note itself.
+    @MainActor
+    func testAnExportRemembersItsFolderAndLeavesTheSaveDialogAlone() throws {
+        let directory = try makeTemporaryDirectory()
+        let source = directory.appendingPathComponent("notes.md")
+        try "# Exported\n".write(to: source, atomically: true, encoding: .utf8)
+        let controller = try makeController()
+        controller.open(url: source)
+
+        let elsewhere = try makeTemporaryDirectory()
+        Preferences.shared.lastSaveDirectory = directory
+        Preferences.shared.lastSaveExtension = "md"
+
+        let destination = elsewhere.appendingPathComponent("notes.pdf")
+        controller.exportSheetProvider = { _, _ in
+            ExportChoice(target: .previewPDF, images: .inline, destination: destination)
+        }
+        controller.exportCurrentTab()
+
+        XCTAssertEqual(Preferences.shared.lastExportDirectory?.standardizedFileURL,
+                       elsewhere.standardizedFileURL,
+                       "the next export opens where this one landed")
+        XCTAssertEqual(Preferences.shared.lastSaveDirectory?.standardizedFileURL,
+                       directory.standardizedFileURL,
+                       "and ⌘S still offers the folder the note was saved in")
+        XCTAssertEqual(Preferences.shared.lastSaveExtension, "md")
     }
 
     // MARK: - Every hook, end to end
@@ -532,6 +734,27 @@ final class ExportTests: AppKitTestCase {
     }
 
     // MARK: - Helpers
+
+    /// The words a segmented control is wearing, left to right.
+    @MainActor
+    private func labels(of segments: NSSegmentedControl) -> [String] {
+        (0..<segments.segmentCount).map { segments.label(forSegment: $0) ?? "" }
+    }
+
+    /// The export sheet as the window builds it, pointed at a folder of this
+    /// test's own so nothing is ever composed onto a real one.
+    @MainActor
+    private func makeSheet(
+        targets: [ExportTarget],
+        images: ExportImagePlacement,
+        names: [ExportTarget: String],
+        in folder: URL
+    ) -> ExportDialog {
+        ExportDialog(
+            targets: targets, images: images, suggestedNames: names,
+            existingFileURL: nil, lastDirectory: folder
+        )
+    }
 
 
     /// `Exporter.export` answers through a completion whatever it is writing,

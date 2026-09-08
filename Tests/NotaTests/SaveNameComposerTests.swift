@@ -100,6 +100,34 @@ final class SaveNameComposerTests: XCTestCase {
                        SaveNameComposer.knownExtensions())
     }
 
+    // MARK: - A pinned extension
+
+    /// The Export sheet's rule: the target is the format, so the extension is
+    /// never talked out of. A name that already spells it keeps it once; a
+    /// name with some other dot in it gets it anyway.
+    func testAPinnedExtensionIsAlwaysTheOneTheFileLandsOn() {
+        XCTAssertEqual(
+            SaveNameComposer.composedName(name: "notes", pinnedExtension: "pdf"), "notes.pdf"
+        )
+        XCTAssertEqual(
+            SaveNameComposer.composedName(name: "notes.pdf", pinnedExtension: "pdf"),
+            "notes.pdf", "the extension is not doubled"
+        )
+        XCTAssertEqual(
+            SaveNameComposer.composedName(name: "notes.PDF", pinnedExtension: "pdf"),
+            "notes.PDF", "and it is matched case-insensitively"
+        )
+        XCTAssertEqual(
+            SaveNameComposer.composedName(name: "report.v2", pinnedExtension: "pdf"),
+            "report.v2.pdf",
+            "a dot in the name is not an extension the reader chose instead"
+        )
+        XCTAssertEqual(
+            SaveNameComposer.composedName(name: "  rows  ", pinnedExtension: " .csv "),
+            "rows.csv"
+        )
+    }
+
     // MARK: - Preferences round trip
 
     func testTheLastChosenExtensionRoundTripsThroughPreferences() {
@@ -114,5 +142,23 @@ final class SaveNameComposerTests: XCTestCase {
 
         let reloaded = Preferences(defaults: defaults)
         XCTAssertEqual(reloaded.lastSaveExtension, "toml")
+    }
+
+    /// The export's own folder is a second key, so neither memory moves the
+    /// other (SPEC "## Export").
+    func testTheExportFolderIsRememberedApartFromTheSaveFolder() {
+        let suite = "NotaTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let preferences = Preferences(defaults: defaults)
+
+        XCTAssertNil(preferences.lastExportDirectory)
+        let folder = URL(fileURLWithPath: "/tmp/exports", isDirectory: true)
+        preferences.lastExportDirectory = folder
+        XCTAssertEqual(preferences.lastExportDirectory?.path, folder.path)
+        XCTAssertNil(preferences.lastSaveDirectory, "and the save folder is untouched")
+
+        let reloaded = Preferences(defaults: defaults)
+        XCTAssertEqual(reloaded.lastExportDirectory?.path, folder.path)
     }
 }

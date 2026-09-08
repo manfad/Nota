@@ -15,10 +15,19 @@ import Foundation
 /// in after the `SELECT` keyword and nothing else about it is touched: the
 /// reader's own columns, their own order, their own everything.
 ///
+/// An `INNER JOIN` or `LEFT [OUTER] JOIN` chain reads the same way: each
+/// result row still comes from exactly one row of the first `FROM` table, so
+/// that table's rowid — its alias, when the reader gave it one — is spliced
+/// in exactly as it is for a plain table read, and `Rewrite.table` stays the
+/// `FROM` table. A `RIGHT`, `FULL`, `CROSS` or `NATURAL` join can hand back a
+/// row with no match on that side, so those are left alone, along with a join
+/// onto a sub-select in parentheses.
+///
 /// Loose on purpose, and refusing on purpose. Anything that is not plainly
-/// one table's rows — a join, a comma-separated `FROM`, a `GROUP BY`, a
-/// `DISTINCT`, a `UNION`, an aggregate, a `WITH`, a sub-select anywhere — is
-/// left alone and read as it always was, with no rowids and a quiet grid.
+/// one table's rows (or an inner/left join's worth of them) — a
+/// comma-separated `FROM`, a `GROUP BY`, a `DISTINCT`, a `UNION`, an
+/// aggregate, a `WITH`, a sub-select anywhere — is left alone and read as it
+/// always was, with no rowids and a quiet grid.
 /// The rewrite is an offer, never a requirement: it is prepared under the
 /// same read-only authorizer as anything else typed in the box, and a rewrite
 /// SQLite will not take is dropped without a word, since the reader asked for
@@ -65,7 +74,7 @@ enum SQLQueryRewrite {
         }
 
         guard !tokens.contains(where: { isRefused($0) }),
-              !hasAggregate(tokens), !hasPositionalOrder(tokens),
+              !hasAggregate(tokens), !hasPositionalOrder(tokens), !hasDisallowedJoin(tokens),
               let from = tokens.firstIndex(where: {
                   $0.kind == .word && $0.text.lowercased() == "from"
               }), depths[from] == 0
@@ -117,11 +126,12 @@ enum SQLQueryRewrite {
     // MARK: - What is not one table's rows
 
     /// Words that say the result is not a table's rows however the rest of it
-    /// reads: a join, a set operation, a grouping, a sub-select, a window, a
-    /// `WITH` inside. A `SELECT` after the first one is a sub-select — the
-    /// first was taken before any of this.
+    /// reads: a set operation, a grouping, a sub-select, a window, a `WITH`
+    /// inside. A `SELECT` after the first one is a sub-select — the first was
+    /// taken before any of this. A join is not refused outright — an inner or
+    /// left join is allowed — so it is checked on its own, by `hasDisallowedJoin`.
     private static let refused: Set<String> = [
-        "distinct", "join", "union", "intersect", "except", "group", "having",
+        "distinct", "union", "intersect", "except", "group", "having",
         "select", "values", "window", "over", "with",
     ]
 
@@ -157,6 +167,38 @@ enum SQLQueryRewrite {
             else { continue }
             let term = tokens[index + 2]
             if term.kind == .word, term.text.allSatisfy(\.isNumber) { return true }
+        }
+        return false
+    }
+
+    /// The join qualifiers that can sit in front of the `JOIN` keyword itself,
+    /// walked backwards from it to read `LEFT OUTER JOIN`, `NATURAL JOIN` and
+    /// the rest as one unit rather than one word at a time.
+    private static let joinQualifiers: Set<String> = [
+        "inner", "left", "right", "full", "cross", "natural", "outer",
+    ]
+
+    /// The joins whose result can hold a row with no match on one side —
+    /// `RIGHT`, `FULL`, `CROSS`, `NATURAL` — are not one row of the `FROM`
+    /// table per result row, and neither is a join onto a sub-select in
+    /// parentheses. `[INNER] JOIN` and `LEFT [OUTER] JOIN` are the only ones
+    /// left alone.
+    private static func hasDisallowedJoin(_ tokens: [SQLSourceMap.Token]) -> Bool {
+        for (index, token) in tokens.enumerated() {
+            guard token.kind == .word, token.text.lowercased() == "join" else { continue }
+            if index + 1 < tokens.count, tokens[index + 1].kind == .punctuation,
+               tokens[index + 1].text == "(" {
+                return true
+            }
+            var back = index - 1
+            while back >= 0, tokens[back].kind == .word,
+                  joinQualifiers.contains(tokens[back].text.lowercased()) {
+                let word = tokens[back].text.lowercased()
+                if word == "right" || word == "full" || word == "cross" || word == "natural" {
+                    return true
+                }
+                back -= 1
+            }
         }
         return false
     }

@@ -223,11 +223,17 @@ final class BookExportTests: AppKitTestCase {
     private func printBook(_ book: EPUBBook, to url: URL) throws {
         let done = expectation(description: "the book printed")
         var outcome: Result<Void, Error>?
+        var answeredOnMain = false
         EPUBToPDF.export(book: book, to: url) { result in
             outcome = result
+            answeredOnMain = Thread.isMainThread
             done.fulfill()
         }
         wait(for: [done], timeout: 120)
+        // The print operation answers from a thread of its own; the caller
+        // updates the footer, which is layout, and layout off the main thread
+        // is an abort. So the completion must arrive on main, every time.
+        XCTAssertTrue(answeredOnMain, "the export answered on the main thread")
         if case .failure(let error)? = outcome { throw error }
         XCTAssertNotNil(outcome, "the export answered")
     }
@@ -236,11 +242,17 @@ final class BookExportTests: AppKitTestCase {
     private func printPage(at fileURL: URL, to url: URL) throws {
         let done = expectation(description: "the page printed")
         var outcome: Result<Void, Error>?
+        var answeredOnMain = false
         WebPDF.export(pageAt: fileURL, to: url) { result in
             outcome = result
+            answeredOnMain = Thread.isMainThread
             done.fulfill()
         }
         wait(for: [done], timeout: 60)
+        // The print operation answers from a thread of its own; the caller
+        // updates the footer, which is layout, and layout off the main thread
+        // is an abort. So the completion must arrive on main, every time.
+        XCTAssertTrue(answeredOnMain, "the export answered on the main thread")
         if case .failure(let error)? = outcome { throw error }
         XCTAssertNotNil(outcome, "the export answered")
     }

@@ -260,7 +260,7 @@ enum PDFPaginator {
 
     /// A job that writes rather than prints: no panels, no printer, and the
     /// file it lands in named in the print info itself.
-    private static func printInfo(savingTo url: URL) -> NSPrintInfo {
+    static func printInfo(savingTo url: URL) -> NSPrintInfo {
         let info = (NSPrintInfo.shared.copy() as? NSPrintInfo) ?? NSPrintInfo()
         info.jobDisposition = .save
         info.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = url
@@ -275,7 +275,7 @@ enum PDFPaginator {
         return info
     }
 
-    private static func run(_ operation: NSPrintOperation) throws {
+    static func run(_ operation: NSPrintOperation) throws {
         operation.showsPrintPanel = false
         operation.showsProgressPanel = false
         guard operation.run() else { throw Failure.noPages }
@@ -286,7 +286,7 @@ enum PDFPaginator {
     /// Runs `body` with the light appearance current, so everything that
     /// resolves a colour while it runs — a chip's fill, a formula's ink, a
     /// picture drawn by a handler — resolves it for paper.
-    private static func light(_ body: () throws -> Void) throws {
+    static func light(_ body: () throws -> Void) throws {
         guard let aqua = NSAppearance(named: .aqua) else { return try body() }
         var thrown: Error?
         aqua.performAsCurrentDrawingAppearance {

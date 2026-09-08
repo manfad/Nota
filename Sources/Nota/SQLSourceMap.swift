@@ -374,9 +374,17 @@ struct SQLSourceMap {
             _ = scan()  // ABORT · FAIL · IGNORE · REPLACE · ROLLBACK
             token = scan()
         }
-        guard let into = token, into.kind == .word, into.text.lowercased() == "into"
-        else { return nil }
-        guard let name = scan(), name.kind != .punctuation else { return nil }
+        // `INTO` is not always written: T-SQL makes it optional, and SSMS
+        // leaves it out (`INSERT [dbo].[Customers] ([Id]) VALUES (…)`).
+        // What the run *prepared* had it put back — SQLite insists — but
+        // the ranges here are into the file, so what the file wrote is what
+        // is read here.
+        guard let target = token, target.kind != .punctuation else { return nil }
+        // Past the table's own name, when an `INTO` was what stood here.
+        if target.kind == .word, target.text.lowercased() == "into",
+           scan()?.kind == .punctuation {
+            return nil
+        }
         var next = scan()
         // `schema.table`: the list, if there is one, is after the second half.
         if let dot = next, dot.kind == .punctuation, dot.text == "." {
@@ -417,9 +425,17 @@ struct SQLSourceMap {
             _ = nextToken(units, &index)  // ABORT · FAIL · IGNORE · REPLACE · ROLLBACK
             token = nextToken(units, &index)
         }
-        guard let into = token, into.kind == .word, into.text.lowercased() == "into"
-        else { return nil }
-        guard var name = nextToken(units, &index), name.kind != .punctuation else { return nil }
+        // `INTO` is not always written: T-SQL makes it optional, and SSMS
+        // leaves it out (`INSERT [dbo].[Customers] (…) VALUES (…)`). The
+        // statement that ran had it put back — SQLite insists on it — but
+        // this reads the file's own text, where it was never there.
+        guard var name = token, name.kind != .punctuation else { return nil }
+        if name.kind == .word, name.text.lowercased() == "into" {
+            guard let real = nextToken(units, &index), real.kind != .punctuation else {
+                return nil
+            }
+            name = real
+        }
         // `schema.table`: the name is the second half.
         let afterName = index
         if let dot = nextToken(units, &index), dot.kind == .punctuation, dot.text == "." {

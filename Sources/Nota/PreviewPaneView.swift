@@ -91,15 +91,27 @@ final class PreviewPaneView: NSView {
     var onPositionChange: ((Int) -> Void)?
     var onZoomChange: ((CGFloat) -> Void)?
     var onStateChange: (() -> Void)?
-    /// The dump's pane or the table's own Export button was pressed: a
-    /// destination for it, through the window's own save flow — pinned to
-    /// `csv` — or `nil` for a panel the reader cancelled. Only the two
-    /// content views that ever export anything are wired to it; nothing
-    /// about the other eight even declares the closure.
-    var onExportDestination: ((_ defaultName: String) -> URL?)? {
+    /// The dump's pane or the table's own `Export CSV` button was pressed:
+    /// which columns and which file, through the window's own export dialog,
+    /// or `nil` for one the reader cancelled. The grid's header rides along,
+    /// since the dialog is a list of it. Only the two content views that ever
+    /// export anything are wired to it; nothing about the other eight even
+    /// declares the closure.
+    var onExportDestination: ((
+        _ defaultName: String, _ columns: [(name: String, type: String?)]
+    ) -> CSVExportChoice?)? {
         didSet {
             sqlContent.exportDestination = onExportDestination
             csvContent.exportDestination = onExportDestination
+        }
+    }
+
+    /// The CSV the Export CSV button has just written, for the window to open
+    /// as a tab of its own.
+    var onExported: ((URL) -> Void)? {
+        didSet {
+            sqlContent.onExported = onExported
+            csvContent.onExported = onExported
         }
     }
 

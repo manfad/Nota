@@ -42,7 +42,6 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
     private static let inset: CGFloat = 20
     private static let rowSpacing: CGFloat = 12
     private static let formatWidth: CGFloat = 96
-    private static let folderIconSize: CGFloat = 16
 
     // MARK: - Chrome
 
@@ -56,8 +55,10 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
     /// way to a format the list does not carry, or a `.txt` spelled some other
     /// way. Hidden until then, and hidden again when a listed one is picked.
     let otherExtensionField = NSTextField()
-    let locationField = NSTextField(labelWithString: "")
-    let chooseButton = NSButton()
+    /// The `Location:` row, shared with the Export sheet (`LocationRow`).
+    private let location: LocationRow
+    var locationField: NSTextField { location.field }
+    var chooseButton: NSButton { location.chooseButton }
     let cancelButton = NSButton()
     let saveButton = NSButton()
     private let grid: NSGridView
@@ -65,7 +66,7 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
     // MARK: - State
 
     /// The folder the composed name is written into. `Choose…` replaces it.
-    private(set) var locationURL: URL
+    var locationURL: URL { location.url }
 
     /// The file this note already has, if it has one: saving over yourself is
     /// not a replacement and asks nothing.
@@ -144,12 +145,10 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
         self.existingFileURL = existingFileURL
         let base = SaveNameComposer.split(name: suggestedName).base
         // A named file saves where it lives; a new one where the last save
-        // landed, and failing that in Documents, which is where a save panel
-        // with nothing to go on opens too.
-        locationURL = existingFileURL?.deletingLastPathComponent()
-            ?? lastDirectory
-            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        // landed, and failing that in Documents.
+        location = LocationRow(url: LocationRow.openingURL(
+            existingFileURL: existingFileURL, lastDirectory: lastDirectory
+        ))
 
         grid = NSGridView(numberOfColumns: 2, rows: 0)
         panel = NSPanel(
@@ -189,7 +188,6 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
             formatPopUp.selectItem(withTitle: match)
         }
         otherExtensionField.isHidden = true
-        showLocation()
         relabel()
         updateSaveEnabled()
 
@@ -228,21 +226,6 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
         otherExtensionField.cell?.isScrollable = true
         otherExtensionField.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
-        // Read only: the folder is picked through `Choose…`, never typed, so
-        // the field is here to be read — the folder's own icon, its name, and
-        // the whole path behind a tooltip.
-        locationField.isBezeled = true
-        locationField.bezelStyle = .roundedBezel
-        locationField.isEditable = false
-        locationField.isSelectable = false
-        locationField.lineBreakMode = .byTruncatingMiddle
-        locationField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        locationField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        chooseButton.bezelStyle = .rounded
-        chooseButton.target = self
-        chooseButton.action = #selector(chooseLocation)
-
         cancelButton.bezelStyle = .rounded
         cancelButton.target = self
         cancelButton.action = #selector(cancelClicked)
@@ -265,15 +248,8 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
         nameField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         nameField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let locationRow = NSStackView(views: [locationField, chooseButton])
-        locationRow.orientation = .horizontal
-        locationRow.spacing = 8
-        // `.fill`, not gravity areas: the field takes the width up to the
-        // button instead of hugging its folder's name.
-        locationRow.distribution = .fill
-
         grid.addRow(with: [saveAsLabel, nameRow])
-        grid.addRow(with: [locationLabel, locationRow])
+        grid.addRow(with: [locationLabel, location.view])
         grid.translatesAutoresizingMaskIntoConstraints = false
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .fill
@@ -313,7 +289,7 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
             nameRow.trailingAnchor.constraint(
                 equalTo: content.trailingAnchor, constant: -Self.inset
             ),
-            locationRow.trailingAnchor.constraint(
+            location.view.trailingAnchor.constraint(
                 equalTo: content.trailingAnchor, constant: -Self.inset
             ),
 
@@ -341,7 +317,7 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
         headingLabel.stringValue = title
         saveAsLabel.stringValue = L10n.text("Save As", chinese: "另存为") + ":"
         locationLabel.stringValue = L10n.text("Location", chinese: "位置") + ":"
-        chooseButton.title = L10n.text("Choose…", chinese: "选择…")
+        location.relabel()
         cancelButton.title = L10n.text("Cancel", chinese: "取消")
         saveButton.title = title
         formatPopUp.menu?.item(withTag: Self.noneTag)?.title = L10n.text("None", chinese: "无")
@@ -356,45 +332,6 @@ final class SaveDialog: NSObject, NSTextFieldDelegate {
         grid.column(at: 0).width = [saveAsLabel, locationLabel]
             .map { $0.fittingSize.width }.max() ?? 0
         grid.layoutSubtreeIfNeeded()
-    }
-
-    // MARK: - Location
-
-    /// The folder as the row shows it: its own Finder icon, then its name,
-    /// with the whole path behind the tooltip.
-    private func showLocation() {
-        let icon = NSWorkspace.shared.icon(forFile: locationURL.path)
-        icon.size = NSSize(width: Self.folderIconSize, height: Self.folderIconSize)
-        let attachment = NSTextAttachment()
-        let cell = NSTextAttachmentCell(imageCell: icon)
-        attachment.attachmentCell = cell
-        let line = NSMutableAttributedString(attachment: attachment)
-        line.append(NSAttributedString(
-            string: " " + locationURL.lastPathComponent,
-            attributes: [
-                .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
-                .foregroundColor: NSColor.labelColor,
-            ]
-        ))
-        locationField.attributedStringValue = line
-        locationField.toolTip = locationURL.path
-    }
-
-    /// The one part the system still owns: picking a folder. Run modally
-    /// inside the dialog's own modal session — a nested `runModal` is what
-    /// AppKit documents for a panel opened from a modal window, and a sheet
-    /// on a sheet is not a Mac shape anyway.
-    @objc private func chooseLocation() {
-        let picker = NSOpenPanel()
-        picker.canChooseDirectories = true
-        picker.canChooseFiles = false
-        picker.canCreateDirectories = true
-        picker.allowsMultipleSelection = false
-        picker.directoryURL = locationURL
-        picker.prompt = L10n.text("Choose", chinese: "选择")
-        guard picker.runModal() == .OK, let chosen = picker.url else { return }
-        locationURL = chosen
-        showLocation()
     }
 
     // MARK: - Running

@@ -191,6 +191,7 @@ final class Preferences {
         static let sidebarSide = "sidebarSide"
         static let plainTextImageStyle = "plainTextImageStyle"
         static let markdownReadingMode = "opensMarkdownInReadingMode"
+        static let openingMode = "openingMode"
         static let vimMode = "vimMode"
         static let footerWords = "footerShowsWords"
         static let footerCharacters = "footerShowsCharacters"
@@ -215,6 +216,7 @@ final class Preferences {
         static let shortcuts = "shortcuts"
         static let lastSaveDirectory = "lastSaveDirectory"
         static let lastSaveExtension = "lastSaveExtension"
+        static let lastExportDirectory = "lastExportDirectory"
         static let previousDefaultApps = "previousDefaultApps"
         static let exportEditorImages = "exportEditorImages"
     }
@@ -386,16 +388,38 @@ final class Preferences {
         }
     }
 
-    /// Whether a `.md` file opens as the render rather than as text. Off:
-    /// opening a file is opening it to edit unless you say otherwise.
-    /// Restoring a session ignores this — the tab's own mode wins.
-    var opensMarkdownInReadingMode: Bool {
-        get { defaults.object(forKey: Key.markdownReadingMode) as? Bool ?? false }
+    /// What mode a supported file opens in: as text, split, or the render
+    /// alone. Off: opening a file is opening it to edit unless you say
+    /// otherwise. Restoring a session ignores this — the tab's own mode
+    /// wins. A reader with the older `opensMarkdownInReadingMode` default
+    /// already set to true, and no `openingMode` of its own yet, keeps
+    /// meaning reading mode rather than snapping back to off.
+    var openingMode: PreviewMode {
+        get {
+            if let raw = defaults.string(forKey: Key.openingMode),
+               let mode = PreviewMode(rawValue: raw) {
+                return mode
+            }
+            if defaults.object(forKey: Key.openingMode) == nil,
+               defaults.object(forKey: Key.markdownReadingMode) as? Bool == true {
+                return .reading
+            }
+            return .off
+        }
         set {
-            guard newValue != opensMarkdownInReadingMode else { return }
-            defaults.set(newValue, forKey: Key.markdownReadingMode)
+            guard newValue != openingMode else { return }
+            defaults.set(newValue.rawValue, forKey: Key.openingMode)
             announce()
         }
+    }
+
+    /// The older spelling of `openingMode`: whether a file opens straight
+    /// into reading mode rather than split or the editor. Kept as a bridge
+    /// so existing call sites and tests that only care about reading mode
+    /// keep compiling and meaning the same thing.
+    var opensMarkdownInReadingMode: Bool {
+        get { openingMode == .reading }
+        set { openingMode = newValue ? .reading : .off }
     }
 
     /// What the middle of the footer counts. Words and characters are the
@@ -618,6 +642,18 @@ final class Preferences {
             return URL(fileURLWithPath: path, isDirectory: true)
         }
         set { defaults.set(newValue?.path, forKey: Key.lastSaveDirectory) }
+    }
+
+    /// Where the last export landed, so the next export sheet opens in the
+    /// same place. Kept apart from `lastSaveDirectory` on purpose (SPEC
+    /// "## Export"): an export is not a save, and where a PDF was written
+    /// must not move where the note itself is offered next.
+    var lastExportDirectory: URL? {
+        get {
+            guard let path = defaults.string(forKey: Key.lastExportDirectory) else { return nil }
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        set { defaults.set(newValue?.path, forKey: Key.lastExportDirectory) }
     }
 
     /// The extension last chosen in the save panel's Format combo, offered

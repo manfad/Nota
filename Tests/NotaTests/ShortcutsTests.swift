@@ -183,7 +183,7 @@ final class ShortcutsTests: AppKitTestCase {
     // MARK: - The Settings page
 
     @MainActor
-    func testSettingsHasNinePagesAndKeepsSummonOnShortcuts() throws {
+    func testSettingsHasEightPagesAndKeepsSummonOnShortcuts() throws {
         _ = NSApplication.shared
         let controller = SettingsWindowController.shared
         let root = try XCTUnwrap(controller.window?.contentView)
@@ -191,7 +191,7 @@ final class ShortcutsTests: AppKitTestCase {
 
         XCTAssertEqual(
             controller.pageTitles,
-            ["General", "Appearance", "Editor", "Preview", "Tab bar", "Status bar",
+            ["General", "Appearance", "Editor", "Tab bar", "Status bar",
              "Shortcuts", "File types", "About"]
         )
 
@@ -213,7 +213,7 @@ final class ShortcutsTests: AppKitTestCase {
             },
             "Summon is the first row of Shortcuts"
         )
-        XCTAssertEqual(controller.rows(on: 6).first?.title, "Summon")
+        XCTAssertEqual(controller.rows(on: 5).first?.title, "Summon")
         for action in [ShortcutAction.goToTab, .showBookmarks, .settings] {
             XCTAssertNotNil(field(for: action, in: root), "no row for \(action.titleKey)")
         }
