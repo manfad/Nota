@@ -102,6 +102,11 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
     /// cancelled, which is the case ⌘D on an untitled note turns on.
     var savePanelProvider: ((Note) -> URL?)?
 
+    /// The export sheet, asked what the reader chose. The real sheet unless
+    /// a test hands in something else — `nil` from it is Cancel, and nothing
+    /// is written.
+    var exportSheetProvider: ((Note, [ExportTarget]) -> ExportChoice?)?
+
     private var preferences: Preferences { .shared }
     private var fontSize: CGFloat { preferences.fontSize }
 
@@ -2939,6 +2944,102 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         alert.addButton(withTitle: L10n.text("Replace", chinese: "替换"))
         alert.addButton(withTitle: L10n.text("Cancel", chinese: "取消"))
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    // MARK: - Export
+
+    /// Whether File › Export… means anything on the tab in front — what the
+    /// menu greys the item out by. Every tab Nota can already write something
+    /// for says yes: a render, a listing, a rich-text document, a picture.
+    /// An empty window says no, and so, until their exporters are plugged in,
+    /// do the two tabs whose only target is somebody else's hook (a document
+    /// into a book, a book onto pages).
+    var canExportCurrentTab: Bool {
+        guard let note = currentNote else { return false }
+        return !Exporter.targets(for: note).isEmpty
+    }
+
+    /// ⇧⌘E. Ask what shape, ask where, write it, and open what was written
+    /// in a tab beside the source (SPEC "## Export", Todo 1).
+    ///
+    /// Available in every mode: the export is about the tab, not about which
+    /// half of it is on screen.
+    func exportCurrentTab() {
+        guard let note = currentNote else { return }
+        let targets = Exporter.targets(for: note)
+        guard !targets.isEmpty else { return }
+        guard let choice = runExportSheet(for: note, targets: targets) else { return }
+        // Answered once and remembered, the way the save panel's own format
+        // is: the next export opens on whichever way the pictures went last.
+        preferences.exportEditorImages = choice.images
+        guard let destination = runExportSavePanel(for: note, target: choice.target) else {
+            return
+        }
+        do {
+            try Exporter.export(
+                note, to: choice.target, at: destination,
+                context: exportContext(images: choice.images)
+            )
+        } catch {
+            // The quiet word in the footer every other failure that is not
+            // the reader's fault gets. Nothing here is worth an alert.
+            showFooterMessage(String(
+                format: L10n.text("Couldn’t export “%@”."), destination.lastPathComponent
+            ))
+            return
+        }
+        // Through the same door a file dropped on the strip comes in by, so
+        // the written file becomes whatever kind of tab it is, beside the
+        // tab it came from, selected.
+        open(url: destination)
+    }
+
+    private func runExportSheet(for note: Note, targets: [ExportTarget]) -> ExportChoice? {
+        if let exportSheetProvider { return exportSheetProvider(note, targets) }
+        guard let window else { return nil }
+        let dialog = ExportDialog(targets: targets, images: preferences.exportEditorImages)
+        return dialog.runSheet(on: window)
+    }
+
+    /// Where the export lands: Nota's own Save dialog again, opened on the
+    /// tab's own name with the target's extension in place of the note's —
+    /// a Markdown note exports as `notes.pdf`, not as `notes.md`.
+    ///
+    /// The extension is the target's and is not remembered as the last save
+    /// extension: exporting as PDF must not offer `pdf` the next time the
+    /// note itself is saved.
+    private func runExportSavePanel(for note: Note, target: ExportTarget) -> URL? {
+        if let savePanelProvider { return savePanelProvider(note) }
+        guard let window else { return nil }
+        let base = SaveNameComposer.split(name: note.title).base
+        let dialog = SaveDialog(
+            suggestedName: base + "." + target.fileExtension,
+            existingFileURL: note.fileURL,
+            lastDirectory: preferences.lastSaveDirectory,
+            lastExtension: target.fileExtension,
+            preferredExtension: target.fileExtension
+        )
+        dialog.confirmReplace = { [weak self] url in self?.confirmReplace(url) ?? false }
+        guard let url = dialog.runSheet(on: window) else { return nil }
+        preferences.lastSaveDirectory = url.deletingLastPathComponent()
+        return url
+    }
+
+    /// What the export needs to know about this window: the editor's font and
+    /// paragraph shape, the store the chips' pictures live in, whether the
+    /// gutter is on, and — for an exporter whose answer is on screen rather
+    /// than in the note, such as a dump's rows — the pane the tab is being
+    /// read through.
+    private func exportContext(images: ExportImagePlacement) -> Exporter.Context {
+        var context = Exporter.Context(
+            font: preferences.font(),
+            paragraphStyle: preferences.paragraphStyle(),
+            assets: store.assets,
+            showsLineNumbers: preferences.showsLineNumbers,
+            images: images
+        )
+        context.previewContent = currentNote.map { previewColumn.content(for: $0) }
+        return context
     }
 
     /// No type filter: Notepad++ opens whatever you point it at, and the

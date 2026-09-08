@@ -1248,6 +1248,63 @@
   `.tsv` wears the `.csv` drawing in the strip. `Examples/Products.csv` is the demo: forty rows, quoted fields with
   commas and quotes in them, and one record written over two lines.
 
+## Export (done 2026-09-08, Todo 1 — the two PDFs Nota writes itself)
+- File › Export…, ⇧⌘E (adjustable, `ShortcutAction.export`; ⌘E is the Mac's Use Selection for Find and stays where
+  it is). Offered in every mode — editor, split, reading — since the export is about the tab and not about which
+  half of it is on screen, and greyed only when the window has no tab at all.
+- Two questions, then the file. The first is Nota's own small sheet in the shape of the Save dialog (Done 51):
+  a row `Export:` with the tab's targets in a popup, the first one selected, and — only while `Editor as PDF` is
+  the one selected — a second row `Images:` reading `Inline` or `Plates at the end`. The pictures are a question
+  the listing asks and a render does not, so the sheet grows and shrinks around that row. The answer is remembered
+  in `Preferences.exportEditorImages` and posted like every other preference. The second question is the Save
+  dialog itself, opened on the tab's own base name with the target's extension in place of the note's — a
+  `notes.md` exports as `notes.pdf` — and that extension is *not* remembered as the last save extension, since
+  exporting must not offer `pdf` the next time ⌘S asks about the note.
+- What a tab offers, in the order the popup lists them (`Exporter.targets(for:)`): every text tab — Markdown,
+  LaTeX, plain, HTML, the four tree formats, SQL, CSV, an untitled note — offers `Preview as PDF` then
+  `Editor as PDF`; an `.rtf` and a picture offer `Preview as PDF` alone, since neither has a source to list; a
+  `.tex` also offers `PDF through TeX`, a `.sql` and a `.csv` also `Table (CSV)`, a book `Book as PDF` and a
+  document `Book (EPUB)`. Those last four are somebody else's exporter, each a hook on `Exporter` standing empty
+  (`bookPDF`, `pdfToEPUB`, `csv`, `texPDF`, and `htmlPagePDF` for the page as WebKit draws it), and **a target
+  whose hook is empty is not listed at all** rather than listed and refused. A hook is handed the note, the file
+  to write and the window's own `Exporter.Context` — which carries the pane the tab is being read through, since
+  an exporter whose answer is on screen rather than in the note (a dump's rows are the query typed into the box
+  and the column a header click sorted by) has nowhere else to get it.
+- What each PDF holds. `Preview as PDF` is what the reader is looking at: for Markdown and LaTeX the same
+  `RenderedDocument` the preview shows, laid out at the page's measure so pictures wider than the column are
+  scaled down to it, with formulas and Mermaid diagrams drawing as the attachments they already are; for an
+  `.rtf` the document's own attributed string; for a picture one page with the picture fitted inside the margins
+  and nothing written under it. A `.html` uses the page hook where one is plugged in. Plain text, the tree tabs,
+  a dump, a table, a drawing and an unhooked page all fall to the **source listing** instead — a tree of rows and
+  a grid print badly as what they are, and the beautified source is the thing the reader agreed to.
+- The source listing (`Editor as PDF`, and the fallback above) is the editor's own text: its font at its size, its
+  wrapping, its tabs, and its line numbers where the gutter setting is on. The gutter is text on a printed page —
+  there is no ruler beside it — so each hard line starts with its number, right-aligned in a column of its own,
+  and the rest of the line is indented past that column so a wrapped line lines up under its first word rather
+  than under its number. The empty line after a trailing newline is numbered, exactly as the editor's gutter
+  numbers it.
+- A note's pictures, in the listing, are the reader's choice. **Inline**: the picture itself is drawn on the line
+  the token was written on, fitted to the column (and never taller than a page), so the line grows around it and
+  is still one line in the gutter. **Plates at the end**: the line keeps the same small rounded tag the editor
+  draws, now reading `[1] photo.png`, and after the last page of text come the plates — one picture per page,
+  fitted, each with `Figure 1 · photo.png · line 12` centred under it. A note with no pictures has no plates
+  either way. A picture whose asset has gone keeps the editor's own `Image 1 — missing` chip and no plate.
+- The pages themselves are `NSPrintOperation`'s, run with no print panel and no progress panel, `jobDisposition`
+  `.save` and the destination in `jobSavingURL`; the plates are drawn by hand one to a page (`knowsPageRange`)
+  and joined onto the text with PDFKit, which is also what counts the pages afterwards. Paper is whatever
+  `NSPrintInfo.shared` says the Mac is set up for — Letter or A4, by locale, and no setting of Nota's own.
+  Margins are the render's own inset (`RenderStyle.previewHorizontalInset`, 20 across and 14 down) held to at
+  least half an inch, which is where a printer's unprintable edge starts eating the text. The whole run is made
+  under the light appearance and every dynamic colour in the text is resolved to its light value first, so a
+  window in dark mode does not print white words onto white paper.
+- What was written opens in a tab of its own, through the same `open(url:)` every dropped and reopened file comes
+  in by: beside the tab it came from, selected, as whatever kind of tab the file is. A failure — nothing written,
+  a job that produced no pages — is the quiet word in the footer every other blameless failure gets, never an
+  alert and never a crash.
+- Still open (Todo 1): ⌥⌘P printing to a real printer, a book onto pages, a document into a book, a `.tex`
+  through `pdflatex` / `tectonic` / `xelatex`, the CSV writer, and an `.html` page as WebKit draws it. Each is a
+  named hook waiting to be plugged in.
+
 ## Workspace (decided 2026-09-03, refactor before the LaTeX preview)
 - The window controller has exactly one editor pane and one preview pane and talks to nothing inside them by name. The
   preview pane is a host holding one content view at a time; every content view — the Markdown render, the PDF view, the
@@ -1432,11 +1489,13 @@
 - Created-date header, git/auto-commit, theming, menu-bar icon, collapse/expand images, jk escape, app icon (for now).
 
 ## Todo (in rough priority)
-1. **Print / PDF.** ⌥⌘P prints the reading layout (⌘P is the tab switcher); Export as PDF… in File, same
-   layout, page margins from the render's inset. Plain-text tabs print the text with line numbers if the gutter is on.
-   Export a `.tex` tab as PDF via `pdflatex` / `tectonic` / `xelatex` if one is installed, showing the result in a PDF
-   tab; with none installed it prints the native render, the same as the Markdown export.
-   A PDF tab prints the PDF itself rather than a render — the open half of Done 12.
+1. **Print / PDF.** File › Export… and the two PDFs Nota writes itself — the render on pages and the source
+   listing, page margins from the render's inset, line numbers where the gutter is on — are **done** (2026-09-08,
+   see "## Export"). Still open: ⌥⌘P printing to a real printer (⌘P is the tab switcher), a `.tex` through
+   `pdflatex` / `tectonic` / `xelatex` where one is installed (with none installed the tab already exports the
+   native render, the same as the Markdown export), a book onto pages, a document into a book, a `.sql` or `.csv`
+   tab's rows as CSV, and an `.html` page as WebKit draws it. Each of those is a named hook on `Exporter` waiting
+   to be plugged in. A PDF tab prints the PDF itself rather than a render — the open half of Done 12.
 2. **Ship it, signed.** Developer ID signing and notarization in `build.sh` (ad-hoc today), so the .app opens on
    another Mac without the Gatekeeper allow-once dance (see Done 28 for the ad-hoc release itself).
 3. **Tab strip overflow chevron.** The one piece of the Chromium strip still open (Done 15-A): a chevron at the
@@ -1449,6 +1508,19 @@
    as shells and read on selection or in an idle pass.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+55. **Export as PDF (done 2026-09-08, Todo 1).** File › Export… (⇧⌘E, adjustable) on every tab in every mode:
+    a sheet asking what shape, the Save dialog asking where, and the file opening in a tab beside the one it came
+    from. Two shapes are Nota's own — the render, the document or the picture as the reader is looking at it, and
+    the editor's source listing with the gutter's numbers in it — and four more are hooks standing empty for the
+    exporters being written beside this one (`Exporter.bookPDF`, `.pdfToEPUB`, `.csv`, `.texPDF`, and
+    `.htmlPagePDF` for a page as WebKit draws it); a target whose hook is empty is not offered. The listing's
+    pictures go where the sheet's second row says, inline or as plates at the end with
+    `Figure 1 · photo.png · line 12` under each, and that answer is remembered in
+    `Preferences.exportEditorImages`. Pagination is `NSPrintOperation` run silently onto a `jobSavingURL`
+    (`PDFPaginator`), plates drawn one to a page and joined on with PDFKit, paper Letter or A4 from
+    `NSPrintInfo.shared`, margins the render's inset held to half an inch, and the whole run under the light
+    appearance with every dynamic colour resolved first, so a dark window does not print dark pages. Failures are
+    the footer's quiet word. Pinned by `ExportTests`; the behaviour is written up in "## Export".
 53. **The pills say what they are (done 2026-09-07).** All three floating pills led with an SF Symbol — a
     magnifying glass wearing a chevron, two arrows wearing another, an arrow-to-line — and each field carried a
     placeholder saying the same thing again ("Find in note", "Find in page", "Replace", "Go to line"). Each now

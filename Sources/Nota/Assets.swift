@@ -53,15 +53,9 @@ final class NotaImageAttachment: NSTextAttachment {
 
         let text = label
         renderedLabel = text
-        let attributes: [NSAttributedString.Key: Any] = [.font: font]
-        let textSize = (text as NSString).size(withAttributes: attributes)
-        let lineHeight = ceil(font.ascender - font.descender + font.leading)
 
         let previous = chipSize
-        chipSize = NSSize(
-            width: ceil(textSize.width) + Self.horizontalPadding * 2,
-            height: lineHeight
-        )
+        chipSize = Self.chipSize(for: text, font: font)
         // Sits on the baseline the way a word does.
         baselineOffset = font.descender.rounded()
         image = Self.makeChip(size: chipSize, text: text, font: font)
@@ -75,6 +69,33 @@ final class NotaImageAttachment: NSTextAttachment {
         characterIndex charIndex: Int
     ) -> CGRect {
         CGRect(origin: CGPoint(x: 0, y: baselineOffset), size: chipSize)
+    }
+
+    /// How wide and how tall a tag reading `text` stands. One measurement,
+    /// so a chip made for something other than the editor's own storage is
+    /// the same size as the editor's.
+    private static func chipSize(for text: String, font: NSFont) -> NSSize {
+        let textSize = (text as NSString).size(withAttributes: [.font: font])
+        return NSSize(
+            width: ceil(textSize.width) + horizontalPadding * 2,
+            height: ceil(font.ascender - font.descender + font.leading)
+        )
+    }
+
+    /// The same rounded tag as a plain attachment, for text that is not a
+    /// note's own storage: the export's listing wears one reading
+    /// `[1] photo.png` wherever the note has a picture (SPEC "## Export").
+    /// A plain `NSTextAttachment` rather than one of these, since it stands
+    /// for a picture that is being shown elsewhere and has no asset to
+    /// renumber or to go missing.
+    static func chipAttachment(text: String, font: NSFont) -> NSTextAttachment {
+        let size = chipSize(for: text, font: font)
+        let attachment = NSTextAttachment()
+        attachment.image = makeChip(size: size, text: text, font: font)
+        attachment.bounds = CGRect(
+            x: 0, y: font.descender.rounded(), width: size.width, height: size.height
+        )
+        return attachment
     }
 
     /// Drawn through a handler so the label and fill colours resolve at draw

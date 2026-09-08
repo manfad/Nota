@@ -300,6 +300,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || menuItem.action == #selector(saveNoteAs(_:)) {
             return activeController?.currentTabIsSavable ?? true
         }
+        if menuItem.action == #selector(exportNote(_:)) {
+            // Every tab exports as something; only an empty window has
+            // nothing to offer.
+            return activeController?.canExportCurrentTab ?? false
+        }
         if menuItem.action == #selector(revealInFinder(_:)) {
             return activeController?.currentTabHasFile ?? false
         }
@@ -316,6 +321,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func saveNoteAs(_ sender: Any?) {
         activeController?.saveCurrent(forcePanel: true)
+    }
+
+    @objc private func exportNote(_ sender: Any?) {
+        activeController?.exportCurrentTab()
     }
 
     @objc private func openNote(_ sender: Any?) {
@@ -463,6 +472,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .separator(),
             item(.save, #selector(saveNote(_:)), target: self),
             item(.saveAs, #selector(saveNoteAs(_:)), target: self),
+            item(.export, #selector(exportNote(_:)), target: self),
             .separator(),
             item("Reveal in Finder", #selector(revealInFinder(_:)), key: "r",
                  modifiers: [.command, .option], target: self),
