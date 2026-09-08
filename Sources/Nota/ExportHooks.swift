@@ -95,14 +95,19 @@ extension Exporter {
         }
 
         htmlPagePDF = { note, url, _, completion in
-            // A saved page prints from its file, so its stylesheet and its
-            // pictures resolve the way they do on screen; an untitled one has
-            // no folder to resolve anything against, so it prints the text
-            // the editor holds and stands alone.
-            if let fileURL = note.fileURL {
+            // The export is what the preview shows, and the preview shows the
+            // buffer: a saved page with no edits prints from its file, a page
+            // with unsaved edits prints the editor's text against the file's
+            // own folder, so its stylesheet and its pictures still resolve the
+            // way they do on screen. An untitled one has no folder to resolve
+            // anything against, so it prints the text and stands alone.
+            if let fileURL = note.fileURL, !note.isDirty {
                 WebPDF.export(pageAt: fileURL, to: url, completion: completion)
             } else {
-                WebPDF.export(html: note.text, baseURL: nil, to: url, completion: completion)
+                WebPDF.export(
+                    html: note.text, baseURL: note.fileURL,
+                    to: url, completion: completion
+                )
             }
         }
     }
