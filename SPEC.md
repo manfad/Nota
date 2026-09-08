@@ -941,8 +941,52 @@
 - The render and the pane are the Markdown ones: `RenderStyle` holds the look both wear — heading scales, list indents,
   quote bar, code box, table, rule — and `RenderedPreviewView` holds everything a rendered pane does, so each renderer is
   a subclass that says which grammar it reads and nothing else.
-- Export as PDF… on a `.tex` tab is a Todo (see Todo 1).
+- Export as PDF… on a `.tex` tab typesets it with a real TeX where the Mac has one — the section below. The menu
+  item and the sheet that drive it are Todo 1.
 - Out for now: `\input` `\include`, theorem environments, `\newcommand` expansion, bibliographies from `.bib`.
+
+### Export as PDF via TeX (decided 2026-09-08; the engine half of Todo 1)
+- The render on screen is Nota's reading layout of a document; this is TeX's own pixels, for the times the reader
+  wants the paper itself. Nota looks for `tectonic`, then `pdflatex`, then `xelatex`, in its own
+  `~/Library/Application Support/Nota/bin`, then `$PATH`, then `/Library/TeX/texbin`, `/opt/homebrew/bin` and
+  `/usr/local/bin` — a double-clicked `.app` gets the bare launchd `PATH`, so the fixed three are not a nicety but
+  usually the only ones that hit. The kind is the outer loop: a Tectonic anywhere beats a pdflatex anywhere, since it
+  is the one Nota can install and the one that fetches the packages a document asks for instead of failing on them.
+  Nothing is remembered — a TeX comes and goes with one Homebrew command, and four `access(2)` calls are cheaper than
+  a stale preference.
+- With no TeX at all, one alert: "Export as PDF with LaTeX needs a TeX engine.", and three buttons — Install Tectonic,
+  Use Nota's render, Cancel. Tectonic is one binary of about 30 MB that fetches its own `.sty` files, so it is the only
+  TeX that can be *installed* rather than distributed; MacTeX is a 5 GB package and a privileged installer, which is
+  not something an editor puts on anybody's Mac. It goes into Nota's own folder and nowhere near `/usr/local`, so
+  deleting that folder undoes it. "Use Nota's render" is not a failure and neither is Cancel: each comes back as its
+  own error, and the caller falls back to the native render or leaves the tab alone.
+- The install: the `tectonic-typesetting/tectonic` latest release from GitHub, the `.tar.gz` whose name carries this
+  Mac's triple — `aarch64-apple-darwin` or `x86_64-apple-darwin`, read from the hardware, so an Intel slice under
+  Rosetta still gets the Apple silicon build. Checked against the release's own `SHA256SUMS` where it publishes one
+  and against GitHub's byte count where it does not; the byte count is best effort, and catches the truncated or
+  redirected download rather than the tampered one. Then `/usr/bin/tar -xzf` into a scratch directory (a release
+  tarball may carry a README beside the binary, and only the binary belongs in a directory Nota searches), the binary
+  moved into Nota's bin, `chmod 755`, `com.apple.quarantine` stripped — a quarantined command line tool is refused
+  with no dialogue to allow it — and `tectonic --version` run once as the proof. A build that will not run is deleted
+  rather than left for the reader to find at the next export. The transport is a closure, exactly as the update
+  check's is, so no test here reaches GitHub.
+- Compiling: the source — the buffer's text, saved or not — is written into a temp directory, and everything sitting
+  beside the original `.tex` is copied in next to it, so `\input`, `\includegraphics` and a `.bib` all resolve. The
+  other way round, the file's own folder as the working directory with `-output-directory` pointing at the temp, was
+  dropped: pdflatex resolves those names against the working directory but Tectonic anchors them on the input file's
+  own directory, and only the copy makes all three engines read the same names. It also means an unsaved buffer
+  compiles exactly like a saved one, and that nothing — no `.aux`, no `.log`, no `.pdf` — is ever written into the
+  reader's folder. The copy skips hidden files and stops at 256 MB: a `.tex` sits in a document folder, but the reader
+  is not obliged to keep it that way.
+- `tectonic -X compile --outdir …` from 0.7 on and `tectonic --outdir …` before it, the version read off
+  `tectonic --version`; `-interaction=nonstopmode -halt-on-error -output-directory …` for pdflatex and xelatex, run a
+  second time when the log asks for one (`Rerun to get cross-references right`) — Tectonic decides for itself how many
+  passes a document needs. 120 seconds, generous because a first Tectonic run downloads its package files, and then
+  the process is killed. The job runs under a plain name: TeX's own file-name parsing stops at a space, so anything
+  else is hyphenated and an untitled tab is `document`.
+- A failure is one sentence and not a log: the first `! ` line and the `l.N` line after it, which is the only part of
+  400 lines a reader who is not going to read the log wants — "LaTeX error on line 12: Undefined control sequence."
+  No menu item, no save panel and no PDF tab live here; File › Export… owns those.
 
 ## HTML preview (decided 2026-09-03)
 - A `.html` (`.htm`) file is a tab with a preview beside it, the way a `.md` is: the same three modes, the same

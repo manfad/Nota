@@ -31,6 +31,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | Markdown render look | `MarkdownRenderer.swift`, `RenderStyle.swift`; maths `MarkdownMath.swift` |
 | A ```` ```mermaid ```` fence's diagram | `Mermaid.swift` (which grammar, and the one door), `MermaidFlowchart.swift` / `MermaidSequence.swift` (a grammar each: parser, layout, drawing), `MermaidAttachment.swift` (the block it becomes); the fence is lifted out of the source in `MarkdownMath.swift` |
 | LaTeX render | `LaTeXParser.swift` → `LaTeXRenderer.swift`; formulas `MathParser.swift` + `MathLayout.swift` |
+| Exporting a `.tex` through a real TeX (finding one, installing Tectonic, compiling) | `TeXEngine.swift`, `TectonicInstaller.swift`, the prompt and the one call `TeXExport.swift` |
 | Preview column plumbing (which view shows, zoom, scroll memory) | `PreviewPaneView.swift`, `PreviewContent.swift`, `RenderedPreviewView.swift` |
 | PDF / picture / HTML / EPUB / RTF viewer tabs | `PDFPreviewView.swift`, `ImagePreviewView.swift`, `HTMLPreviewView.swift`, `EPUBPreviewView.swift` + `EPUBBook.swift`, `RTFPreviewView.swift` |
 | Converting between the things Nota reads: a book or a page printed as a PDF, a PDF read back as a book | `WebPDF.swift` (WebKit's print operation, headless), `EPUBToPDF.swift` (chapters printed and bound), `PDFToEPUB.swift` (a text layer reflowed into EPUB 3) |
@@ -230,6 +231,18 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   image drawn through a handler so the palette resolves at draw time, scaled down when the diagram is wider than
   the column.
 - `LaTeXParser.swift` (~1360) — `.tex` → blocks. `LaTeXRenderer.swift` (~480) — blocks → attributed string.
+- `TeXEngine.swift` (~385) — a real TeX found and run: `TeXEngineKind` (tectonic, pdflatex, xelatex), the search
+  order and the paths (Nota's own bin, `$PATH`, the three fixed), `arguments(for:tectonicVersion:…)` for both Tectonic
+  command lines and the two TeX Live ones, `compile` (the source and its folder copied into a temp directory, the
+  second pass a log asks for, a 120 s limit), `firstError(inLog:)` / `failureMessage(inLog:)` — the `! ` line and its
+  `l.N` — and `TeXExportError`. Foundation only; the search paths and the file check are injectable.
+- `TectonicInstaller.swift` (~305) — Nota's own copy of a TeX for a Mac with none: the release's assets, the build for
+  this machine (`hw.machine` with `sysctl.proc_translated` over it), `SHA256SUMS` or the byte count, `/usr/bin/tar`
+  into a scratch directory, the binary into `~/Library/Application Support/Nota/bin`, `chmod`, the quarantine
+  attribute, and `tectonic --version` as the proof. The transport is a closure, as `UpdateCheck`'s is.
+- `TeXExport.swift` (~130) — the one call File › Export… makes: `TeXInstallChoice`, `TeXInstallPrompting` and the
+  `NSAlert` that asks, and `export(source:sourceURL:to:presenter:progress:completion:)` — detect, prompt, install,
+  compile — with the three seams (`Seams`) the tests replace. No menu item and no panel.
 - `HTMLPreviewView.swift` (~900) — WebKit page under `nota-file://`, scroll memory (pixels and fraction),
   `showPage(ofTab:at:…)` for EPUB chapters, chapter-key script, the element-press script (`elementReporter`, which
   reports the pressed element's place in document order and the tag names up to it) with the `HTMLSourceMap` built
@@ -454,6 +467,11 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   fewer rows than its table), `CSVTable.exportRows` (`Examples/Products.csv` round-tripped, a `.tsv` fixture
   exporting comma-separated), and the button itself — its place before the pager, and a click through the stubbed
   `exportDestination` seam writing the file.
+- `TeXEngineTests.swift` (40) — the TeX export: the search order and paths, the four command lines, the log's `! ` and
+  `l.N` lines, the folder copied in beside the source, the build picked per Mac (Rosetta included), the sha256 and the
+  byte count passing and failing on a tarball the test makes, unpack/chmod/version on that fake binary in a temp bin,
+  the install end to end over a fake network, and the export's three answers to a fake prompt. The one test that runs
+  a real TeX skips where the Mac has none.
 - `MermaidFlowchartTests.swift` (35) — the flowchart engine: every node shape and edge form, chains and fans,
   subgraphs and nesting, comments and semicolons, the directives that are ignored, junk and a fuzz run that refuses
   without falling over; then the layout (frames that do not overlap, the direction each way round, an edge that
