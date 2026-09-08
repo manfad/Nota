@@ -93,6 +93,17 @@ enum Exporter {
         /// clicked, and neither is on the note. Handed in by the window, so
         /// with two windows open each export is that window's own.
         var previewContent: (any PreviewContent)?
+        /// The window the export was started from, for an exporter that has
+        /// a question to ask before it can work — the only one today is the
+        /// TeX export, whose install prompt is a sheet on this window. `nil`
+        /// in a test, where the prompt is a fake and no sheet is raised.
+        var window: NSWindow?
+        /// What a long export says while it is running: a book's chapters
+        /// going by, a download's megabytes, "Typesetting…". The window puts
+        /// each line in the footer and clears it when the export finishes.
+        /// Called on the main thread. The two PDFs Nota writes itself never
+        /// say anything — they are done before a footer could be read.
+        var progress: (String) -> Void = { _ in }
     }
 
     enum Failure: Error {
@@ -111,7 +122,17 @@ enum Exporter {
     /// file to write, and everything the window knows about how the tab is
     /// being read — including the pane in front of it, for an exporter whose
     /// answer is on screen rather than in the note.
-    typealias Hook = (Note, URL, Context) throws -> Void
+    ///
+    /// Asynchronous, because three of the five are: a page and a book go
+    /// through WebKit, and a `.tex` may have a download and a prompt in front
+    /// of it. None of them can be waited on with a semaphore either — WebKit
+    /// wants the main run loop, and a semaphore held on the main thread is
+    /// exactly the deadlock that would take it away. So the seam is a
+    /// completion the whole way down, and the two PDFs Nota writes itself
+    /// call it before they return.
+    ///
+    /// The completion arrives on the main thread.
+    typealias Hook = (Note, URL, Context, @escaping (Result<Void, Error>) -> Void) -> Void
 
     /// A book onto pages. `EPUBBook` already has the chapters; laying them
     /// out is the other half.
@@ -190,20 +211,47 @@ enum Exporter {
 
     // MARK: - Making the file
 
+    /// Writes `target` for `note` into `url` and answers on the main thread.
+    ///
+    /// One shape for all six, however long each takes: the two Nota writes
+    /// itself answer before the call returns, and the four that are hooks
+    /// answer whenever their own work is done.
     static func export(
-        _ note: Note, to target: ExportTarget, at url: URL, context: Context
-    ) throws {
+        _ note: Note, to target: ExportTarget, at url: URL, context: Context,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
         switch target {
-        case .previewPDF: try writePreviewPDF(note, to: url, context: context)
-        case .editorPDF: try writeListingPDF(note, to: url, context: context)
+        case .previewPDF: writePreviewPDF(note, to: url, context: context, completion: completion)
+        case .editorPDF: completion(Result { try writeListingPDF(note, to: url, context: context) })
         case .bookPDF, .epub, .csv, .texPDF:
-            guard let hook = hook(for: target) else { throw Failure.noExporter(target) }
-            try hook(note, url, context)
+            guard let hook = hook(for: target) else {
+                completion(.failure(Failure.noExporter(target)))
+                return
+            }
+            hook(note, url, context, completion)
         }
     }
 
     /// The reader's own view of the tab, on pages.
+    ///
+    /// One case of it is asynchronous — an `.html` tab with the page exporter
+    /// plugged in goes through WebKit — so the whole of it answers through a
+    /// completion, and everything else answers before the call returns.
     private static func writePreviewPDF(
+        _ note: Note, to url: URL, context: Context,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        // The page as WebKit draws it where that exporter is plugged in; the
+        // source listing where it is not, which is what the tab's other half
+        // shows anyway.
+        if note.kind == .text, note.previewKind == .html, let hook = htmlPagePDF {
+            hook(note, url, context, completion)
+            return
+        }
+        completion(Result { try writePreviewPDFSynchronously(note, to: url, context: context) })
+    }
+
+    private static func writePreviewPDFSynchronously(
         _ note: Note, to url: URL, context: Context
     ) throws {
         switch note.kind {
@@ -236,14 +284,9 @@ enum Exporter {
                     to: url
                 )
             case .html:
-                // The page as WebKit draws it where that exporter is plugged
-                // in; the source listing where it is not, which is what the
-                // tab's other half shows anyway.
-                if let hook = htmlPagePDF {
-                    try hook(note, url, context)
-                } else {
-                    try writeListingPDF(note, to: url, context: context)
-                }
+                // Only reached with no page exporter plugged in — the hook
+                // was taken above — so the source listing stands in.
+                try writeListingPDF(note, to: url, context: context)
             default:
                 // A tree, a grid and a drawing all print badly as what they
                 // are — a table of rows is not a page — and the beautified

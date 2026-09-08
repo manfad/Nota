@@ -366,6 +366,81 @@ final class CSVExportTests: XCTestCase {
         XCTAssertEqual(askedName, "rows.csv")
     }
 
+    // MARK: - The button and the sheet agree
+
+    /// The pane's own Export button and File › Export… → Table (CSV) are two
+    /// doors onto one exporter, so they must write the same bytes — including
+    /// the sort a header click put on the grid and the query in the box,
+    /// neither of which is anywhere but on the pane.
+    @MainActor
+    func testTheSQLPaneButtonAndTheExportSheetWriteTheSameFile() throws {
+        Exporter.installDefaultHooks()
+        let (pane, _) = try makeSQLPane()
+        let note = try exampleSQLNote("Shop.sql")
+        try showSQL(note, in: pane)
+        try settleSQL(pane) {
+            pane.setQueryForTesting("SELECT name, city FROM customers ORDER BY name DESC")
+        }
+
+        let directory = try makeTemporaryDirectory()
+        let fromButton = directory.appendingPathComponent("button.csv")
+        pane.exportDestination = { _ in fromButton }
+        pane.pressExportForTesting()
+
+        let fromSheet = directory.appendingPathComponent("sheet.csv")
+        try exportThroughTheSheet(note, pane: pane, to: fromSheet)
+
+        XCTAssertEqual(try Data(contentsOf: fromButton), try Data(contentsOf: fromSheet),
+                       "the same query, the same rows, the same bytes")
+        XCTAssertFalse(try String(contentsOf: fromSheet, encoding: .utf8).isEmpty)
+        XCTAssertEqual(pane.defaultExportName(), "Shop-query.csv",
+                       "and the sheet opens on the name the button would have used")
+    }
+
+    /// The same, for a `.csv` tab: the table pane's button and the sheet.
+    @MainActor
+    func testTheCSVPaneButtonAndTheExportSheetWriteTheSameFile() throws {
+        Exporter.installDefaultHooks()
+        let (pane, _) = try makeCSVPane()
+        let note = makeCSVNote(named: "Products.csv", text: try exampleText("Products.csv"))
+        try showCSV(note, in: pane)
+
+        let directory = try makeTemporaryDirectory()
+        let fromButton = directory.appendingPathComponent("button.csv")
+        pane.exportDestination = { _ in fromButton }
+        pane.pressExportForTesting()
+
+        let fromSheet = directory.appendingPathComponent("sheet.csv")
+        try exportThroughTheSheet(note, pane: pane, to: fromSheet)
+
+        XCTAssertEqual(try Data(contentsOf: fromButton), try Data(contentsOf: fromSheet))
+    }
+
+    /// What File › Export… does once the reader has picked Table (CSV) and a
+    /// destination: `Exporter.export` with the pane in front of the tab.
+    @MainActor
+    private func exportThroughTheSheet(
+        _ note: Note, pane: any PreviewContent, to url: URL
+    ) throws {
+        var context = Exporter.Context(
+            font: .monospacedSystemFont(ofSize: 11, weight: .regular),
+            paragraphStyle: NSParagraphStyle.default,
+            assets: nil,
+            showsLineNumbers: false,
+            images: .inline
+        )
+        context.previewContent = pane
+
+        let finished = expectation(description: "export finished")
+        var outcome: Result<Void, Error>?
+        Exporter.export(note, to: .csv, at: url, context: context) { result in
+            outcome = result
+            finished.fulfill()
+        }
+        wait(for: [finished], timeout: 30)
+        try XCTUnwrap(outcome, "the export never answered").get()
+    }
+
     // MARK: - SQL pane helpers
 
     @MainActor

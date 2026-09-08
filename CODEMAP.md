@@ -18,7 +18,8 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | A menu item, its key, or app launch / windows / summon | `AppDelegate.swift`, keys in `Shortcuts.swift` |
 | Anything in the main window: footer, split, modes, tabs, opening files, saving | `MainWindowController.swift` (see its sections below) |
 | The Save dialog: its rows, its Format popup, or the extensions it offers | `SaveDialog.swift` (the dialog itself), `SaveNameComposer.swift` (pure logic), `MainWindowController.presentSavePanel` (which puts it up) |
-| File › Export…: what a tab can be exported to, the sheet that asks, the pages themselves | `Export.swift` (the targets and the hooks other exporters plug into), `ExportDialog.swift` (the sheet), `PDFPaginator.swift` (text and plates onto pages), `MainWindowController` "Export" |
+| File › Export…: what a tab can be exported to, the sheet that asks, the pages themselves | `Export.swift` (the targets and the hooks other exporters plug into), `ExportHooks.swift` (the five exporters plugged in, one call), `ExportDialog.swift` (the sheet), `PDFPaginator.swift` (text and plates onto pages), `MainWindowController` "Export" |
+| File › Print… (⌥⌘P): the PDF the tab's first target makes, handed to the system dialog | `MainWindowController` "Print" (`canPrintCurrentTab`, `printCurrentTab`, `printOperationRunner`), the key in `Shortcuts.swift` (`ShortcutAction.printTab`) |
 | The tab strip (drawing, drag, close, +, tear-off) | `TabBarView.swift`, geometry in `TabStripLayout.swift` |
 | ⇧⌘J switcher, `@` headings (text notes only), bookmarks dialog, ⇧⌘F search dialog, hover/arrow selection | `TabPickerPanel.swift` (also `refocusIfShowing`: the caret back in the field when Nota returns from another app or space), ranking in `FuzzyMatch.swift` |
 | Settings window (live apply, no Save; sidebar pages) | `SettingsWindowController.swift`, values in `Preferences.swift` |
@@ -37,7 +38,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | Converting between the things Nota reads: a book or a page printed as a PDF, a PDF read back as a book | `WebPDF.swift` (WebKit's print operation, headless), `EPUBToPDF.swift` (chapters printed and bound), `PDFToEPUB.swift` (a text layer reflowed into EPUB 3) |
 | A `.sql` dump's grid: running it, paging it, sorting it, picking cells out of it, ⌘F over it | `SQLPreviewView.swift` (the pane), `SQLGridView.swift` (the grid, its header and its cells), `SQLQueryBox.swift` (the query editor), `SQLDump.swift` (the database), `SQLDumpDialect.swift` (a MySQL or Postgres dump made SQLite's), `SQLSourceMap.swift` (which line of the file a row was written on, and where in it a cell's own value is), `SQLQueryRewrite.swift` (the rowid spliced into a query so its rows point at the file too), `GridFindSession.swift` (⌘F over the grid; `SQLDump.hits` is the one statement that answers it) |
 | A `.csv` / `.tsv` file's grid: reading it, paging it, sorting it, ⌘F over it | `CSVPreviewView.swift` (the pane, over `SQLGridView`), `CSVTable.swift` (the RFC 4180 reader, `ordering` — the order the grid and its ⌘F walk — and where each record and each field of it is written) |
-| The Export button on a `.sql` or `.csv` grid, or the CSV a table writes out | `CSVWriter.swift` (the RFC 4180 writer, in-memory and streaming), `SQLDump.forEachRow` / `CSVTable.exportRows` (every row, in the grid's sort order, no page cut out of it), `SQLPreviewView.exportCSV(to:)` / `CSVPreviewView.exportCSV(to:)` (the plain functions behind the button), `MainWindowController.presentExportPanel` / `exportPanelProvider` (the destination, pinned to `csv`) |
+| The Export button on a `.sql` or `.csv` grid, or the CSV a table writes out | `CSVWriter.swift` (the RFC 4180 writer, in-memory and streaming), `SQLDump.forEachRow` / `CSVTable.exportRows` (every row, in the grid's sort order, no page cut out of it), `SQLPreviewView.exportCSV(to:)` / `CSVPreviewView.exportCSV(to:)` (the plain functions behind the button), `MainWindowController.runExportSavePanel(suggestedName:extension:existingFileURL:)` / `exportPanelProvider` (the destination, Nota's own `SaveDialog` with the extension pinned — one door for the buttons and for File › Export…) |
 | ⌘F find bar and its match bands (incl. dark-mode colours) | `FindBar.swift` (chrome), `FindSession.swift` (editor; the fallback every column hands an unwanted Find item back to is `MainWindowController.performTextFinderAction`), `HTMLFindSession.swift` (`find(_:)` puts a ⇧⌘F hit's query to the page), `PDFFindSession.swift` (`reveal(_:for:)` lands on a ⇧⌘F hit), `TreeFindSession.swift` (a tree preview's rows), `GridFindSession.swift` (a `.csv` or `.sql` grid) |
 | ⌘J go to line | `GoToLine.swift`, line table `LineIndex.swift` |
 | Floating pill chrome shared by find / go-to-line / external-change / the format offer | `Pill.swift`, `ExternalChangePill.swift`, `FormatOfferPill.swift` |
@@ -74,7 +75,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 - `AppDelegate.swift` (~500) — menu bar (`buildMenu`, rebuilt on language or shortcut change), launch, theme apply, summon, window registry, `application(_:open:)`.
 - `WindowRegistry.swift` (~210) — every open window, which is in front, where closing tabs go.
 - `Preferences.swift` (~570) — every setting (`UserDefaults` + `Preferences.didChange`), enums `EditorFontFamily`, `LineSpacingOption`, `SidebarSide`, `PlainTextImageStyle`, `EditorPaddingOption`, `AppLanguage`, `AppTheme`; `shortcuts` table, `hotKey`; window chrome (`hidesTabBar`, `autoHidesTabBar`, `hidesTrafficLights`, `hidesBookmarkToggleButton`, `hidesBookmarkButton` — the older key, which means the *dialog* button, `hidesSettingsButton`); `highlightsCurrentLine` (the cursorline band, default off).
-- `Shortcuts.swift` (~200) — `KeyCombo`, `ShortcutAction` (every adjustable menu key, defaults, groups, reserved combos), `NSMenuItem.applyShortcut`. ⌘D bookmarks the tab, ⇧⌘D shows the bookmarks; Jump to Tab… ⇧⌘J, Mode Toggle ⌘P, Reading Mode ⇧⌘P, Find and Replace ⌘R (fixed); duplicating a line is ⇧⌥↓ only. Export… is ⇧⌘E (⌘E stays the Mac's Use Selection for Find).
+- `Shortcuts.swift` (~200) — `KeyCombo`, `ShortcutAction` (every adjustable menu key, defaults, groups, reserved combos), `NSMenuItem.applyShortcut`. ⌘D bookmarks the tab, ⇧⌘D shows the bookmarks; Jump to Tab… ⇧⌘J, Mode Toggle ⌘P, Reading Mode ⇧⌘P, Find and Replace ⌘R (fixed); duplicating a line is ⇧⌥↓ only. Export… is ⇧⌘E (⌘E stays the Mac's Use Selection for Find) and Print… is ⌥⌘P (⌘P is the mode toggle).
 - `LaunchTiming.swift` (~80) — where a launch's time goes: `mark(_:)` at each phase from `main` to the window becoming key, printed to stderr a second after launch when the binary runs with `NOTA_LAUNCH_TIMING=1` (the binary itself, not `open`, which drops the environment); the first line is the kernel's exec time, so dyld and the runtime show as the gap to `main`. A `Bool` read and nothing else without the variable.
 - `Version.swift` — `AppVersion.current`; bumped with `Info.plist` by `.githooks/pre-commit` on every commit (`git config core.hooksPath .githooks`).
 - `UpdateCheck.swift` (~190) — the About page's "Check for Updates": one anonymous request to GitHub's `releases/latest`, `Release` (tag without its `v`, page URL, name, date), `compare` over dotted integers, `Result` / `Reason` (offline, rate-limited, another status, unreadable, a tag that is not a version), and `installedWithHomebrew` — a `/Caskroom/` in the bundle path, or a `Caskroom/nota` under a Homebrew prefix. The transport is a closure, so no test reaches the network.
@@ -85,7 +86,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 
 ### Main window
 - `MainWindowController.swift` (~5500) — the whole window. Sections by `MARK`:
-  Setup (358) · The format offer (824, the debounce, `runFormatDetection()` and who is offered anything at all) · Text attributes (1229) · Auto-hidden tab strip (1539) · Session restore (1662) · Tabs (1817) · The format badge (1966, the badge's menu and `setFormat` — the one path a tab's format ever changes by, which a Save As under a new name shares) · Encoding and line endings (2035) · Vim footer (2290) · Files (2654, open/save/close, sniff → viewer kinds) · External changes (3004) · Persistence (3155) · Font size and zoom (3263) · Menu actions (3346) · Zen mode (3448) · Tab picker (3926, `@` headings, text notes only) · Markdown preview (4036, modes, split, footer status of viewers; the sidebar side is recorded when the split is built) · The action in the corner (4531, the corner slot's segments and what a click on a tree, cell or block selects) · Images and book contents: chips and sidebar (4841) · Search across tabs (5090, `beginSearchAllNotes` opens the picker in `.search` over every tab's `searchSource`; `reveal` takes a hit to where it lives — the editor's selection, the document's page, the book's chapter) · Delegates / Vim's window (5141) · Background (5468) · Quick Look (5481).
+  Setup (358) · The format offer (824, the debounce, `runFormatDetection()` and who is offered anything at all) · Text attributes (1229) · Auto-hidden tab strip (1539) · Session restore (1662) · Tabs (1817) · The format badge (1966, the badge's menu and `setFormat` — the one path a tab's format ever changes by, which a Save As under a new name shares) · Encoding and line endings (2035) · Vim footer (2290) · Files (2654, open/save/close, sniff → viewer kinds) · Export (the sheet, the one export dialog behind File › Export… and both grids' buttons, `isExporting`, the footer's running commentary) · Print (⌥⌘P: the tab's first target into a temp PDF, then `PDFDocument.printOperation` as a sheet; a PDF tab prints itself) · External changes (3004) · Persistence (3155) · Font size and zoom (3263) · Menu actions (3346) · Zen mode (3448) · Tab picker (3926, `@` headings, text notes only) · Markdown preview (4036, modes, split, footer status of viewers; the sidebar side is recorded when the split is built) · The action in the corner (4531, the corner slot's segments and what a click on a tree, cell or block selects) · Images and book contents: chips and sidebar (4841) · Search across tabs (5090, `beginSearchAllNotes` opens the picker in `.search` over every tab's `searchSource`; `reveal` takes a hit to where it lives — the editor's selection, the document's page, the book's chapter) · Delegates / Vim's window (5141) · Background (5468) · Quick Look (5481).
   Also here: `DocumentSplitViewController` + `DocumentSplitView` (the editor/preview split; the divider is not drawn outside split mode), `VimCommandPane`, `DragRegionView`, `BackgroundView`.
   Footer regions: `statusLabel` (counts, `updateCountsLabel` / `availableCountsWidth`), `footerTrailingStack` (format · encoding · line ending · cursor — the format badge is the one that gives way in a narrow window, so four badges never put a floor under the window itself), `modeBadge` (vim).
 - `TabBarView.swift` (~1650) — the strip: `TabBarItem`, `TabItemView` (icon, dot, ✕, bookmark badge), drag/reorder, tear-off, + button, the three trailing buttons (`BookmarkToggleButton` — ⌘D on the front tab, filled once it is bookmarked, greyed with no file; `BookmarksButton` — the ⇧⌘D picker, `book.closed`; `SettingsButton`), context menu.
@@ -141,9 +142,17 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   writes itself (the render, the document or the picture as shown; the editor's source listing, with its
   gutter's numbers and its pictures inline or as plates), and the empty hooks the other exporters plug into
   (`bookPDF`, `pdfToEPUB`, `csv`, `texPDF`, and `htmlPagePDF` for a page as WebKit draws it — a target whose
-  hook is nil is never listed). A hook is `(Note, URL, Context)`, and the context carries the live pane for an
-  exporter whose answer is on screen rather than in the note. `ExportImagePlacement` is the sheet's second row
-  and `Preferences.exportEditorImages`.
+  hook is nil is never listed). A hook is `(Note, URL, Context, @escaping (Result<Void, Error>) -> Void)`:
+  asynchronous throughout, since three of the five go through WebKit or a download and none may be waited on
+  with a semaphore. The context carries the live pane for an exporter whose answer is on screen rather than in
+  the note, the window a prompt would be a sheet on, and the `progress` closure a long export talks to the
+  footer through. `ExportImagePlacement` is the sheet's second row and `Preferences.exportEditorImages`.
+- `ExportHooks.swift` (~110) — the one place the five exporters are introduced to `Exporter`:
+  `installDefaultHooks()`, called by `AppDelegate` at launch and by the tests that need those targets listed.
+  A book through `EPUBToPDF`, a document through `PDFToEPUB`, a grid through the pane's own `exportCSV(to:)`,
+  a `.tex` through `TeXExport` (falling back to the `.previewPDF` render at the same destination on
+  `useNativeRender`, and passing `.cancelled` through untouched), a page through `WebPDF`. `texInstallPresenter`
+  and `texSeams` are the seams a test replaces so no alert is raised and no engine is looked for.
 - `ExportDialog.swift` (~280) — the export sheet: `SaveDialog`'s form with one row of targets and, only while
   `Editor as PDF` is selected, a second row of `Inline` / `Plates at the end`; run the same synchronous way,
   and it hands back an `ExportChoice`. `MainWindowController.exportSheetProvider` is the seam a test answers
@@ -240,7 +249,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   this machine (`hw.machine` with `sysctl.proc_translated` over it), `SHA256SUMS` or the byte count, `/usr/bin/tar`
   into a scratch directory, the binary into `~/Library/Application Support/Nota/bin`, `chmod`, the quarantine
   attribute, and `tectonic --version` as the proof. The transport is a closure, as `UpdateCheck`'s is.
-- `TeXExport.swift` (~130) — the one call File › Export… makes: `TeXInstallChoice`, `TeXInstallPrompting` and the
+- `TeXExport.swift` (~130) — the one call `ExportHooks`'s `texPDF` makes: `TeXInstallChoice`, `TeXInstallPrompting` and the
   `NSAlert` that asks, and `export(source:sourceURL:to:presenter:progress:completion:)` — detect, prompt, install,
   compile — with the three seams (`Seams`) the tests replace. No menu item and no panel.
 - `HTMLPreviewView.swift` (~900) — WebKit page under `nota-file://`, scroll memory (pixels and fraction),
@@ -466,7 +475,9 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   / `Examples/sql/PostgreSQL.sql` (row count, header, sort order, a table past `SQLDump.pageSize`, a query with
   fewer rows than its table), `CSVTable.exportRows` (`Examples/Products.csv` round-tripped, a `.tsv` fixture
   exporting comma-separated), and the button itself — its place before the pager, and a click through the stubbed
-  `exportDestination` seam writing the file.
+  `exportDestination` seam writing the file. Last, the two doors agreeing: the pane's button and
+  `Exporter.export(…, to: .csv, …)` over the same pane write byte-for-byte the same file, query and sort
+  included, and the sheet opens on the name the button would have used.
 - `TeXEngineTests.swift` (40) — the TeX export: the search order and paths, the four command lines, the log's `! ` and
   `l.N` lines, the folder copied in beside the source, the build picked per Mac (Rosetta included), the sha256 and the
   byte count passing and failing on a tarball the test makes, unpack/chmod/version on that fake binary in a temp bin,
@@ -513,11 +524,17 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   the URL composed from the name and the popup (and from a name spelling its own extension), Save unavailable on a
   blank name, the replace question asked once and not asked when the file is the note's own, and a language change
   relabelling it where it stands, and `Other…` / `None` reaching past the list.
-- `ExportTests.swift` (13) — File › Export…: the targets each kind offers and the hook a target waits on, a
-  Markdown note's heading on its first page, a long note over more than one page, the listing's line numbers
-  with the gutter on and off, plates after the last page of text against the same pictures inline, an `.rtf`
-  and a picture (one page, exactly), the sheet's Images row showing only for the listing, and the whole path
-  through the window — sheet and Save dialog answered through their seams — opening the written PDF in a tab.
+- `ExportTests.swift` (21) — File › Export… and File › Print…: the targets each kind offers with every hook
+  installed and the same list shrinking when a hook is taken out, a Markdown note's heading on its first page, a
+  long note over more than one page, the listing's line numbers with the gutter on and off, plates after the
+  last page of text against the same pictures inline, an `.rtf` and a picture (one page, exactly), the sheet's
+  Images row showing only for the listing, and the whole path through the window — sheet and export dialog
+  answered through their seams — opening the written PDF in a tab. Then one end to end of every hook over the
+  real files in `Examples/`: `Book.epub` onto pages, `Demo.pdf` into a book Nota can reopen, `HTML.html` as
+  WebKit draws it (no tags on the page), and a `.tex` with a fake prompt answering "use Nota's render" landing
+  the native render at TeX's own destination — and Cancel landing nothing at all. Print: the item enabled where
+  the tab makes a PDF, a note's dialog built over exactly the pages the export would have written, and a
+  document printing its own, all through `printOperationRunner` so no panel appears.
 - `TabHoverTests.swift` (3) — the strip's three greys: selected fill, the pointer's wash on an unselected tab, nothing at rest.
 - `WindowChromeTests.swift` (11) — Settings › Tab bar: the strip, the traffic lights and the strip's three trailing buttons each switched off and back.
 - `BookmarksTests.swift` (also the ⇧⌘J picker tests), `OpenRecentTests.swift`, `ShortcutsTests.swift`, `MultiWindowTests.swift`, `ExternalChangeTests.swift`, `ZoomTests.swift`, `TabStripLayoutTests.swift`, `DropOnStripTests.swift`, `SidecarTests.swift`, `BigFileTests.swift`, `NoteBigFileTests.swift`, `SpellCheckPolicyTests.swift`.

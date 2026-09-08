@@ -61,7 +61,8 @@ struct KeyCombo: Hashable, Codable {
 /// and moving one would only make the app read as broken. They come back below
 /// as `reservedCombos`, which nothing else is allowed to take.
 enum ShortcutAction: String, CaseIterable, Codable {
-    case newTab, newWindow, openFile, closeTab, save, saveAs, export, bookmarkTab, showBookmarks
+    case newTab, newWindow, openFile, closeTab, save, saveAs, export, printTab
+    case bookmarkTab, showBookmarks
     case goToTab, nextTab, previousTab
     case find, findNext, findPrevious, searchAllNotes, goToLine
     case toggleComment, indent, outdent
@@ -85,8 +86,8 @@ enum ShortcutAction: String, CaseIterable, Codable {
 
     var group: Group {
         switch self {
-        case .newTab, .newWindow, .openFile, .closeTab, .save, .saveAs, .export, .bookmarkTab,
-             .showBookmarks: .file
+        case .newTab, .newWindow, .openFile, .closeTab, .save, .saveAs, .export, .printTab,
+             .bookmarkTab, .showBookmarks: .file
         case .goToTab, .nextTab, .previousTab: .window
         case .find, .findNext, .findPrevious, .searchAllNotes, .goToLine: .find
         case .toggleComment, .indent, .outdent: .edit
@@ -107,6 +108,7 @@ enum ShortcutAction: String, CaseIterable, Codable {
         case .save: "Save"
         case .saveAs: "Save As…"
         case .export: "Export…"
+        case .printTab: "Print…"
         case .bookmarkTab: "Bookmark This Tab"
         case .showBookmarks: "Show Bookmarks…"
         case .goToTab: "Jump to Tab…"
@@ -146,6 +148,9 @@ enum ShortcutAction: String, CaseIterable, Codable {
         // ⌘E is the Mac's Use Selection for Find and stays where it is; ⇧⌘E
         // is free, and reads as the Save As… beside it.
         case .export: KeyCombo("e", [.command, .shift])
+        // ⌘P is the mode toggle and has been since Nota had two columns, so
+        // printing takes the key next door.
+        case .printTab: KeyCombo("p", [.command, .option])
         // ⌘D and ⇧⌘D are the bookmark pair; duplicating a line is ⇧⌥↓.
         case .bookmarkTab: KeyCombo("d")
         case .showBookmarks: KeyCombo("d", [.command, .shift])

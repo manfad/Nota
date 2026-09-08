@@ -19,6 +19,9 @@ final class ExportTests: AppKitTestCase {
         // reader's own settings changed behind it.
         placement = Preferences.shared.exportEditorImages
         gutter = Preferences.shared.showsLineNumbers
+        // The same call the app makes at launch: without it a tab offers the
+        // two PDFs Nota writes itself and nothing else.
+        Exporter.installDefaultHooks()
     }
 
     override func tearDownWithError() throws {
@@ -33,8 +36,7 @@ final class ExportTests: AppKitTestCase {
     // MARK: - What a tab offers
 
     /// The list, and its order: what the reader is looking at first, the
-    /// source after it, and the tab's own speciality last — and only where
-    /// somebody has plugged that speciality in.
+    /// source after it, and the tab's own speciality last.
     @MainActor
     func testEachKindOffersItsOwnTargetsInOrder() throws {
         let directory = try makeTemporaryDirectory()
@@ -42,13 +44,14 @@ final class ExportTests: AppKitTestCase {
         let plain = try makeNote(named: "log.txt", text: "just words", in: directory)
         let tex = try makeNote(named: "paper.tex", text: "\\section{One}", in: directory)
         let dump = try makeNote(named: "shop.sql", text: "SELECT 1;", in: directory)
+        let table = try makeNote(named: "rows.csv", text: "a,b\n1,2\n", in: directory)
 
         XCTAssertEqual(Exporter.targets(for: markdown), [.previewPDF, .editorPDF])
         XCTAssertEqual(Exporter.targets(for: plain), [.previewPDF, .editorPDF],
                        "a tab with no render still has the source to list")
-        XCTAssertEqual(Exporter.targets(for: tex), [.previewPDF, .editorPDF],
-                       "no TeX engine plugged in, so no TeX target offered")
-        XCTAssertEqual(Exporter.targets(for: dump), [.previewPDF, .editorPDF])
+        XCTAssertEqual(Exporter.targets(for: tex), [.previewPDF, .editorPDF, .texPDF])
+        XCTAssertEqual(Exporter.targets(for: dump), [.previewPDF, .editorPDF, .csv])
+        XCTAssertEqual(Exporter.targets(for: table), [.previewPDF, .editorPDF, .csv])
 
         let picture = Note(id: UUID(), fileURL: exampleURL("Picture.png"), untitledName: nil,
                            text: "", attributes: [:], assets: nil, kind: .image)
@@ -61,9 +64,9 @@ final class ExportTests: AppKitTestCase {
 
         XCTAssertEqual(Exporter.targets(for: picture), [.previewPDF])
         XCTAssertEqual(Exporter.targets(for: rich), [.previewPDF])
-        XCTAssertEqual(Exporter.targets(for: document), [],
-                       "a document exports as a book, and that exporter is not in yet")
-        XCTAssertEqual(Exporter.targets(for: book), [])
+        XCTAssertEqual(Exporter.targets(for: document), [.epub],
+                       "the one export that is not a PDF: a document is one already")
+        XCTAssertEqual(Exporter.targets(for: book), [.bookPDF])
     }
 
     /// A target whose exporter is plugged in is listed; the same target is
@@ -76,15 +79,16 @@ final class ExportTests: AppKitTestCase {
         let book = Note(id: UUID(), fileURL: exampleURL("Book.epub"), untitledName: nil,
                         text: "", attributes: [:], assets: nil, kind: .epub)
 
-        Exporter.texPDF = { _, _, _ in }
-        Exporter.csv = { _, _, _ in }
-        Exporter.bookPDF = { _, _, _ in }
-        defer {
-            Exporter.texPDF = nil
-            Exporter.csv = nil
-            Exporter.bookPDF = nil
-        }
+        Exporter.texPDF = nil
+        Exporter.csv = nil
+        Exporter.bookPDF = nil
+        defer { Exporter.installDefaultHooks() }
 
+        XCTAssertEqual(Exporter.targets(for: tex), [.previewPDF, .editorPDF])
+        XCTAssertEqual(Exporter.targets(for: dump), [.previewPDF, .editorPDF])
+        XCTAssertEqual(Exporter.targets(for: book), [])
+
+        Exporter.installDefaultHooks()
         XCTAssertEqual(Exporter.targets(for: tex), [.previewPDF, .editorPDF, .texPDF])
         XCTAssertEqual(Exporter.targets(for: dump), [.previewPDF, .editorPDF, .csv])
         XCTAssertEqual(Exporter.targets(for: book), [.bookPDF])
@@ -102,7 +106,7 @@ final class ExportTests: AppKitTestCase {
         )
         let destination = directory.appendingPathComponent("notes.pdf")
 
-        try Exporter.export(note, to: .previewPDF, at: destination, context: context())
+        try exportAndWait(note, to: .previewPDF, at: destination, context: context())
 
         let pdf = try XCTUnwrap(PDFDocument(url: destination))
         XCTAssertGreaterThanOrEqual(pdf.pageCount, 1)
@@ -119,7 +123,7 @@ final class ExportTests: AppKitTestCase {
         )
         let destination = directory.appendingPathComponent("long.pdf")
 
-        try Exporter.export(note, to: .previewPDF, at: destination, context: context())
+        try exportAndWait(note, to: .previewPDF, at: destination, context: context())
 
         let pdf = try XCTUnwrap(PDFDocument(url: destination))
         XCTAssertGreaterThan(pdf.pageCount, 1, "the text is paginated, not clipped")
@@ -132,7 +136,7 @@ final class ExportTests: AppKitTestCase {
                         text: "", attributes: [:], assets: nil, kind: .rtf)
         let destination = directory.appendingPathComponent("rich.pdf")
 
-        try Exporter.export(note, to: .previewPDF, at: destination, context: context())
+        try exportAndWait(note, to: .previewPDF, at: destination, context: context())
 
         let pdf = try XCTUnwrap(PDFDocument(url: destination))
         XCTAssertGreaterThanOrEqual(pdf.pageCount, 1)
@@ -147,7 +151,7 @@ final class ExportTests: AppKitTestCase {
                         text: "", attributes: [:], assets: nil, kind: .image)
         let destination = directory.appendingPathComponent("picture.pdf")
 
-        try Exporter.export(note, to: .previewPDF, at: destination, context: context())
+        try exportAndWait(note, to: .previewPDF, at: destination, context: context())
 
         let pdf = try XCTUnwrap(PDFDocument(url: destination))
         XCTAssertEqual(pdf.pageCount, 1, "the picture, on one page, fitted to the margins")
@@ -166,11 +170,11 @@ final class ExportTests: AppKitTestCase {
         )
 
         let numbered = directory.appendingPathComponent("numbered.pdf")
-        try Exporter.export(
+        try exportAndWait(
             note, to: .editorPDF, at: numbered, context: context(showsLineNumbers: true)
         )
         let bare = directory.appendingPathComponent("bare.pdf")
-        try Exporter.export(
+        try exportAndWait(
             note, to: .editorPDF, at: bare, context: context(showsLineNumbers: false)
         )
 
@@ -202,12 +206,12 @@ final class ExportTests: AppKitTestCase {
         let note = try makeNote(named: "pictures.md", text: source, in: directory, assets: assets)
 
         let plated = directory.appendingPathComponent("plates.pdf")
-        try Exporter.export(
+        try exportAndWait(
             note, to: .editorPDF, at: plated,
             context: context(assets: assets, images: .plates)
         )
         let inline = directory.appendingPathComponent("inline.pdf")
-        try Exporter.export(
+        try exportAndWait(
             note, to: .editorPDF, at: inline,
             context: context(assets: assets, images: .inline)
         )
@@ -236,7 +240,7 @@ final class ExportTests: AppKitTestCase {
         let note = try makeNote(named: "bare.md", text: "# Nothing to see", in: directory)
         let destination = directory.appendingPathComponent("bare.pdf")
 
-        try Exporter.export(
+        try exportAndWait(
             note, to: .editorPDF, at: destination, context: context(images: .plates)
         )
 
@@ -299,7 +303,7 @@ final class ExportTests: AppKitTestCase {
             asked = targets
             return ExportChoice(target: .previewPDF, images: .inline)
         }
-        controller.savePanelProvider = { _ in destination }
+        controller.exportPanelProvider = { _, _ in destination }
 
         XCTAssertTrue(controller.canExportCurrentTab)
         controller.exportCurrentTab()
@@ -324,7 +328,7 @@ final class ExportTests: AppKitTestCase {
         let tabs = controller.openNotes.count
 
         controller.exportSheetProvider = { _, _ in nil }
-        controller.savePanelProvider = { _ in
+        controller.exportPanelProvider = { _, _ in
             XCTFail("the save dialog must not be reached from a cancelled sheet")
             return nil
         }
@@ -333,7 +337,222 @@ final class ExportTests: AppKitTestCase {
         XCTAssertEqual(controller.openNotes.count, tabs)
     }
 
+    // MARK: - Every hook, end to end
+
+    /// A book onto pages, through `EPUBToPDF` and WebKit. Slow — every
+    /// chapter is a page load and a print — so one small book is the whole
+    /// of what is asserted: pages came out, with words on them.
+    @MainActor
+    func testABookExportsOntoPages() throws {
+        let directory = try makeTemporaryDirectory()
+        let book = Note(id: UUID(), fileURL: exampleURL("Book.epub"), untitledName: nil,
+                        text: "", attributes: [:], assets: nil, kind: .epub)
+        let destination = directory.appendingPathComponent("book.pdf")
+
+        try exportAndWait(book, to: .bookPDF, at: destination, context: context())
+
+        let pdf = try XCTUnwrap(PDFDocument(url: destination))
+        XCTAssertGreaterThanOrEqual(pdf.pageCount, 1)
+        XCTAssertFalse((pdf.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       "the book's own words are on the pages")
+    }
+
+    /// A document taken apart into a book, through `PDFToEPUB` — the one
+    /// export that is not a PDF.
+    @MainActor
+    func testADocumentExportsAsABook() throws {
+        let directory = try makeTemporaryDirectory()
+        let document = Note(id: UUID(), fileURL: exampleURL("Demo.pdf"), untitledName: nil,
+                            text: "", attributes: [:], assets: nil, kind: .pdf)
+        let destination = directory.appendingPathComponent("demo.epub")
+
+        try exportAndWait(document, to: .epub, at: destination, context: context())
+
+        let written = try XCTUnwrap(EPUBBook.open(destination))
+        XCTAssertFalse(written.chapters.isEmpty, "the document came apart into chapters")
+    }
+
+    /// An `.html` tab, through WebKit's own print — the page as it is drawn,
+    /// not the source listing.
+    @MainActor
+    func testAPageExportsAsWebKitDrawsIt() throws {
+        let directory = try makeTemporaryDirectory()
+        let page = exampleURL("HTML.html")
+        let note = Note(id: UUID(), fileURL: page, untitledName: nil,
+                        text: try String(contentsOf: page, encoding: .utf8),
+                        attributes: [:], assets: nil)
+        let destination = directory.appendingPathComponent("page.pdf")
+
+        try exportAndWait(note, to: .previewPDF, at: destination, context: context())
+
+        let pdf = try XCTUnwrap(PDFDocument(url: destination))
+        XCTAssertGreaterThanOrEqual(pdf.pageCount, 1)
+        XCTAssertFalse((pdf.string ?? "").contains("<html"),
+                       "the page as WebKit draws it, not the tags the editor shows")
+    }
+
+    /// A `.tex` with no engine on the Mac and a reader who answers "use
+    /// Nota's render": what lands at TeX's own destination is the native
+    /// render, and the export answers success rather than a refusal.
+    @MainActor
+    func testATeXFallsBackToTheNativeRenderWhenTheReaderAsksForIt() throws {
+        let directory = try makeTemporaryDirectory()
+        let note = try makeNote(
+            named: "paper.tex",
+            text: "\\section{Fallback}\n\nA paragraph under the section.\n",
+            in: directory
+        )
+        let destination = directory.appendingPathComponent("paper.pdf")
+
+        let presenter = FakeTeXPrompt(answer: .useNativeRender)
+        Exporter.texInstallPresenter = { _ in presenter }
+        Exporter.texSeams.findEngine = { nil }
+        defer {
+            Exporter.texInstallPresenter = { TeXInstallAlert(window: $0) }
+            Exporter.texSeams = TeXExport.Seams()
+        }
+
+        try exportAndWait(note, to: .texPDF, at: destination, context: context())
+
+        XCTAssertEqual(presenter.asked, 1, "the reader was asked once")
+        let pdf = try XCTUnwrap(PDFDocument(url: destination))
+        XCTAssertTrue((pdf.string ?? "").contains("Fallback"),
+                      "Nota's own render of the document, at TeX's destination")
+    }
+
+    /// Cancelling the same question writes nothing and comes back as the one
+    /// error the window stays silent about.
+    @MainActor
+    func testCancellingTheTeXQuestionWritesNothing() throws {
+        let directory = try makeTemporaryDirectory()
+        let note = try makeNote(named: "paper.tex", text: "\\section{Nope}", in: directory)
+        let destination = directory.appendingPathComponent("paper.pdf")
+
+        let presenter = FakeTeXPrompt(answer: .cancel)
+        Exporter.texInstallPresenter = { _ in presenter }
+        Exporter.texSeams.findEngine = { nil }
+        defer {
+            Exporter.texInstallPresenter = { TeXInstallAlert(window: $0) }
+            Exporter.texSeams = TeXExport.Seams()
+        }
+
+        XCTAssertThrowsError(
+            try exportAndWait(note, to: .texPDF, at: destination, context: context())
+        ) { error in
+            XCTAssertEqual(error as? TeXExportError, .cancelled)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    // MARK: - Print
+
+    /// Every kind that has a PDF in it prints; the two that only make a file
+    /// rather than a page do not, and neither does an empty window.
+    @MainActor
+    func testPrintIsEnabledExactlyWhereTheTabMakesAPDF() throws {
+        let directory = try makeTemporaryDirectory()
+        let controller = try makeController()
+        XCTAssertTrue(controller.canPrintCurrentTab,
+                      "an untitled tab prints its own listing, the way it exports one")
+
+        let markdown = directory.appendingPathComponent("notes.md")
+        try "# Printable\n".write(to: markdown, atomically: true, encoding: .utf8)
+        controller.open(url: markdown)
+        XCTAssertTrue(controller.canPrintCurrentTab)
+
+        controller.open(url: exampleURL("Demo.pdf"))
+        XCTAssertTrue(controller.canPrintCurrentTab, "a document prints itself")
+
+        controller.open(url: exampleURL("Book.epub"))
+        XCTAssertTrue(controller.canPrintCurrentTab, "a book prints its pages")
+
+        let rows = directory.appendingPathComponent("rows.csv")
+        try "a,b\n1,2\n".write(to: rows, atomically: true, encoding: .utf8)
+        controller.open(url: rows)
+        XCTAssertTrue(controller.canPrintCurrentTab,
+                      "a grid's first target is still its render")
+    }
+
+    /// ⌥⌘P on a note: the PDF the tab's first export target would make, and
+    /// the system dialog built over exactly those pages. The operation is
+    /// taken at the seam, so no panel is ever raised.
+    @MainActor
+    func testPrintingANoteBuildsTheOperationOverTheRenderedPages() throws {
+        let directory = try makeTemporaryDirectory()
+        let source = directory.appendingPathComponent("long.md")
+        let lines = (1...400).map { "Paragraph \($0) of a note long enough to need paper." }
+        try lines.joined(separator: "\n\n").write(to: source, atomically: true, encoding: .utf8)
+
+        let controller = try makeController()
+        controller.open(url: source)
+
+        // The same render, exported, to compare the print against.
+        let expected = directory.appendingPathComponent("expected.pdf")
+        let note = Note(id: UUID(), fileURL: source, untitledName: nil,
+                        text: try String(contentsOf: source, encoding: .utf8),
+                        attributes: [:], assets: nil)
+        try exportAndWait(
+            note, to: .previewPDF, at: expected,
+            context: Exporter.Context(
+                font: Preferences.shared.font(),
+                paragraphStyle: Preferences.shared.paragraphStyle(),
+                assets: nil,
+                showsLineNumbers: Preferences.shared.showsLineNumbers,
+                images: Preferences.shared.exportEditorImages
+            )
+        )
+        let pages = try XCTUnwrap(PDFDocument(url: expected)).pageCount
+        XCTAssertGreaterThan(pages, 1)
+
+        var printed: PDFDocument?
+        var operations = 0
+        controller.printOperationRunner = { _, document in
+            operations += 1
+            printed = document
+        }
+        controller.printCurrentTab()
+
+        XCTAssertEqual(operations, 1, "one dialog, and no panel of Nota's in front of it")
+        XCTAssertEqual(printed?.pageCount, pages,
+                       "the dialog is over the pages the export would have written")
+    }
+
+    /// A document tab prints its own pages — no temp file, no render.
+    @MainActor
+    func testPrintingADocumentPrintsTheDocumentItself() throws {
+        let controller = try makeController()
+        controller.open(url: exampleURL("Demo.pdf"))
+
+        var printed: PDFDocument?
+        controller.printOperationRunner = { _, document in printed = document }
+        controller.printCurrentTab()
+
+        let onDisk = try XCTUnwrap(PDFDocument(url: exampleURL("Demo.pdf")))
+        XCTAssertEqual(printed?.pageCount, onDisk.pageCount)
+    }
+
     // MARK: - Helpers
+
+
+    /// `Exporter.export` answers through a completion whatever it is writing,
+    /// so every test goes through here: the run loop is pumped while the
+    /// export works — which is what WebKit needs and a semaphore would take
+    /// away — and a failure comes back as a `throw`, the way the tests that
+    /// were written against the old synchronous seam read.
+    @MainActor
+    private func exportAndWait(
+        _ note: Note, to target: ExportTarget, at url: URL,
+        context: Exporter.Context, timeout: TimeInterval = 60
+    ) throws {
+        let finished = expectation(description: "export finished")
+        var outcome: Result<Void, Error>?
+        Exporter.export(note, to: target, at: url, context: context) { result in
+            outcome = result
+            finished.fulfill()
+        }
+        wait(for: [finished], timeout: timeout)
+        try XCTUnwrap(outcome, "the export never answered").get()
+    }
 
     @MainActor
     private func makeController() throws -> MainWindowController {
@@ -396,5 +615,18 @@ final class ExportTests: AppKitTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         temporaryDirectories.append(directory)
         return directory
+    }
+}
+
+/// The install question, answered without an alert.
+private final class FakeTeXPrompt: TeXInstallPrompting {
+    private let answer: TeXInstallChoice
+    private(set) var asked = 0
+
+    init(answer: TeXInstallChoice) { self.answer = answer }
+
+    func promptForTeXInstall() -> TeXInstallChoice {
+        asked += 1
+        return answer
     }
 }

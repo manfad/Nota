@@ -117,7 +117,7 @@ final class CSVPreviewView: NSView, PreviewContent {
     /// Asked for a destination when the Export button is pressed — the
     /// window's own save flow, pinned to `csv`. `nil` back is the panel
     /// cancelled, and nothing is written. Nothing in the app sets it
-    /// directly: `PreviewPaneView` wires it to `presentExportPanel`.
+    /// directly: `PreviewPaneView` wires it to `runExportSavePanel`.
     var exportDestination: ((_ defaultName: String) -> URL?)?
     /// Stands in for the alert an export failure raises, the same seam the
     /// dump's pane uses (`SQLPreviewView.alertOverrideForTesting`) — so a
@@ -512,7 +512,7 @@ final class CSVPreviewView: NSView, PreviewContent {
 
     /// `<file base name>.csv` — a `.tsv` becomes a `.csv` the same way its
     /// own read already reads it as a table rather than as text.
-    private func defaultExportName() -> String {
+    func defaultExportName() -> String {
         let base = note?.fileURL?.deletingPathExtension().lastPathComponent
             ?? note?.title ?? "table"
         return base + ".csv"

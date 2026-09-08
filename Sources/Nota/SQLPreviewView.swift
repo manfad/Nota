@@ -135,7 +135,7 @@ final class SQLPreviewView: NSView, PreviewContent {
     /// Asked for a destination when the Export button is pressed — the
     /// window's own save flow, pinned to `csv`. `nil` back is the panel
     /// cancelled, and nothing is written. Nothing in the app sets it directly:
-    /// `PreviewPaneView` wires it to `presentExportPanel`.
+    /// `PreviewPaneView` wires it to `runExportSavePanel`.
     var exportDestination: ((_ defaultName: String) -> URL?)?
     /// How many times the file has been run into a database. The one number
     /// that says a big file is not being re-run on every keystroke.
@@ -724,7 +724,7 @@ final class SQLPreviewView: NSView, PreviewContent {
     /// `<table>.csv` for a table, `<dump base name>-query.csv` for a query —
     /// the file's own base name, since the query is not a table with a name
     /// of its own to borrow.
-    private func defaultExportName() -> String {
+    func defaultExportName() -> String {
         let query = queryBox.string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard query.isEmpty else {
             let base = note?.fileURL?.deletingPathExtension().lastPathComponent ?? fileName

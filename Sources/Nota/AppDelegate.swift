@@ -63,6 +63,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // appearance on launch. From then on the setting applies itself.
         Preferences.shared.theme.apply()
         LaunchTiming.mark("theme applied")
+        // Before the menu, since File › Export… and File › Print… ask what
+        // the tab in front can be exported to and a target with no hook is
+        // not offered. Five closures and no work, so it costs the launch
+        // nothing.
+        Exporter.installDefaultHooks()
         buildMenu()
         LaunchTiming.mark("menu built")
         restoreWindows()
@@ -300,6 +305,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || menuItem.action == #selector(saveNoteAs(_:)) {
             return activeController?.currentTabIsSavable ?? true
         }
+        if menuItem.action == #selector(printNote(_:)) {
+            // Only a tab that makes a PDF prints: a grid's rows and a book
+            // are files, not pages.
+            return activeController?.canPrintCurrentTab ?? false
+        }
         if menuItem.action == #selector(exportNote(_:)) {
             // Every tab exports as something; only an empty window has
             // nothing to offer.
@@ -325,6 +335,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func exportNote(_ sender: Any?) {
         activeController?.exportCurrentTab()
+    }
+
+    @objc private func printNote(_ sender: Any?) {
+        activeController?.printCurrentTab()
     }
 
     @objc private func openNote(_ sender: Any?) {
@@ -473,6 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item(.save, #selector(saveNote(_:)), target: self),
             item(.saveAs, #selector(saveNoteAs(_:)), target: self),
             item(.export, #selector(exportNote(_:)), target: self),
+            item(.printTab, #selector(printNote(_:)), target: self),
             .separator(),
             item("Reveal in Finder", #selector(revealInFinder(_:)), key: "r",
                  modifiers: [.command, .option], target: self),
