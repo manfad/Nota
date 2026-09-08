@@ -35,6 +35,9 @@ final class CSVPreviewView: NSView, PreviewContent {
     private let refreshButton = NSButton()
     private let previousButton = NSButton()
     private let nextButton = NSButton()
+    /// The table, written out as CSV, every row and in the grid's own sort
+    /// order. Sits immediately before the pager, on its leading side.
+    private let exportButton = NSButton()
     private let rangeLabel = NSTextField(labelWithString: "")
     private let scrollView = NSScrollView()
     private let grid = SQLGridView()
@@ -111,6 +114,17 @@ final class CSVPreviewView: NSView, PreviewContent {
     /// Run when a table has landed — for the tests, which have no other way
     /// to wait for a background read.
     var onDidFinish: (() -> Void)?
+    /// Asked for a destination when the Export button is pressed — the
+    /// window's own save flow, pinned to `csv`. `nil` back is the panel
+    /// cancelled, and nothing is written. Nothing in the app sets it
+    /// directly: `PreviewPaneView` wires it to `presentExportPanel`.
+    var exportDestination: ((_ defaultName: String) -> URL?)?
+    /// Stands in for the alert an export failure raises, the same seam the
+    /// dump's pane uses (`SQLPreviewView.alertOverrideForTesting`) — so a
+    /// test never puts a modal on screen. Nothing in the app sets it.
+    var alertOverrideForTesting: ((String, String) -> Void)?
+    /// The last alert this pane raised, message and informative text.
+    private(set) var lastAlert: (message: String, informative: String)?
     /// How many times the file has been read into a table. The one number
     /// that says a big file is not being re-read on every keystroke.
     private(set) var readCount = 0
@@ -202,6 +216,7 @@ final class CSVPreviewView: NSView, PreviewContent {
         bar.addSubview(rangeLabel)
 
         for (button, symbol, action) in [
+            (exportButton, "square.and.arrow.up", #selector(exportCSVButtonPressed)),
             (previousButton, "chevron.left", #selector(showPreviousPage)),
             (nextButton, "chevron.right", #selector(showNextPage)),
         ] {
@@ -217,8 +232,10 @@ final class CSVPreviewView: NSView, PreviewContent {
         }
         previousButton.toolTip = "Previous page"
         nextButton.toolTip = "Next page"
+        exportButton.toolTip = L10n.text("Export as CSV…")
         previousButton.setAccessibilityIdentifier("csv-previous")
         nextButton.setAccessibilityIdentifier("csv-next")
+        exportButton.setAccessibilityIdentifier("csv-export")
     }
 
     private func buildGrid() {
@@ -277,6 +294,7 @@ final class CSVPreviewView: NSView, PreviewContent {
             (rangeLabel, .init(rawValue: 140)),
             // Refresh keeps its word: the last thing on the bar to give way.
             (refreshButton, .init(rawValue: 190)),
+            (exportButton, .init(rawValue: 170)),
             (previousButton, .init(rawValue: 170)),
             (nextButton, .init(rawValue: 170)),
         ]
@@ -286,8 +304,10 @@ final class CSVPreviewView: NSView, PreviewContent {
         }
         // And the row of controls itself keeps its place rather than its
         // width: a bar too narrow for everything on it clips at the trailing
-        // edge instead of holding the column open.
-        let barSpacing = previousButton.leadingAnchor.constraint(
+        // edge instead of holding the column open. The Export button sits
+        // fixed against the pager's own leading edge; it is this gap, in
+        // front of it, that gives.
+        let barSpacing = exportButton.leadingAnchor.constraint(
             greaterThanOrEqualTo: refreshButton.trailingAnchor, constant: Layout.barSpacing
         )
         barSpacing.priority = .init(rawValue: 200)
@@ -315,6 +335,13 @@ final class CSVPreviewView: NSView, PreviewContent {
             previousButton.trailingAnchor.constraint(equalTo: rangeLabel.leadingAnchor),
             previousButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             previousButton.widthAnchor.constraint(equalToConstant: Layout.pageButtonWidth),
+
+            // Immediately before the pager, on its leading side.
+            exportButton.trailingAnchor.constraint(
+                equalTo: previousButton.leadingAnchor, constant: -Layout.barSpacing
+            ),
+            exportButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            exportButton.widthAnchor.constraint(equalToConstant: Layout.pageButtonWidth),
 
             scrollView.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: Layout.rowGap),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -468,6 +495,66 @@ final class CSVPreviewView: NSView, PreviewContent {
         read(note.storage.string, of: note.id, keepingPlace: true)
     }
 
+    // MARK: - Export
+
+    /// The Export button: a destination through the window's own save flow,
+    /// pinned to `csv`, and the table written into it. A write that fails is
+    /// said quietly — an alert, not a crash.
+    @objc private func exportCSVButtonPressed(_ sender: Any?) {
+        guard let destination = exportDestination?(defaultExportName()) else { return }
+        do {
+            try exportCSV(to: destination)
+        } catch {
+            present("Couldn’t export “\(destination.lastPathComponent)”.",
+                   informative: error.localizedDescription)
+        }
+    }
+
+    /// `<file base name>.csv` — a `.tsv` becomes a `.csv` the same way its
+    /// own read already reads it as a table rather than as text.
+    private func defaultExportName() -> String {
+        let base = note?.fileURL?.deletingPathExtension().lastPathComponent
+            ?? note?.title ?? "table"
+        return base + ".csv"
+    }
+
+    /// Writes the table out as CSV, every row and in the grid's own sort
+    /// order. What the Export button reaches through the save panel, and
+    /// what a File > Export… item elsewhere can call directly.
+    func exportCSV(to url: URL) throws {
+        guard let table else { throw CSVExportError.nothingToExport }
+        guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        let export = table.exportRows(sort: sort)
+        try CSVWriter.write(header: export.header, to: handle)
+        for row in export.rows {
+            try CSVWriter.write(row: row, to: handle)
+        }
+    }
+
+    /// Stands in for the real export panel's alert — the same seam
+    /// `SQLPreviewView.present(_:informative:)` uses.
+    private func present(_ message: String, informative: String) {
+        lastAlert = (message, informative)
+        if let alertOverrideForTesting {
+            alertOverrideForTesting(message, informative)
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = message
+        alert.informativeText = informative
+        alert.addButton(withTitle: "OK")
+        if let window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
     @objc private func showPreviousPage(_ sender: Any?) {
         step(by: -CSVTable.pageSize)
     }
@@ -493,6 +580,8 @@ final class CSVPreviewView: NSView, PreviewContent {
     }
 
     private func updateRange() {
+        // Nothing to export without a table read yet.
+        exportButton.isEnabled = table != nil
         guard let page else {
             rangeLabel.stringValue = ""
             previousButton.isEnabled = false
@@ -823,6 +912,10 @@ final class CSVPreviewView: NSView, PreviewContent {
     static var barTopInsetForTesting: CGFloat { Layout.topClearance }
     var refreshButtonWrapsForTesting: Bool { refreshButton.cell?.wraps ?? true }
     var barFrameForTesting: NSRect { bar.frame }
+    var exportButtonForTesting: NSButton { exportButton }
+    var exportButtonTip: String? { exportButton.toolTip }
+    func pressExportForTesting() { exportButton.performClick(nil) }
+    var barSubviewsForTesting: [NSView] { bar.subviews }
 
     func pressNextForTesting() { showNextPage(nil) }
     func pressPreviousForTesting() { showPreviousPage(nil) }

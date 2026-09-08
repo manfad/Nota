@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// The whole UI: a document workspace with a tab strip across its title bar,
 /// an editor and optional Markdown preview between shared chrome, and a status
@@ -101,6 +102,12 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
     /// a test hands in something else — `nil` from it is the panel being
     /// cancelled, which is the case ⌘D on an untitled note turns on.
     var savePanelProvider: ((Note) -> URL?)?
+
+    /// Where an export lands — the dump's Export button or the table's own,
+    /// through `presentExportPanel(defaultName:extension:)`. The real panel
+    /// unless a test hands in something else, the same way `savePanelProvider`
+    /// stands in for the note-shaped save panel; `nil` is the panel cancelled.
+    var exportPanelProvider: ((_ defaultName: String, _ extension: String) -> URL?)?
 
     private var preferences: Preferences { .shared }
     private var fontSize: CGFloat { preferences.fontSize }
@@ -1141,6 +1148,11 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         }
         previewColumn.onDropFiles = { [weak self] urls in
             self?.openDroppedFiles(urls)
+        }
+        // The dump's Export button, or the table's: a destination through the
+        // same save flow a Save As gets, with the extension pinned to `csv`.
+        previewColumn.onExportDestination = { [weak self] defaultName in
+            self?.presentExportPanel(defaultName: defaultName, extension: "csv")
         }
 
         installModeOverlay(previewModeOverlay, over: previewColumn)
@@ -2917,6 +2929,29 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         if let chosen = SaveNameComposer.split(name: url.lastPathComponent).extension {
             preferences.lastSaveExtension = chosen
         }
+        return url
+    }
+
+    /// Where an export lands, pinned to `ext` (`csv` for the only export
+    /// there is yet). The system panel rather than the Save dialog above:
+    /// there is no Format to compose, only a browser to pick a destination
+    /// in, which is the one thing `SaveDialog`'s own header says a hand-built
+    /// form has no business reimplementing. The real panel unless a test
+    /// hands in something else through `exportPanelProvider`, the way
+    /// `runSavePanel` defers to `savePanelProvider` for a note's own save.
+    private func presentExportPanel(defaultName: String, extension ext: String) -> URL? {
+        if let exportPanelProvider { return exportPanelProvider(defaultName, ext) }
+        let panel = NSSavePanel()
+        if let type = UTType(filenameExtension: ext) {
+            panel.allowedContentTypes = [type]
+        }
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = defaultName
+        panel.directoryURL = preferences.lastSaveDirectory
+            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        preferences.lastSaveDirectory = url.deletingLastPathComponent()
         return url
     }
 

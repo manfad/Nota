@@ -87,6 +87,17 @@ final class PreviewPaneView: NSView {
     var onPositionChange: ((Int) -> Void)?
     var onZoomChange: ((CGFloat) -> Void)?
     var onStateChange: (() -> Void)?
+    /// The dump's pane or the table's own Export button was pressed: a
+    /// destination for it, through the window's own save flow — pinned to
+    /// `csv` — or `nil` for a panel the reader cancelled. Only the two
+    /// content views that ever export anything are wired to it; nothing
+    /// about the other eight even declares the closure.
+    var onExportDestination: ((_ defaultName: String) -> URL?)? {
+        didSet {
+            sqlContent.exportDestination = onExportDestination
+            csvContent.exportDestination = onExportDestination
+        }
+    }
 
     /// A segment of the zoom pill was pressed. It is the same three keys the
     /// reader would have pressed, so it goes to the window rather than to the

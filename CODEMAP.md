@@ -34,6 +34,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | PDF / picture / HTML / EPUB / RTF viewer tabs | `PDFPreviewView.swift`, `ImagePreviewView.swift`, `HTMLPreviewView.swift`, `EPUBPreviewView.swift` + `EPUBBook.swift`, `RTFPreviewView.swift` |
 | A `.sql` dump's grid: running it, paging it, sorting it, picking cells out of it, ⌘F over it | `SQLPreviewView.swift` (the pane), `SQLGridView.swift` (the grid, its header and its cells), `SQLQueryBox.swift` (the query editor), `SQLDump.swift` (the database), `SQLDumpDialect.swift` (a MySQL or Postgres dump made SQLite's), `SQLSourceMap.swift` (which line of the file a row was written on, and where in it a cell's own value is), `SQLQueryRewrite.swift` (the rowid spliced into a query so its rows point at the file too), `GridFindSession.swift` (⌘F over the grid; `SQLDump.hits` is the one statement that answers it) |
 | A `.csv` / `.tsv` file's grid: reading it, paging it, sorting it, ⌘F over it | `CSVPreviewView.swift` (the pane, over `SQLGridView`), `CSVTable.swift` (the RFC 4180 reader, `ordering` — the order the grid and its ⌘F walk — and where each record and each field of it is written) |
+| The Export button on a `.sql` or `.csv` grid, or the CSV a table writes out | `CSVWriter.swift` (the RFC 4180 writer, in-memory and streaming), `SQLDump.forEachRow` / `CSVTable.exportRows` (every row, in the grid's sort order, no page cut out of it), `SQLPreviewView.exportCSV(to:)` / `CSVPreviewView.exportCSV(to:)` (the plain functions behind the button), `MainWindowController.presentExportPanel` / `exportPanelProvider` (the destination, pinned to `csv`) |
 | ⌘F find bar and its match bands (incl. dark-mode colours) | `FindBar.swift` (chrome), `FindSession.swift` (editor; the fallback every column hands an unwanted Find item back to is `MainWindowController.performTextFinderAction`), `HTMLFindSession.swift` (`find(_:)` puts a ⇧⌘F hit's query to the page), `PDFFindSession.swift` (`reveal(_:for:)` lands on a ⇧⌘F hit), `TreeFindSession.swift` (a tree preview's rows), `GridFindSession.swift` (a `.csv` or `.sql` grid) |
 | ⌘J go to line | `GoToLine.swift`, line table `LineIndex.swift` |
 | Floating pill chrome shared by find / go-to-line / external-change / the format offer | `Pill.swift`, `ExternalChangePill.swift`, `FormatOfferPill.swift` |
@@ -232,7 +233,10 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   `page(ofTable:offset:sort:)` / `page(ofQuery:…)` (`LIMIT 100 OFFSET`, `COUNT(*)`, and the rowids a page carries
   beside its values with the table they belong to), `declaredTypes(ofTable:)`, `hasRowid(_:in:)`, and the read-only
   authorizer the query box runs under; also turns a `mysqldump`/phpMyAdmin/`pg_dump` export into something SQLite's
-  parser takes, via `SQLDumpDialect`. Knows nothing of AppKit.
+  parser takes, via `SQLDumpDialect`. `forEachRow(ofTable:sort:onColumns:onRow:)` / `forEachRow(ofQuery:…)` are a
+  page's read with the `LIMIT`/`OFFSET` and the rowid dance both taken out — the whole table or query, in sort
+  order, `onColumns` once and `onRow` per row — for the Export button's `CSVWriter` to stream straight to a file.
+  Knows nothing of AppKit.
 - `SQLDumpDialect.swift` — the MySQL and Postgres spellings a dump carries, turned into SQLite's before
   `sqlite3_prepare_v2` sees them: which statements to skip (session state, ownership, sequences, grants, psql `\`
   meta-commands), `CREATE TABLE` decoration and type mapping, MySQL backslash escapes in row strings, and a
@@ -244,7 +248,9 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   writes onto the note, `sourceRanges(of:)` — the grid's `Selection` as an array of ranges: whole rows one span of
   tuples, a rectangle one span of values per row, so a column is that column and not the lines between its rows —
   and `GridFindSource`: ⌘F over the whole table, or over the query's result, through
-  `SQLDump.hits` on the pane's own queue.
+  `SQLDump.hits` on the pane's own queue; and the Export button (leading side of the pager), `exportCSV(to:)` — the
+  picked table or the query's own result, every row through `SQLDump.forEachRow` and `CSVWriter`, asked of the
+  window through `exportDestination`.
 - `SQLGridView.swift` (~530) — the grid itself: the spreadsheet cell cursor (click one, drag a rectangle, arrows and
   ⇧-arrows, ⌘C as tab-separated text), whole rows from the `#` gutter, ⇧ and Space, the cell click it reports
   (`onCellClick`) and *every other* selection it makes (`onSelectionReveal` — the gutter, a ⇧-click, a drag, Space, a
@@ -278,14 +284,22 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   record as the header with blanks named `Column 3`, ragged rows padded and widened, the `NSRange` of the lines each
   record is written on and of every *field* of it as written (`fieldSources`, quotes included — what a clicked cell
   selects), and `page(offset:sort:)` — a hundred rows, sorted numerically where the whole column parses as numbers
-  and by the reader's own collation where it does not. Pure; knows nothing of AppKit.
+  and by the reader's own collation where it does not. `exportRows(sort:)` is the same order over every row and no
+  page cut out of it, a trailing field a ragged row never wrote coming back `nil` off `fieldSources`' own count
+  rather than the `""` `rows` padded it to. Pure; knows nothing of AppKit.
 - `CSVPreviewView.swift` (~810) — the pane that draws it: the dump's pane with the database taken out — one bar of
   `Refresh` and the page arrows under the corner slot's hover band, `SQLGridView` below it unchanged, the sort a
   header click asks for, the `onSourceReveal` a click, a gutter click or a drag sends (`sourceRanges(of:)` — the
   grid's `Selection` as an array of ranges: one span of records for whole rows, one span of fields per row for a
   rectangle, so a column is that column and not the lines between its rows), `GridFindSource` — ⌘F over the
   whole table in `CSVTable.ordering`'s order, with the bar row dropping while the pill is up — and the read it runs
-  on its own queue with a token (a big file only ever on the button).
+  on its own queue with a token (a big file only ever on the button). The Export button (leading side of the
+  pager), `exportCSV(to:)`, writes `CSVTable.exportRows` through `CSVWriter`.
+- `CSVWriter.swift` (~75) — an RFC 4180 writer, the mirror of `CSVTable`'s own reader and shared by both grids'
+  Export button: `write(header:rows:) -> String` in memory, and the streaming pair `write(header:to:)` /
+  `write(row:to:)` straight to a `FileHandle` so a big export is never held twice over. Quotes a field only on a
+  comma, a quote, a CR/LF or a leading/trailing space; doubles an inner quote; a `nil` — `NULL`, or a ragged row's
+  own unwritten field — is nothing rather than a word. Pure; knows nothing of AppKit.
 - `StructuredDocument.swift` (~200) — what a `.json`, `.yaml`, `.toml` or `.xml` file *is* once read: one
   `StructuredNode` shape for four grammars (named parts, numbered parts, leaves, the 1-based line every node starts
   on, its `range` — the whole span of source it was made from, in the UTF-16 an `NSRange` counts in — and its
@@ -395,6 +409,12 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   editor's caret without taking its keyboard — from a table's page and from a query the rowid was got into, and the
   cell cursor still answering the first click after a run, a refresh and a page turn — the query rewrite and what it
   refuses, and the table and query through the session.
+- `CSVExportTests.swift` — the Export button on both grids and what is behind it: `CSVWriter`'s own quoting rules
+  and its streaming pair against its in-memory one, `SQLDump.forEachRow` over `Shop.sql` / `Examples/sql/MySQL.sql`
+  / `Examples/sql/PostgreSQL.sql` (row count, header, sort order, a table past `SQLDump.pageSize`, a query with
+  fewer rows than its table), `CSVTable.exportRows` (`Examples/Products.csv` round-tripped, a `.tsv` fixture
+  exporting comma-separated), and the button itself — its place before the pager, and a click through the stubbed
+  `exportDestination` seam writing the file.
 - `MermaidFlowchartTests.swift` (35) — the flowchart engine: every node shape and edge form, chains and fans,
   subgraphs and nesting, comments and semicolons, the directives that are ignored, junk and a fuzz run that refuses
   without falling over; then the layout (frames that do not overlap, the direction each way round, an edge that

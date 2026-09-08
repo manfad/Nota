@@ -44,6 +44,11 @@ final class SQLPreviewView: NSView, PreviewContent {
     private let runQueryButton = NSButton()
     private let previousButton = NSButton()
     private let nextButton = NSButton()
+    /// The current result — the picked table, or the query's own when the
+    /// grid is showing one — written out as CSV, every row and in the grid's
+    /// own sort order. Sits immediately before the pager, on its leading
+    /// side.
+    private let exportButton = NSButton()
     private let rangeLabel = NSTextField(labelWithString: "")
     private let scrollView = NSScrollView()
     private let grid = SQLGridView()
@@ -127,6 +132,11 @@ final class SQLPreviewView: NSView, PreviewContent {
     /// Run when a database, or a page of one, has landed — for the tests,
     /// which have no other way to wait for a background run.
     var onDidFinish: (() -> Void)?
+    /// Asked for a destination when the Export button is pressed — the
+    /// window's own save flow, pinned to `csv`. `nil` back is the panel
+    /// cancelled, and nothing is written. Nothing in the app sets it directly:
+    /// `PreviewPaneView` wires it to `presentExportPanel`.
+    var exportDestination: ((_ defaultName: String) -> URL?)?
     /// How many times the file has been run into a database. The one number
     /// that says a big file is not being re-run on every keystroke.
     private(set) var runCount = 0
@@ -252,6 +262,7 @@ final class SQLPreviewView: NSView, PreviewContent {
         bar.addSubview(rangeLabel)
 
         for (button, symbol, action) in [
+            (exportButton, "square.and.arrow.up", #selector(exportCSVButtonPressed)),
             (previousButton, "chevron.left", #selector(showPreviousPage)),
             (nextButton, "chevron.right", #selector(showNextPage)),
         ] {
@@ -267,8 +278,10 @@ final class SQLPreviewView: NSView, PreviewContent {
         }
         previousButton.toolTip = "Previous page"
         nextButton.toolTip = "Next page"
+        exportButton.toolTip = L10n.text("Export as CSV…")
         previousButton.setAccessibilityIdentifier("sql-previous")
         nextButton.setAccessibilityIdentifier("sql-next")
+        exportButton.setAccessibilityIdentifier("sql-export")
     }
 
     private func buildGrid() {
@@ -331,6 +344,7 @@ final class SQLPreviewView: NSView, PreviewContent {
             (refreshButton, .init(rawValue: 190)),
             (runQueryButton, .init(rawValue: 160)),
             (queryBox, .init(rawValue: 150)),
+            (exportButton, .init(rawValue: 170)),
             (previousButton, .init(rawValue: 170)),
             (nextButton, .init(rawValue: 170)),
         ]
@@ -340,8 +354,10 @@ final class SQLPreviewView: NSView, PreviewContent {
         }
         // And the row of controls itself keeps its place rather than its
         // width: a bar too narrow for everything on it clips at the trailing
-        // edge instead of holding the column open.
-        let barSpacing = previousButton.leadingAnchor.constraint(
+        // edge instead of holding the column open. The Export button sits
+        // fixed against the pager's own leading edge; it is this gap, in
+        // front of it, that gives.
+        let barSpacing = exportButton.leadingAnchor.constraint(
             greaterThanOrEqualTo: refreshButton.trailingAnchor, constant: Layout.barSpacing
         )
         barSpacing.priority = .init(rawValue: 200)
@@ -390,6 +406,13 @@ final class SQLPreviewView: NSView, PreviewContent {
             previousButton.trailingAnchor.constraint(equalTo: rangeLabel.leadingAnchor),
             previousButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             previousButton.widthAnchor.constraint(equalToConstant: Layout.pageButtonWidth),
+
+            // Immediately before the pager, on its leading side.
+            exportButton.trailingAnchor.constraint(
+                equalTo: previousButton.leadingAnchor, constant: -Layout.barSpacing
+            ),
+            exportButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            exportButton.widthAnchor.constraint(equalToConstant: Layout.pageButtonWidth),
 
             scrollView.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: Layout.rowGap),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -682,6 +705,83 @@ final class SQLPreviewView: NSView, PreviewContent {
         run(note.storage.string, of: note.id, keepingPlace: true)
     }
 
+    // MARK: - Export
+
+    /// The Export button: a destination through the window's own save flow,
+    /// pinned to `csv`, and the current result written into it. A write that
+    /// fails is said quietly, the way a failing run or a failing query
+    /// already are here — an alert, not a crash.
+    @objc private func exportCSVButtonPressed(_ sender: Any?) {
+        guard let destination = exportDestination?(defaultExportName()) else { return }
+        do {
+            try exportCSV(to: destination)
+        } catch {
+            present("Couldn’t export “\(destination.lastPathComponent)”.",
+                   informative: (error as? SQLDump.Failure)?.message ?? error.localizedDescription)
+        }
+    }
+
+    /// `<table>.csv` for a table, `<dump base name>-query.csv` for a query —
+    /// the file's own base name, since the query is not a table with a name
+    /// of its own to borrow.
+    private func defaultExportName() -> String {
+        let query = queryBox.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard query.isEmpty else {
+            let base = note?.fileURL?.deletingPathExtension().lastPathComponent ?? fileName
+            return base + "-query.csv"
+        }
+        return (pickedTable ?? fileName) + ".csv"
+    }
+
+    /// Writes the current result out as CSV — the picked table, or the
+    /// query's own when the grid is showing one — every row, in the grid's
+    /// own sort order and none of the paging a page's `LIMIT` would leave
+    /// out. What the Export button reaches through the save panel, and what
+    /// a File > Export… item elsewhere can call directly.
+    func exportCSV(to url: URL) throws {
+        guard let dump else { throw CSVExportError.nothingToExport }
+        let query = queryBox.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+
+        var writeError: Error?
+        func writeHeader(_ columns: [SQLDump.Column]) {
+            guard writeError == nil else { return }
+            do { try CSVWriter.write(header: columns.map(\.name), to: handle) }
+            catch { writeError = error }
+        }
+        func writeRow(_ values: [SQLDump.Value]) {
+            guard writeError == nil else { return }
+            do { try CSVWriter.write(row: values.map(Self.csvField), to: handle) }
+            catch { writeError = error }
+        }
+
+        let failure: SQLDump.Failure?
+        if !query.isEmpty {
+            failure = dump.forEachRow(ofQuery: query, sort: sort,
+                                      onColumns: writeHeader, onRow: writeRow)
+        } else if let table = pickedTable {
+            failure = dump.forEachRow(ofTable: table, sort: sort,
+                                      onColumns: writeHeader, onRow: writeRow)
+        } else {
+            throw CSVExportError.nothingToExport
+        }
+        if let writeError { throw writeError }
+        if let failure { throw failure }
+    }
+
+    /// A value as the grid reads it, except `NULL`: the grid draws the word,
+    /// but a CSV field is not text and `NULL` written into one would read
+    /// back as the four letters rather than as nothing. `CSVWriter` is what
+    /// turns this `nil` into an empty field.
+    private static func csvField(_ value: SQLDump.Value) -> String? {
+        if case .null = value { return nil }
+        return value.displayText
+    }
+
     @objc private func showPreviousPage(_ sender: Any?) {
         step(by: -SQLDump.pageSize)
     }
@@ -754,6 +854,9 @@ final class SQLPreviewView: NSView, PreviewContent {
     }
 
     private func updateRange() {
+        // Nothing to export without a result on screen — no dump, or a
+        // dump with no table picked and no query in the box.
+        exportButton.isEnabled = page != nil
         guard let page else {
             rangeLabel.stringValue = ""
             previousButton.isEnabled = false
@@ -1128,6 +1231,10 @@ final class SQLPreviewView: NSView, PreviewContent {
     var queryBoxForTesting: SQLQueryBox { queryBox }
     var findBarForTesting: FindBarView { findBar }
     var findSessionForTesting: GridFindSession { findSession }
+    var exportButtonForTesting: NSButton { exportButton }
+    var exportButtonTip: String? { exportButton.toolTip }
+    func pressExportForTesting() { exportButton.performClick(nil) }
+    var barSubviewsForTesting: [NSView] { bar.subviews }
 
     func setQueryForTesting(_ query: String) {
         queryBox.string = query
