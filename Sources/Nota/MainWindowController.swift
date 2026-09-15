@@ -207,6 +207,14 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
     private let previewColumn = PreviewPaneView(dragBandHeight: Layout.hiddenStripDragBand)
     private var previewItem: NSSplitViewItem?
     private var editorItem: NSSplitViewItem?
+    /// The width a closed column is held to — nothing — as a required
+    /// constraint on the column's own view, one per item. The item's own
+    /// `maximumThickness` of zero is not enough on its own: a content view
+    /// behind the one in front can ask for a width (the tree's margins, for
+    /// one), and the split then lays the "closed" column over the other
+    /// column's trailing edge rather than shrinking it — a 40pt strip of
+    /// page over the editor's corner capsule. See `applyColumnBounds`.
+    private var closedColumnWidths: [ObjectIdentifier: NSLayoutConstraint] = [:]
     private var previewWorkItem: DispatchWorkItem?
     /// The find bar's own re-scan after an edit, while one is waiting.
     private var findRefreshWorkItem: DispatchWorkItem?
@@ -4841,12 +4849,24 @@ extension MainWindowController {
     private func open(_ item: NSSplitViewItem, floor: CGFloat) {
         item.minimumThickness = floor
         item.maximumThickness = NSSplitViewItem.unspecifiedDimension
+        closedColumnWidth(of: item).isActive = false
     }
 
-    /// Shut: no width at all, and no way to drag one back.
+    /// Shut: no width at all, and no way to drag one back. The thickness
+    /// says so to the split; the required constraint says so to the column's
+    /// own content, which the thickness alone does not overrule.
     private func close(_ item: NSSplitViewItem) {
         item.minimumThickness = 0
         item.maximumThickness = 0
+        closedColumnWidth(of: item).isActive = true
+    }
+
+    private func closedColumnWidth(of item: NSSplitViewItem) -> NSLayoutConstraint {
+        let key = ObjectIdentifier(item)
+        if let constraint = closedColumnWidths[key] { return constraint }
+        let constraint = item.viewController.view.widthAnchor.constraint(equalToConstant: 0)
+        closedColumnWidths[key] = constraint
+        return constraint
     }
 
     /// The floors split holds its two columns to. They are required

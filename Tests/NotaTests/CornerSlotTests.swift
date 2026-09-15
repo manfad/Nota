@@ -320,6 +320,53 @@ final class CornerSlotTests: AppKitTestCase {
     }
 
 
+    // MARK: - A closed column is nothing
+
+    /// In the editor mode the preview column is away, and away means no
+    /// width at all — not the 40pt the tree view's margins used to hold it
+    /// at, which the split laid over the editor's trailing edge so that the
+    /// page painted out the capsule's last segment. Reading closes the
+    /// editor's column the same way.
+    @MainActor
+    func testAClosedColumnHasNoWidthAndCoversNothing() throws {
+        let controller = try makeController()
+        let window = try XCTUnwrap(controller.window)
+        try open("notes.md", holding: "# Hi\n\ntext", in: controller)
+        let editorOverlay = controller.modeControlOverlays.editor
+        let previewOverlay = controller.modeControlOverlays.preview
+        var walker: NSView? = editorOverlay
+        while let view = walker, !(view is NSSplitView) { walker = view.superview }
+        let split = try XCTUnwrap(walker as? NSSplitView)
+        func column(of overlay: NSView) -> NSView {
+            var column: NSView = overlay
+            while let above = column.superview, above !== split { column = above }
+            return column
+        }
+        func settle() {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
+            window.layoutIfNeeded()
+        }
+
+        settle()
+        XCTAssertEqual(column(of: previewOverlay).frame.width, 0, "editor mode: the preview column is away")
+        let capsule = split.convert(editorOverlay.modeControl.frame, from: editorOverlay)
+        XCTAssertFalse(capsule.intersects(column(of: previewOverlay).frame),
+                       "nothing lies over the editor's capsule")
+        XCTAssertEqual(column(of: editorOverlay).frame.maxX, split.bounds.maxX, accuracy: 1)
+
+        controller.setPreviewMode(.reading)
+        settle()
+        XCTAssertEqual(column(of: editorOverlay).frame.width, 0, "reading: the editor column is away")
+        XCTAssertEqual(column(of: previewOverlay).frame.minX, 0, accuracy: 1,
+                       "and the page starts at the window's edge")
+
+        controller.setPreviewMode(.split)
+        settle()
+        XCTAssertGreaterThan(column(of: editorOverlay).frame.width, 100, "split opens both again")
+        XCTAssertGreaterThan(column(of: previewOverlay).frame.width, 100)
+    }
+
+
     // MARK: - Helpers
 
     /// The same page in its two shapes. `HTMLFormat` maps each onto the other

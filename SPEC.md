@@ -1927,6 +1927,14 @@ with nothing else to wire.
    as shells and read on selection or in an idle pass.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+69. **A closed column is held at nothing (done 2026-09-15).** In the editor mode the preview column, and in reading
+    the editor's, is "closed" with a split-item thickness of zero — which the column's own content could overrule:
+    the tree view kept alive behind the page asks for its two 20pt margins (40 in zen), and rather than narrow the
+    open column the split laid the 40pt "closed" one *over* its trailing edge, so the page's white painted out the
+    corner capsule from the Reading segment on (a thin sliver of it was all that showed), and in reading a 37pt strip
+    of editor stood at the left. `close(_:)` now also pins the column's view to width 0 with a required constraint
+    (`closedColumnWidths`, one per item), and `open(_:floor:)` lifts it; `testAClosedColumnHasNoWidthAndCoversNothing`
+    holds both modes to it.
 68. **Zen gets its own gutter trio, and the Padding setting is gone (done 2026-09-08).** Settings › Editor now ends
     in a Zen group — line numbers, gutter separator, highlight current line (`Preferences.zenShowsLineNumbers` /
     `zenShowsGutterSeparator` / `zenHighlightsCurrentLine`), all off by default — consulted instead of the everyday
