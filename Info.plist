@@ -13,9 +13,9 @@
     <key>CFBundleIconFile</key>
     <string>Nota</string>
     <key>CFBundleVersion</key>
-    <string>1.2.11</string>
+    <string>1.2.12</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.2.11</string>
+    <string>1.2.12</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>

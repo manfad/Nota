@@ -160,6 +160,11 @@ struct DOCXParaProps {
     var outline: Int?
     var shading: String?
     var pageBreakBefore: Bool?
+    /// The paragraph's own tab stops, in points from the text's left edge:
+    /// `l`eft, `c`enter or `r`ight. A nearer `clear` takes one away.
+    var tabStops: [(pos: Double, kind: Character)] = []
+    /// What `tabs` said here: each stop, or `clear` for one it removes.
+    var tabChanges: [(pos: Double, kind: String)] = []
 
     mutating func merge(_ nearer: DOCXParaProps) {
         align = nearer.align ?? align
@@ -182,6 +187,21 @@ struct DOCXParaProps {
         outline = nearer.outline ?? outline
         shading = nearer.shading ?? shading
         pageBreakBefore = nearer.pageBreakBefore ?? pageBreakBefore
+        // A folded style hands its stops on as stops; a part read straight
+        // from the XML hands them on as changes.
+        for stop in nearer.tabStops {
+            tabStops.removeAll { abs($0.pos - stop.pos) < 0.5 }
+            tabStops.append(stop)
+        }
+        for change in nearer.tabChanges {
+            tabStops.removeAll { abs($0.pos - change.pos) < 0.5 }
+            switch change.kind {
+            case "clear", "bar", "num": break
+            case "center": tabStops.append((change.pos, "c"))
+            case "right", "end", "decimal": tabStops.append((change.pos, "r"))
+            default: tabStops.append((change.pos, "l"))
+            }
+        }
     }
 }
 
@@ -226,6 +246,9 @@ private struct DOCXConverter {
     var pageWidth: Double = 612
     var margins = (top: 72.0, right: 72.0, bottom: 72.0, left: 72.0)
     var title: String?
+    /// Where a tab lands past the last stop a paragraph sets: every this many
+    /// points, from `settings.xml`, half an inch when it does not say.
+    var defaultTab: Double = 36
 
     init?(root: URL) {
         self.root = root
@@ -245,6 +268,10 @@ private struct DOCXConverter {
         readNotes("footnote", file: "word/footnotes.xml")
         readNotes("endnote", file: "word/endnotes.xml")
         readTitle()
+        if let interval = xml("word/settings.xml")?.val(of: "defaultTabStop").flatMap(Double.init),
+           interval > 0 {
+            defaultTab = interval / 20
+        }
         if let section = body.child("sectPr") { readSection(section) }
     }
 
@@ -418,6 +445,10 @@ private struct DOCXConverter {
         props.outline = pPr.val(of: "outlineLvl").flatMap(Int.init)
         if let fill = pPr.child("shd")?.attr("fill"), let hex = Self.hex(fill) { props.shading = hex }
         props.pageBreakBefore = pPr.toggle("pageBreakBefore")
+        for tab in pPr.child("tabs")?.children(named: "tab") ?? [] {
+            guard let pos = tab.attr("pos").flatMap(Double.init) else { continue }
+            props.tabChanges.append((pos / 20, tab.attr("val") ?? "left"))
+        }
         return props
     }
 
@@ -564,7 +595,15 @@ private struct DOCXConverter {
         // A page break inside a paragraph splits it: a rule cannot sit inside
         // a `<p>`, and the half on either side keeps the paragraph's look. A
         // half with nothing in it is left out.
-        let open = "<\(tag) style=\"\(css.joined(separator: ";"))\">"
+        // A paragraph with a tab in it is laid out by the page's script, which
+        // needs the stops it may land on.
+        var attributes = ""
+        if runs.contains(Self.tab) {
+            let stops = props.tabStops.sorted { $0.pos < $1.pos }
+                .map { "\($0.kind)\(Self.number($0.pos))" }.joined(separator: ",")
+            attributes = " data-tabs=\"\(stops)\""
+        }
+        let open = "<\(tag)\(attributes) style=\"\(css.joined(separator: ";"))\">"
         let halves = inner.components(separatedBy: Self.pageBreak)
         for (index, half) in halves.enumerated() {
             if index > 0 { html += Self.pageBreak }
@@ -577,6 +616,8 @@ private struct DOCXConverter {
     }
 
     static let pageBreak = "<hr class=\"page-break\">"
+    /// A tab, as an empty box the page's script widens to the next stop.
+    static let tab = "<span class=\"tab\"></span>"
 
     private func headingLevel(of style: DOCXStyle) -> Int? {
         if let outline = style.para.outline, outline < 9 { return outline }
@@ -724,7 +765,7 @@ private struct DOCXConverter {
                 out += Self.escape(text)
             case "tab", "ptab":
                 words += "\t"
-                out += "<span class=\"tab\">\t</span>"
+                out += Self.tab
             case "br":
                 out += part.attr("type") == "page" ? Self.pageBreak : "<br>"
             case "cr":
@@ -940,7 +981,8 @@ private struct DOCXConverter {
           margin: 0; font-size: inherit; font-weight: normal; white-space: pre-wrap;
         }
         .marker { display: inline-block; text-indent: 0; padding-right: .4em; box-sizing: border-box; }
-        .tab { white-space: pre; tab-size: 4; }
+        .tab { display: inline-block; width: 2em; }
+        #nota-pt { position: absolute; visibility: hidden; width: 100pt; height: 0; }
         img { max-width: 100%; height: auto; vertical-align: bottom; }
         table { margin: 2pt 0; }
         td { vertical-align: top; padding: 0 5.4pt; }
@@ -957,9 +999,61 @@ private struct DOCXConverter {
           hr.page-break { border: 0; margin: 0; break-after: page; }
         }
         </style></head>
-        <body><div class="page">\(content)</div></body></html>
+        <body data-default-tab="\(Self.number(defaultTab))"><div id="nota-pt"></div>
+        <div class="page">\(content)</div>
+        <script>\(Self.tabScript)</script></body></html>
         """
     }
+
+    /// Word's tabs, which CSS has no word for: each tab is widened, in
+    /// order, to reach the next stop past where it starts — the paragraph's
+    /// own (a left stop starts the text there, a right one ends it there, a
+    /// centre one centres it), else the next multiple of the default
+    /// interval. Measured from the text's left edge (the page's, or the
+    /// cell's), in points through a 100pt probe so a zoom changes nothing.
+    /// Again on resize and once the fonts have loaded, since both move text.
+    static let tabScript = """
+    (function () {
+      function layout() {
+        var probe = document.getElementById('nota-pt');
+        var ppt = probe.getBoundingClientRect().width / 100;
+        if (!ppt) { return; }
+        var interval = parseFloat(document.body.dataset.defaultTab) || 36;
+        document.querySelectorAll('.tab').forEach(function (t) { t.style.width = '0px'; });
+        document.querySelectorAll('[data-tabs]').forEach(function (p) {
+          var box = p.closest('td') || p.closest('.page');
+          var style = getComputedStyle(box);
+          var origin = box.getBoundingClientRect().left
+            + parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth);
+          var stops = p.dataset.tabs.split(',').filter(Boolean).map(function (s) {
+            return { kind: s[0], pos: parseFloat(s.slice(1)) };
+          });
+          var tabs = p.querySelectorAll('.tab');
+          tabs.forEach(function (tab, i) {
+            var x = (tab.getBoundingClientRect().left - origin) / ppt;
+            var stop = stops.find(function (s) { return s.pos > x + 0.5; });
+            var width;
+            if (stop && stop.kind !== 'l') {
+              var range = document.createRange();
+              range.setStartAfter(tab);
+              if (i + 1 < tabs.length) { range.setEndBefore(tabs[i + 1]); }
+              else { range.setEnd(p, p.childNodes.length); }
+              var run = range.getBoundingClientRect().width / ppt;
+              width = stop.pos - x - (stop.kind === 'c' ? run / 2 : run);
+            } else if (stop) {
+              width = stop.pos - x;
+            } else {
+              width = (Math.floor(x / interval + 1e-6) + 1) * interval - x;
+            }
+            tab.style.width = Math.max(0, width) * ppt + 'px';
+          });
+        });
+      }
+      window.addEventListener('load', layout);
+      window.addEventListener('resize', layout);
+      if (document.fonts) { document.fonts.ready.then(layout); }
+    })();
+    """
 
     // MARK: Helpers
 

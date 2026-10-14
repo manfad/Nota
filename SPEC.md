@@ -838,7 +838,10 @@
   counted the way Word counts them (`numbering.xml`, every `numFmt` Word uses for counting, `%1.%2` level text,
   start overrides, Symbol/Wingdings bullets drawn as the character they show); tables with column widths, `gridSpan`,
   `vMerge` row spans, cell shading and rules where the table or its style has borders; pictures at their size (a
-  metafile, which WebKit cannot draw, is left out); external and internal links; text boxes; page and section breaks
+  metafile, which WebKit cannot draw, is left out); tabs laid out by the page's script onto real stops — the
+  paragraph's own left / centre / right stops through its style chain, else the next multiple of `settings.xml`'s
+  `defaultTabStop` (36pt), measured from the page's or the cell's text edge — so a row of tabs lines up as in Word
+  (2026-10-14, after a signature block landed half way); external and internal links; text boxes; page and section breaks
   as a dashed rule; footnotes and endnotes numbered in order and gathered at the foot. Headers, footers, comments,
   deletions and drawing shapes are not shown. ⌘F, zoom, scroll memory and ⇧⌘F (one part, revealed in the page) work
   as on a book; the footer counts words. Export offers `Preview as PDF` — the page through WebKit's print.
