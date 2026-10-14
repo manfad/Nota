@@ -190,6 +190,7 @@ final class Preferences {
         static let hidesBookmarkToggleButton = "hidesBookmarkToggleButton"
         static let hidesBookmarkButton = "hidesBookmarkButton"
         static let hidesSettingsButton = "hidesSettingsButton"
+        static let hidesTabIcons = "hidesTabIcons"
         static let language = "appLanguage"
         static let theme = "appTheme"
         static let hotKeyCode = "hotKeyCode"
@@ -507,6 +508,14 @@ final class Preferences {
     var hidesTrafficLights: Bool {
         get { defaults.bool(forKey: Key.hidesTrafficLights) }
         set { setBoolean(newValue, current: hidesTrafficLights, key: Key.hidesTrafficLights) }
+    }
+
+    /// The file-kind icon at the front of every tab. Off, the title starts
+    /// at the tab's edge — and a bookmarked tab, which says so by filling
+    /// that icon in, no longer says so in the strip.
+    var hidesTabIcons: Bool {
+        get { defaults.bool(forKey: Key.hidesTabIcons) }
+        set { setBoolean(newValue, current: hidesTabIcons, key: Key.hidesTabIcons) }
     }
 
     /// The Bookmark button at the strip's trailing edge, the one that

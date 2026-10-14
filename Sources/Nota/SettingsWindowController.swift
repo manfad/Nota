@@ -63,6 +63,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
     private let autoHideTabBarSwitch = NSSwitch()
     private let trafficLightsSwitch = NSSwitch()
     private let bookmarkToggleButtonSwitch = NSSwitch()
+    private let tabIconsSwitch = NSSwitch()
     private let bookmarkButtonSwitch = NSSwitch()
     private let settingsButtonSwitch = NSSwitch()
     private let footerSwitches: [(TextStats.Segment, NSSwitch)] = [
@@ -411,7 +412,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         openingModeControl.segmentCount = PreviewMode.allCases.count
         openingModeControl.target = self
         openingModeControl.action = #selector(openingModeChanged)
-        for control in [autoHideTabBarSwitch, trafficLightsSwitch,
+        for control in [autoHideTabBarSwitch, trafficLightsSwitch, tabIconsSwitch,
                         bookmarkToggleButtonSwitch, bookmarkButtonSwitch,
                         settingsButtonSwitch] {
             control.target = self
@@ -561,6 +562,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         trafficLightsRow = trafficLights
         let parts = [
             trafficLights,
+            row("Tab icons", control: tabIconsSwitch),
             row("Bookmark button", control: bookmarkToggleButtonSwitch),
             row("Bookmark dialog button", control: bookmarkButtonSwitch),
             row("Settings button", control: settingsButtonSwitch),
@@ -1188,6 +1190,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
         autoHideTabBarRow?.isEnabled = !preferences.hidesTabBar
         trafficLightsRow?.isEnabled = !preferences.hidesTabBar
         trafficLightsSwitch.state = preferences.hidesTrafficLights ? .off : .on
+        tabIconsSwitch.state = preferences.hidesTabIcons ? .off : .on
         bookmarkToggleButtonSwitch.state = preferences.hidesBookmarkToggleButton ? .off : .on
         bookmarkButtonSwitch.state = preferences.hidesBookmarkButton ? .off : .on
         settingsButtonSwitch.state = preferences.hidesSettingsButton ? .off : .on
@@ -1328,6 +1331,7 @@ final class SettingsWindowController: NSWindowController, NSFontChanging {
             preferences.hidesTabBar = showTabBarSwitch.state == .off
             preferences.autoHidesTabBar = autoHideTabBarSwitch.state == .on
             preferences.hidesTrafficLights = trafficLightsSwitch.state == .off
+            preferences.hidesTabIcons = tabIconsSwitch.state == .off
             preferences.hidesBookmarkToggleButton = bookmarkToggleButtonSwitch.state == .off
             preferences.hidesBookmarkButton = bookmarkButtonSwitch.state == .off
             preferences.hidesSettingsButton = settingsButtonSwitch.state == .off

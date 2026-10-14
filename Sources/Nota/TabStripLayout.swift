@@ -53,6 +53,10 @@ struct TabStripLayout {
     /// set from `Preferences` by the window, read by every layout after.
     static var controls = TrailingControls()
 
+    /// Whether each tab leads with its file-kind icon. The same one setting
+    /// for the whole app, set and read the same way.
+    static var showsTabIcons = true
+
     /// Everything the trailing edge holds past the +: whichever of the three
     /// buttons are showing, their gaps, and the empty run after them.
     static var trailingControls: CGFloat {

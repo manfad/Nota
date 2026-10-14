@@ -1659,6 +1659,10 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
             TabStripLayout.controls = controls
             tabBar.needsLayout = true
         }
+        if TabStripLayout.showsTabIcons == preferences.hidesTabIcons {
+            TabStripLayout.showsTabIcons = !preferences.hidesTabIcons
+            tabBar.tabIconsDidChange()
+        }
         applyTopChrome()
     }
 

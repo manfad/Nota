@@ -157,8 +157,9 @@
   since neither Chinese nor Malay has a plural; and a new tab is 无标题 / 未命名 (Untitled 2, 无标题 2) while
   Malay keeps Untitled. A name a tab already has stays when the language changes (2026-09-07). **Appearance** — font family, size, line
   spacing, sidebar side (Left / Right, default Right). **Tab bar** — a first group of "Show tab bar" and "Auto-hide tab bar", then a
-  second group for what the strip shows: Traffic lights, Bookmark button, Bookmark dialog button, Settings
-  button; no footnote — the keys (⌘T, ⇧⌘J, ⌘D, ⇧⌘D, ⌘, and ⌘W) all keep working with the strip and its
+  second group for what the strip shows: Traffic lights, Tab icons, Bookmark button, Bookmark dialog button, Settings
+  button ("Tab icons", `hidesTabIcons`, added 2026-10-14: off, every tab's title starts at its own edge and a
+  narrow tab's unsaved dot leads it; a bookmarked tab, which says so by filling its icon, then says nothing); no footnote — the keys (⌘T, ⇧⌘J, ⌘D, ⇧⌘D, ⌘, and ⌘W) all keep working with the strip and its
   buttons hidden, but the page does not say so. "Bookmark dialog button" keeps the older
   `hidesBookmarkButton` key, from when it was the strip's only bookmark button, so a session that switched
   it off keeps it off; the new row writes `hidesBookmarkToggleButton`. "Auto-hide tab bar" and "Traffic lights" are both greyed while

@@ -125,6 +125,16 @@ final class TabBarView: NSView {
     private var items: [TabBarItem] = []
     private var selectedIndex = 0
     private var itemViews: [TabItemView] = []
+
+    /// `TabStripLayout.showsTabIcons` has changed: every tab lays its title
+    /// out again, from behind the icon or from the tab's own edge.
+    func tabIconsDidChange() {
+        for view in itemViews {
+            view.needsLayout = true
+            view.needsDisplay = true
+        }
+    }
+
     private let newTabButton = NewTabButton()
     private let bookmarkToggleButton = BookmarkToggleButton()
     private let bookmarksButton = BookmarksButton()
@@ -1622,7 +1632,9 @@ private final class TabItemView: NSView {
     /// The room left for the title once the icon, and the slot when there is
     /// one, have taken theirs.
     private var titleRect: NSRect {
-        let x = Self.horizontalPadding + Self.iconWidth + Self.iconTitleGap
+        let x = TabStripLayout.showsTabIcons
+            ? Self.horizontalPadding + Self.iconWidth + Self.iconTitleGap
+            : Self.horizontalPadding
         let trailing = isCompact
             ? bounds.maxX - Self.horizontalPadding
             : slotRect.minX - Self.titleSlotGap
@@ -1633,6 +1645,7 @@ private final class TabItemView: NSView {
         super.layout()
         hoverFillView.frame = bounds
         iconView.frame = iconRect
+        iconView.isHidden = !TabStripLayout.showsTabIcons
         dotView.frame = slotRect
         closeButton.frame = slotRect
         let compact = isCompact
@@ -1856,12 +1869,13 @@ private final class TabItemView: NSView {
         // corner of the icon.
         if isCompact, isDirty {
             let diameter = Self.compactDotDiameter
-            let dot = NSRect(
-                x: iconRect.maxX - diameter + 1,
-                y: iconRect.minY - 1,
-                width: diameter,
-                height: diameter
-            )
+            // Where there is no icon, the dot leads the tab on its own.
+            let dot = TabStripLayout.showsTabIcons
+                ? NSRect(x: iconRect.maxX - diameter + 1, y: iconRect.minY - 1,
+                         width: diameter, height: diameter)
+                : NSRect(x: Self.horizontalPadding / 2 - diameter / 2,
+                         y: (bounds.height - diameter) / 2,
+                         width: diameter, height: diameter)
             NSColor.tertiaryLabelColor.setFill()
             NSBezierPath(ovalIn: dot).fill()
             // The file has moved under the edits: the same ring the roomy
