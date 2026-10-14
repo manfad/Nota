@@ -251,6 +251,14 @@ enum Exporter {
         case .pdf:
             // The one export that is not a PDF: a document already is one.
             targets = [.epub]
+        case .word:
+            // The page as WebKit draws it, through the page exporter.
+            targets = note.wordDocument == nil ? [] : [.previewPDF]
+        case .spreadsheet:
+            // The sheet in front, as the grid, through the table exporter.
+            targets = [.previewPDF]
+        case .video:
+            targets = []
         }
         return targets.filter(isAvailable)
     }
@@ -266,7 +274,7 @@ enum Exporter {
         switch note.kind {
         case .rtf: true
         case .text: note.previewKind == .markdown || note.previewKind == .latex
-        case .image, .pdf, .epub: false
+        case .image, .pdf, .epub, .word, .spreadsheet, .video: false
         }
     }
 
@@ -307,7 +315,8 @@ enum Exporter {
         // The page as WebKit draws it where that exporter is plugged in; the
         // source listing where it is not, which is what the tab's other half
         // shows anyway.
-        if note.kind == .text, note.previewKind == .html, let hook = htmlPagePDF {
+        if note.kind == .text && note.previewKind == .html || note.kind == .word,
+           let hook = htmlPagePDF {
             hook(note, url, context, completion)
             return
         }
@@ -322,7 +331,8 @@ enum Exporter {
         // with no table behind it. That answers `nothingToExport`, and the
         // listing stands in for it exactly as it does for a tab with no pane
         // at all — SPEC "## Export" promises the listing, not a failure.
-        if note.kind == .text, note.previewKind == .sql || note.previewKind == .csv,
+        if note.kind == .spreadsheet
+            || note.kind == .text && (note.previewKind == .sql || note.previewKind == .csv),
            let hook = tablePDF, context.previewContent != nil {
             hook(note, url, context) { result in
                 guard case let .failure(error) = result, isNothingToExport(error) else {
@@ -361,6 +371,8 @@ enum Exporter {
         case .rtf:
             guard let rich = note.richText else { throw Failure.nothingToExport }
             try PDFPaginator.write(text: rich, to: url)
+        case .word, .spreadsheet, .video:
+            throw Failure.nothingToExport
         case .text:
             switch note.previewKind {
             case .markdown:
@@ -459,6 +471,8 @@ enum Exporter {
         case .rtf:
             guard let rich = note.richText else { throw Failure.nothingToExport }
             return rich
+        case .word, .spreadsheet, .video:
+            throw Failure.nothingToExport
         case .text:
             switch note.previewKind {
             case .markdown:

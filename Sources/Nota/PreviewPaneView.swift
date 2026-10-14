@@ -30,6 +30,8 @@ final class PreviewPaneView: NSView {
         let csv: CSVPreviewView
         let rtf: RTFPreviewView
         let tree: TreePreviewView
+        let docx: DOCXPreviewView
+        let video: VideoPreviewView
         let kind: PreviewContentKind
         var showsPDF: Bool { kind == .pdf }
         var showsBook: Bool { kind == .epub }
@@ -49,6 +51,8 @@ final class PreviewPaneView: NSView {
     private let csvContent = CSVPreviewView()
     private let rtfContent = RTFPreviewView()
     private let treeContent = TreePreviewView()
+    private let docxContent = DOCXPreviewView()
+    private let videoContent = VideoPreviewView()
     private var currentKind: PreviewContentKind = .markdown
 
     /// The content on screen.
@@ -298,6 +302,8 @@ final class PreviewPaneView: NSView {
         case .csv: csvContent
         case .rtf: rtfContent
         case .tree: treeContent
+        case .docx: docxContent
+        case .video: videoContent
         }
     }
 
@@ -380,6 +386,7 @@ final class PreviewPaneView: NSView {
     var panes: Panes {
         Panes(markdown: markdownContent, latex: latexContent, html: htmlContent,
               pdf: pdfContent, image: imageContent, epub: epubContent, sql: sqlContent,
-              csv: csvContent, rtf: rtfContent, tree: treeContent, kind: currentKind)
+              csv: csvContent, rtf: rtfContent, tree: treeContent, docx: docxContent,
+              video: videoContent, kind: currentKind)
     }
 }

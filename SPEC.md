@@ -21,9 +21,9 @@
   Close Tab is bound to — pressed again on the prompt, so two strokes of the same key close a dirty tab with no mouse; decided 2026-09-06).
 - Files are plain text of any kind — .md .txt .xml .json .css .js .html .yaml .toml .csv .log .ini .sh .py .swift and
   anything else that is text (Notepad++ model). Nota registers as an editor for text/source types (Finder "Open With",
-  drag onto the Dock icon, drop onto the window). No syntax highlighting. Not .docx / binaries — except the four
-  Nota views rather than edits: a PDF, a picture, an EPUB and a rich-text document (see PDF, Image tabs, EPUB and
-  RTF). An `.rtf` file or an `.rtfd` package opens as a viewer tab of its own (done 2026-09-05, see Done 26 and the
+  drag onto the Dock icon, drop onto the window). No syntax highlighting. Not binaries — except the ones
+  Nota views rather than edits: a PDF, a picture, an EPUB, a rich-text document, a Word document, an Excel workbook
+  and a film (see PDF, Image tabs, EPUB, RTF, and Office documents and video). An `.rtf` file or an `.rtfd` package opens as a viewer tab of its own (done 2026-09-05, see Done 26 and the
   RTF section): the document as its author wrote it, read and never written, with nothing to save. It used to be
   imported as plain text instead (Done 17, superseded).
 - Editing a named file only updates the cache; disk changes on ⌘S only. A named file keeps its extension, encoding
@@ -819,6 +819,43 @@
   has nothing to hide from a reader.
 - Footer: the middle counts pages (`12 pages`, `1 page`), the right says which one (`Page 3 of 12`), and it is empty
   when there is no document to be in. Everything else in the chrome — the strip, the vim badge, zen — is unchanged.
+
+## Office documents and video (done 2026-10-14, Done 70)
+- Three more viewer kinds, read and never written, nothing to save, `Read-only` in the footer, like a PDF:
+  `NoteKind.word` (`.docx`), `.spreadsheet` (`.xlsx`) and `.video` (`.mp4`, `.mov`, `.m4v`). The bytes decide first
+  (`FileSniff`): a zip whose first 8 KB names a `word/` part is a Word document and one naming `xl/` a workbook, with
+  the extension (`docx`/`docm`/`dotx`, `xlsx`/`xlsm`/`xltx`) answering when the part is further in; an ISO media
+  file's `ftyp` box (or a QuickTime `moov`/`mdat`/`wide` atom) after the first length word is a film — a HEIC is the
+  same container and is a picture first. Finder offers Nota for all three (Info.plist, ranked Alternate) and
+  Settings › File types lists docx, xlsx, mp4, mov, m4v under Documents and pictures.
+- **Word.** Nota's own reading, not AppKit's: `NSAttributedString` takes a `.docx` too and makes TextEdit's page of
+  it — tables flattened, list numbers lost. `DOCXDocument` unzips the file (`ditto`), and `DOCXConverter` writes one
+  HTML page beside `word/media`, drawn by the web view a book chapter uses (`DOCXPreviewView`): a white sheet the
+  section's page width and margins wide on a grey desk (dark desk in dark mode, the paper stays white, so an
+  author's black stays black); styles folded down their `basedOn` chain over `docDefaults` and the theme's fonts
+  (size, colour, bold/italic/underline/strike, caps, highlight, shading, alignment, indents, spacing before/after,
+  line spacing, contextual spacing); Title and `heading N` / `outlineLvl` as `h1`–`h6`; numbered and bulleted lists
+  counted the way Word counts them (`numbering.xml`, every `numFmt` Word uses for counting, `%1.%2` level text,
+  start overrides, Symbol/Wingdings bullets drawn as the character they show); tables with column widths, `gridSpan`,
+  `vMerge` row spans, cell shading and rules where the table or its style has borders; pictures at their size (a
+  metafile, which WebKit cannot draw, is left out); external and internal links; text boxes; page and section breaks
+  as a dashed rule; footnotes and endnotes numbered in order and gathered at the foot. Headers, footers, comments,
+  deletions and drawing shapes are not shown. ⌘F, zoom, scroll memory and ⇧⌘F (one part, revealed in the page) work
+  as on a book; the footer counts words. Export offers `Preview as PDF` — the page through WebKit's print.
+- **Excel.** `XLSXWorkbook` reads every visible worksheet into a `CSVTable` (`init(columns:rows:)`) and the `.csv`
+  grid shows it, so paging, sorting, ⌘F, ⌘C and Export CSV come with it. Columns are `A`, `B`, `C` and every row
+  up to the last filled one is a row, empty ones included, so the `#` gutter is Excel's row number. A cell shows
+  its shared or inline string, `TRUE`/`FALSE`, its error, or its number as General prints it (no `.0`, fifteen
+  significant digits); a date, time or percentage style shows `2025-01-31`, `14:30:00`, `62.5%` (1900 and 1904
+  date systems). A formula shows its last result. A popup in Refresh's place switches sheets, and the sheet is what
+  the session keeps for the tab. Export offers `Preview as PDF`, the sheet as `TablePDF` draws a grid. Merged cells,
+  colours and charts are not drawn; hidden sheets are left out.
+- **Video.** `VideoPreviewView`: AVKit's player with floating controls (full screen and picture in picture), black
+  around the picture. It never starts on its own, pauses when its tab is left or its pane is hidden, and the
+  session keeps the second it was paused at. The footer says `1920 × 1080 · 4:56` and `1:23 / 4:56`. Nothing to
+  export.
+- A file that will not open keeps its tab and says `Couldn’t open “name”.` (a film the player rejects: `Couldn’t play
+  this video.`).
 
 ## RTF (done 2026-09-05, Todo 26)
 - A rich-text document opens in a tab of its own and is read there, the fourth viewer after a PDF, a picture and a
@@ -1928,6 +1965,11 @@ with nothing else to wire.
    as shells and read on selection or in an idle pass.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+70. **Word, Excel and video viewers (done 2026-10-14).** `.docx`, `.xlsx` and `.mp4`/`.mov`/`.m4v` open as read-only
+    viewer tabs; see "## Office documents and video". `Examples/Report.docx` and `Examples/Budget.xlsx` carry
+    every feature the two readers claim (lists at two levels, a merged and shaded table, a picture, a link, a
+    footnote, a page break, CJK text; two sheets plus a hidden one, dates, percentages, booleans, a formula, a gap
+    row).
 69. **A closed column is held at nothing (done 2026-09-15).** In the editor mode the preview column, and in reading
     the editor's, is "closed" with a split-item thickness of zero — which the column's own content could overrule:
     the tree view kept alive behind the page asks for its two 20pt margins (40 in zen), and rather than narrow the

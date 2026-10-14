@@ -318,6 +318,14 @@ enum FileClass {
     /// name ends `.rtfd`, the way the system writes rich text with pictures
     /// in it.
     case rtf
+    /// An Office Open XML word-processing document: a zip with `word/` in
+    /// it, which is what a `.docx` is.
+    case word
+    /// An Office Open XML workbook: a zip with `xl/` in it — an `.xlsx`.
+    case spreadsheet
+    /// An ISO media file — MP4, MOV, M4V — known by the `ftyp` box (or a
+    /// QuickTime `moov` / `mdat` / `wide` atom) after the first length word.
+    case video
     /// One of the picture formats `NSImage` draws, known by the bytes every
     /// one of them starts with.
     case image
@@ -359,8 +367,35 @@ enum FileSniff {
         if isImage(head) { return .image }
         if isEPUB(head) { return .epub }
         if isRTF(head) { return .rtf }
+        if let office = officeKind(head, url: url) { return office }
+        if isVideo(head) { return .video }
         if TextFile.decode(head) != nil { return .text }
         return .binary
+    }
+
+    /// A `.docx` or an `.xlsx`. Both are zips, and neither says which in its
+    /// first entry — that is `[Content_Types].xml` — so the entry names in
+    /// the first 8 KB are read for `word/` or `xl/`, and the name answers when
+    /// the part that would say is further in than that.
+    private static func officeKind(_ head: Data, url: URL) -> FileClass? {
+        guard [UInt8](head.prefix(zipMagic.count)) == zipMagic else { return nil }
+        if head.range(of: Data("word/".utf8)) != nil { return .word }
+        if head.range(of: Data("xl/".utf8)) != nil { return .spreadsheet }
+        let ext = url.pathExtension.lowercased()
+        if Note.wordExtensions.contains(ext) { return .word }
+        if Note.spreadsheetExtensions.contains(ext) { return .spreadsheet }
+        return nil
+    }
+
+    /// An ISO base media file: a box length, then `ftyp` and a brand. A HEIC
+    /// is the same container and was taken for a picture before this is
+    /// asked. An older QuickTime movie may open on `moov`, `mdat`, `wide` or
+    /// `free` instead.
+    private static func isVideo(_ head: Data) -> Bool {
+        let bytes = [UInt8](head.prefix(12))
+        guard bytes.count >= 8 else { return false }
+        let box = String(decoding: bytes[4..<8], as: UTF8.self)
+        return ["ftyp", "moov", "mdat", "wide"].contains(box)
     }
 
     /// `{\rtf`, which every RTF document starts with — the version digit

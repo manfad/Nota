@@ -1971,6 +1971,9 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         case .image: NoteKind.image
         case .epub: NoteKind.epub
         case .rtf: NoteKind.rtf
+        case .word: NoteKind.word
+        case .spreadsheet: NoteKind.spreadsheet
+        case .video: NoteKind.video
         case .unreadable: Note.viewerKind(url)
         case .text, .binary: nil
         }
@@ -3401,6 +3404,15 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         case .rtf:
             noteRecentDocument(target)
             addTab(fileURL: target, kind: .rtf)
+        case .word:
+            noteRecentDocument(target)
+            addTab(fileURL: target, kind: .word)
+        case .spreadsheet:
+            noteRecentDocument(target)
+            addTab(fileURL: target, kind: .spreadsheet)
+        case .video:
+            noteRecentDocument(target)
+            addTab(fileURL: target, kind: .video)
         case .text:
             openAsText(target)
         case .binary:
@@ -5767,8 +5779,12 @@ extension MainWindowController {
                 .reveal(page: page, range: range, query: query)
         case .book(let chapter, _):
             guard let note = currentNote else { return }
-            (previewColumn.content(for: note) as? EPUBPreviewView)?
-                .reveal(chapter: chapter, query: query)
+            let content = previewColumn.content(for: note)
+            if let word = content as? DOCXPreviewView {
+                word.reveal(query: query)
+            } else {
+                (content as? EPUBPreviewView)?.reveal(chapter: chapter, query: query)
+            }
         }
     }
 }

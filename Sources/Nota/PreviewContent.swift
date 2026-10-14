@@ -9,11 +9,11 @@ import AppKit
 /// Nota views rather than edits. This is the only place in the app that has
 /// to be told.
 enum PreviewContentKind: Hashable {
-    case markdown, latex, html, pdf, image, epub, sql, csv, rtf, tree
+    case markdown, latex, html, pdf, image, epub, sql, csv, rtf, tree, docx, video
 
     /// Every kind there is, in the order the column keeps them.
     static let all: [PreviewContentKind] = [
-        .markdown, .latex, .html, .pdf, .image, .epub, .sql, .csv, .rtf, .tree,
+        .markdown, .latex, .html, .pdf, .image, .epub, .sql, .csv, .rtf, .tree, .docx, .video,
     ]
 
     init(_ note: Note) {
@@ -22,6 +22,10 @@ enum PreviewContentKind: Hashable {
         case .image: self = .image
         case .epub: self = .epub
         case .rtf: self = .rtf
+        case .word: self = .docx
+        // A workbook's sheet is a table, read in the grid a `.csv` is.
+        case .spreadsheet: self = .csv
+        case .video: self = .video
         case .text:
             switch note.previewKind {
             case .latex: self = .latex

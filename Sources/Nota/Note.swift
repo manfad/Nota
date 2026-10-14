@@ -223,6 +223,9 @@ enum NoteFormat: Equatable {
 /// save, and nothing to keep in the cache.
 enum NoteKind {
     case text, pdf, image, epub, rtf
+    /// A `.docx`, a `.xlsx`, a film — Office documents and video, read and
+    /// never written (SPEC "## Office documents and video").
+    case word, spreadsheet, video
 
     /// Whether the tab is read rather than edited. Everything that follows
     /// from that — locked in reading, never dirty, never cached, never
@@ -348,6 +351,10 @@ final class Note {
     private var hasLoadedBook = false
     private var loadedRichText: NSAttributedString?
     private var hasLoadedRichText = false
+    private var loadedWord: DOCXDocument?
+    private var hasLoadedWord = false
+    private var loadedWorkbook: XLSXWorkbook?
+    private var hasLoadedWorkbook = false
     /// A viewer's text pulled out part by part for ⇧⌘F, and whether pulling
     /// it has been tried — the same once-and-kept rule the parsed document
     /// and the book follow.
@@ -474,6 +481,10 @@ final class Note {
         hasLoadedBook = false
         loadedRichText = nil
         hasLoadedRichText = false
+        loadedWord = nil
+        hasLoadedWord = false
+        loadedWorkbook = nil
+        hasLoadedWorkbook = false
         loadedSearchParts = []
         hasLoadedSearchParts = false
     }
@@ -647,7 +658,22 @@ final class Note {
         if isImageFile(url) { return .image }
         if isEPUBFile(url) { return .epub }
         if isRichTextFile(url) { return .rtf }
+        let ext = url.pathExtension.lowercased()
+        if wordExtensions.contains(ext) { return .word }
+        if spreadsheetExtensions.contains(ext) { return .spreadsheet }
+        if isVideoFile(url) { return .video }
         return nil
+    }
+
+    /// The spellings a Word document and a workbook go by, for a file whose
+    /// bytes could not say.
+    static let wordExtensions: Set<String> = ["docx", "docm", "dotx"]
+    static let spreadsheetExtensions: Set<String> = ["xlsx", "xlsm", "xltx"]
+
+    /// A film, by name: whatever the system files under movies.
+    static func isVideoFile(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
+        return type.conforms(to: .movie)
     }
 
     /// Rich text, by name — the same fallback a PDF has, for a file that is
@@ -701,7 +727,7 @@ final class Note {
     /// binary — does the old name-based guess take over.
     static func isOpenable(_ url: URL) -> Bool {
         switch FileSniff.classify(at: url) {
-        case .pdf, .image, .epub, .rtf:
+        case .pdf, .image, .epub, .rtf, .word, .spreadsheet, .video:
             return true
         case .text:
             return !TextFile.isDeliberatelyExcluded(url)
@@ -761,6 +787,27 @@ final class Note {
         return loadedRichText
     }
 
+    /// The Word document behind a `.docx` tab, unpacked and turned into a
+    /// page the first time it is asked for and held afterwards, the same way
+    /// a book is. `nil` when the file will not come apart into one.
+    var wordDocument: DOCXDocument? {
+        guard kind == .word else { return nil }
+        if hasLoadedWord { return loadedWord }
+        hasLoadedWord = true
+        loadedWord = fileURL.flatMap { DOCXDocument.open($0) }
+        return loadedWord
+    }
+
+    /// The workbook behind an `.xlsx` tab, every sheet read into a table the
+    /// first time it is asked for.
+    var workbook: XLSXWorkbook? {
+        guard kind == .spreadsheet else { return nil }
+        if hasLoadedWorkbook { return loadedWorkbook }
+        hasLoadedWorkbook = true
+        loadedWorkbook = fileURL.flatMap { XLSXWorkbook.open($0) }
+        return loadedWorkbook
+    }
+
     /// The read itself. `.documentType` is left unsaid on purpose: the option
     /// is a hint, and letting AppKit decide is what makes one call answer for
     /// a flat `.rtf` and an `.rtfd` folder both.
@@ -782,7 +829,11 @@ final class Note {
         case .text: return NoteSearchSource(title: title, text: storage.string)
         case .pdf: return NoteSearchSource(title: title, parts: .pages(searchParts))
         case .epub: return NoteSearchSource(title: title, parts: .chapters(searchParts))
-        case .image, .rtf: return NoteSearchSource(title: title, text: "")
+        case .image, .rtf, .video, .spreadsheet: return NoteSearchSource(title: title, text: "")
+        // One part, so a hit is revealed in the page rather than in an
+        // editor the tab does not have.
+        case .word:
+            return NoteSearchSource(title: title, parts: .chapters([wordDocument?.plainText ?? ""]))
         }
     }
 

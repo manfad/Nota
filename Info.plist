@@ -13,9 +13,9 @@
     <key>CFBundleIconFile</key>
     <string>Nota</string>
     <key>CFBundleVersion</key>
-    <string>1.2.10</string>
+    <string>1.2.11</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.2.10</string>
+    <string>1.2.11</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -63,6 +63,36 @@
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.adobe.pdf</string>
+            </array>
+        </dict>
+        <!-- Office documents and films, opened as viewers too: a Word
+             document as its page, a workbook as a grid, a film in the
+             system player. -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Office Document</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.openxmlformats.wordprocessingml.document</string>
+                <string>org.openxmlformats.spreadsheetml.sheet</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Video</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.mpeg-4</string>
+                <string>com.apple.quicktime-movie</string>
+                <string>com.apple.m4v-video</string>
             </array>
         </dict>
         <!-- Types with no system UTI at all, which can only be named by

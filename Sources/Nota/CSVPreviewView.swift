@@ -39,6 +39,9 @@ final class CSVPreviewView: NSView, PreviewContent {
     /// order. Sits immediately before the pager, on its leading side.
     private let exportButton = NSButton()
     private let rangeLabel = NSTextField(labelWithString: "")
+    /// A workbook's sheets, in its own order. Shown in Refresh's place for an
+    /// `.xlsx` tab, which has no text to read again; hidden for a `.csv`.
+    private let sheetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let scrollView = NSScrollView()
     private let grid = SQLGridView()
     /// The quiet line where the grid would be, for a file with nothing to
@@ -83,6 +86,13 @@ final class CSVPreviewView: NSView, PreviewContent {
     private var shownSource: String?
     private var separator = CSVTable.Separator.comma
     private var table: CSVTable?
+    /// The workbook behind an `.xlsx` tab, and which of its sheets is in the
+    /// grid. `nil` for a `.csv`, whose table comes from the editor's text.
+    private var workbook: XLSXWorkbook?
+    private(set) var sheetIndex = 0
+    /// The tab's name, when its workbook would not open — what the empty
+    /// label says in place of the grid.
+    private var unreadableWorkbookName: String?
     private var page: CSVTable.Page?
     private var sort: CSVTable.Sort?
     private var offset = 0
@@ -103,6 +113,8 @@ final class CSVPreviewView: NSView, PreviewContent {
     // MARK: - What the pane reports
 
     var onDropFiles: (([URL]) -> Void)?
+    /// A workbook's sheet was changed — what the session keeps for the tab.
+    var onPositionChange: ((Int) -> Void)?
     /// Where the row under a clicked cell is written in the file. Split only,
     /// which is what `sendsBlockClicks` says: in reading there is no editor on
     /// screen to point at.
@@ -212,6 +224,16 @@ final class CSVPreviewView: NSView, PreviewContent {
         refreshButton.toolTip = "Read again"
         refreshButton.setAccessibilityIdentifier("csv-refresh")
         bar.addSubview(refreshButton)
+
+        sheetPopup.translatesAutoresizingMaskIntoConstraints = false
+        sheetPopup.controlSize = .small
+        sheetPopup.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        sheetPopup.target = self
+        sheetPopup.action = #selector(sheetChosen)
+        sheetPopup.toolTip = L10n.text("Sheet")
+        sheetPopup.isHidden = true
+        sheetPopup.setAccessibilityIdentifier("csv-sheet")
+        bar.addSubview(sheetPopup)
 
         // Numbers that change as the reader pages: tabular figures, so the
         // label does not shuffle sideways between one page and the next.
@@ -341,6 +363,12 @@ final class CSVPreviewView: NSView, PreviewContent {
             refreshButton.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
             refreshButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
 
+            sheetPopup.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            sheetPopup.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            sheetPopup.trailingAnchor.constraint(
+                lessThanOrEqualTo: exportButton.leadingAnchor, constant: -Layout.barSpacing
+            ),
+
             nextButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
             nextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             nextButton.widthAnchor.constraint(equalToConstant: Layout.pageButtonWidth),
@@ -378,6 +406,10 @@ final class CSVPreviewView: NSView, PreviewContent {
         if note.id != shownID { adopt(note) }
         self.note = note
         isColumnVisible = context.isVisible
+        if note.kind == .spreadsheet {
+            showWorkbook(of: note)
+            return
+        }
         // A table nobody can see is not worth reading — and a read costs the
         // whole file, so the column being away is a real saving.
         guard context.isVisible else { return }
@@ -399,7 +431,64 @@ final class CSVPreviewView: NSView, PreviewContent {
     /// read from is what makes the next show read it again.
     func invalidateRender() {
         shownSource = nil
+        workbook = nil
     }
+
+    // MARK: - A workbook
+
+    /// An `.xlsx` tab: the note's workbook, already read, its sheet put in
+    /// the grid. There is no text behind it, so nothing here runs on the
+    /// read queue and nothing waits for the column to be visible.
+    private func showWorkbook(of note: Note) {
+        let book = note.workbook
+        unreadableWorkbookName = book == nil ? note.title : nil
+        guard book !== workbook || table == nil else { return }
+        let isNewBook = workbook == nil || workbook?.fileURL != book?.fileURL
+        workbook = book
+        refreshButton.isHidden = true
+        sheetPopup.isHidden = false
+        sheetPopup.removeAllItems()
+        sheetPopup.addItems(withTitles: book?.sheets.map(\.name) ?? [])
+        let count = book?.sheets.count ?? 0
+        let wanted = isNewBook ? note.selectionLocation : sheetIndex
+        sheetIndex = count == 0 ? 0 : min(max(0, wanted), count - 1)
+        loadSheet()
+    }
+
+    private func loadSheet() {
+        if let workbook, workbook.sheets.indices.contains(sheetIndex) {
+            sheetPopup.selectItem(at: sheetIndex)
+            table = workbook.sheets[sheetIndex].table
+        } else {
+            table = nil
+        }
+        sort = nil
+        offset = 0
+        scrollsToTop = true
+        findSession.close()
+        reload()
+    }
+
+    @objc private func sheetChosen(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        guard index >= 0, index != sheetIndex else { return }
+        sheetIndex = index
+        loadSheet()
+        onPositionChange?(sheetIndex)
+    }
+
+    /// The sheet in front — what the session keeps for a workbook tab, the
+    /// way it keeps a PDF's page. A `.csv` has nowhere of its own to be.
+    var rememberedPosition: Int? { workbook == nil ? nil : sheetIndex }
+
+    /// Turns to a sheet, for the tests and for a session coming back.
+    func showSheet(_ index: Int) {
+        guard let workbook, workbook.sheets.indices.contains(index) else { return }
+        sheetIndex = index
+        loadSheet()
+    }
+
+    var sheetNamesForTesting: [String] { workbook?.sheets.map(\.name) ?? [] }
 
     /// A different tab has come forward. Everything about the table is this
     /// tab's, so all of it goes.
@@ -410,6 +499,10 @@ final class CSVPreviewView: NSView, PreviewContent {
         page = nil
         offset = 0
         sort = nil
+        workbook = nil
+        unreadableWorkbookName = nil
+        refreshButton.isHidden = false
+        sheetPopup.isHidden = true
         separator = note.fileURL
             .flatMap { CSVTable.Separator(fileExtension: $0.pathExtension) } ?? .comma
         pendingFindLanding = nil
@@ -653,7 +746,8 @@ final class CSVPreviewView: NSView, PreviewContent {
     /// one caption left is the big file's, which is an instruction rather than
     /// a state.
     private func updateEmptyState() {
-        let text = table == nil && isBigFile ? "Refresh to read this file." : ""
+        let text = unreadableWorkbookName.map { "Couldn’t open “\($0)”." }
+            ?? (table == nil && isBigFile ? "Refresh to read this file." : "")
         emptyLabel.stringValue = text
         emptyLabel.isHidden = text.isEmpty
         scrollView.isHidden = false
@@ -824,7 +918,8 @@ final class CSVPreviewView: NSView, PreviewContent {
     /// column picked out of the grid is that column, and not the block of
     /// lines it happens to sit beside.
     private func revealSource(of selection: SQLGridView.Selection) {
-        guard sendsBlockClicks, let onSourceReveal else { return }
+        // A workbook's cells are written nowhere the editor could show.
+        guard workbook == nil, sendsBlockClicks, let onSourceReveal else { return }
         let ranges = sourceRanges(of: selection)
         guard !ranges.isEmpty else { return }
         onSourceReveal(ranges)

@@ -113,6 +113,16 @@ struct CSVTable: Equatable {
         fieldSources = records.dropFirst().map(\.fieldRanges)
     }
 
+    /// A table that was never text: a workbook's sheet (`XLSXWorkbook`). It
+    /// is written nowhere a click could point to, so every row's source is
+    /// empty and the pane has nothing to reveal.
+    init(columns: [String], rows: [[String]]) {
+        self.columns = columns
+        self.rows = rows
+        sources = Array(repeating: NSRange(location: NSNotFound, length: 0), count: rows.count)
+        fieldSources = Array(repeating: [], count: rows.count)
+    }
+
     /// What a column with no name in the header is called. Its position,
     /// counted the way a reader counts columns.
     static func placeholderName(at index: Int) -> String { "Column \(index + 1)" }
