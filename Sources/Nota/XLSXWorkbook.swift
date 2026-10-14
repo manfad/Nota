@@ -234,9 +234,20 @@ final class XLSXWorkbook {
             parser.delegate = self
             guard parser.parse() else { return nil }
             let width = maxColumn + 1
-            let columns = (0 ..< width).map(XLSXWorkbook.columnName)
-            let rows: [[String]] = maxRow == 0 ? [] : (1 ... maxRow).map { number in
-                let line = cells[number] ?? [:]
+            // The first row with anything in it is the header, the way a
+            // sheet of records is written: its words name the columns, so a
+            // sort never moves it in among the rows. A blank header cell is
+            // named by its column letter.
+            guard let headerRow = cells.keys.min() else {
+                return CSVTable(columns: (0 ..< width).map(XLSXWorkbook.columnName), rows: [])
+            }
+            let header = cells[headerRow] ?? [:]
+            let columns = (0 ..< width).map { index -> String in
+                let name = header[index]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return name.isEmpty ? XLSXWorkbook.columnName(index) : name
+            }
+            let rows: [[String]] = headerRow >= maxRow ? [] : (headerRow + 1 ... maxRow).map {
+                let line = cells[$0] ?? [:]
                 return (0 ..< width).map { line[$0] ?? "" }
             }
             return CSVTable(columns: columns, rows: rows)

@@ -39,9 +39,9 @@ final class CSVPreviewView: NSView, PreviewContent {
     /// order. Sits immediately before the pager, on its leading side.
     private let exportButton = NSButton()
     private let rangeLabel = NSTextField(labelWithString: "")
-    /// A workbook's sheets, in its own order. Shown in Refresh's place for an
-    /// `.xlsx` tab, which has no text to read again; hidden for a `.csv`.
-    private let sheetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    /// A workbook's sheets, in its own order, as tabs across the top of the
+    /// pane. Shown for an `.xlsx` of more than one sheet; hidden for a `.csv`.
+    private let sheetStrip = SheetTabStrip()
     private let scrollView = NSScrollView()
     private let grid = SQLGridView()
     /// The quiet line where the grid would be, for a file with nothing to
@@ -53,11 +53,15 @@ final class CSVPreviewView: NSView, PreviewContent {
     private lazy var findSession = GridFindSession(bar: findBar, grid: grid, source: self)
     /// The bar's own top constraint, which drops while the pill is up.
     private var barTop: NSLayoutConstraint?
+    private var stripTop: NSLayoutConstraint?
 
     private enum Layout {
         static let blankColumnWidth: CGFloat = 160
         static let inset: CGFloat = 12
         static let rowGap: CGFloat = 10
+        /// A workbook's first row from the top of the pane: it has no corner
+        /// slot to keep clear of.
+        static let workbookTop: CGFloat = 10
         static let controlHeight: CGFloat = 22
         static let barSpacing: CGFloat = 8
         static let pageButtonWidth: CGFloat = 24
@@ -192,10 +196,20 @@ final class CSVPreviewView: NSView, PreviewContent {
         )
     }
 
+    /// Where the bar starts. A `.csv` keeps clear of the corner slot's
+    /// control; a workbook has no slot — it is a viewer — so its sheets start
+    /// near the top and the bar sits under them. Either drops under the ⌘F
+    /// pill while it is up.
     private func applyFindBarClearance() {
-        barTop?.constant = findSession.isVisible
-            ? ModeControlOverlay.controlTopInset + findBar.stackHeight + Layout.barSpacing
-            : Layout.topClearance
+        let pill = ModeControlOverlay.controlTopInset + findBar.stackHeight + Layout.barSpacing
+        guard workbook != nil else {
+            barTop?.constant = findSession.isVisible ? pill : Layout.topClearance
+            return
+        }
+        let top = findSession.isVisible ? pill : Layout.workbookTop
+        stripTop?.constant = top
+        barTop?.constant = sheetStrip.isHidden
+            ? top : top + SheetTabStrip.height + Layout.rowGap
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -225,15 +239,11 @@ final class CSVPreviewView: NSView, PreviewContent {
         refreshButton.setAccessibilityIdentifier("csv-refresh")
         bar.addSubview(refreshButton)
 
-        sheetPopup.translatesAutoresizingMaskIntoConstraints = false
-        sheetPopup.controlSize = .small
-        sheetPopup.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        sheetPopup.target = self
-        sheetPopup.action = #selector(sheetChosen)
-        sheetPopup.toolTip = L10n.text("Sheet")
-        sheetPopup.isHidden = true
-        sheetPopup.setAccessibilityIdentifier("csv-sheet")
-        bar.addSubview(sheetPopup)
+        sheetStrip.translatesAutoresizingMaskIntoConstraints = false
+        sheetStrip.isHidden = true
+        sheetStrip.setAccessibilityIdentifier("csv-sheets")
+        sheetStrip.onSelect = { [weak self] index in self?.sheetChosen(index) }
+        addSubview(sheetStrip)
 
         // Numbers that change as the reader pages: tabular figures, so the
         // label does not shuffle sideways between one page and the next.
@@ -353,6 +363,10 @@ final class CSVPreviewView: NSView, PreviewContent {
 
         let top = bar.topAnchor.constraint(equalTo: topAnchor, constant: Layout.topClearance)
         barTop = top
+        let stripTopConstraint = sheetStrip.topAnchor.constraint(
+            equalTo: topAnchor, constant: Layout.workbookTop
+        )
+        stripTop = stripTopConstraint
 
         NSLayoutConstraint.activate([
             top,
@@ -363,11 +377,10 @@ final class CSVPreviewView: NSView, PreviewContent {
             refreshButton.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
             refreshButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
 
-            sheetPopup.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
-            sheetPopup.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            sheetPopup.trailingAnchor.constraint(
-                lessThanOrEqualTo: exportButton.leadingAnchor, constant: -Layout.barSpacing
-            ),
+            stripTopConstraint,
+            sheetStrip.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Layout.inset),
+            sheetStrip.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Layout.inset),
+            sheetStrip.heightAnchor.constraint(equalToConstant: SheetTabStrip.height),
 
             nextButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
             nextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
@@ -446,9 +459,10 @@ final class CSVPreviewView: NSView, PreviewContent {
         let isNewBook = workbook == nil || workbook?.fileURL != book?.fileURL
         workbook = book
         refreshButton.isHidden = true
-        sheetPopup.isHidden = false
-        sheetPopup.removeAllItems()
-        sheetPopup.addItems(withTitles: book?.sheets.map(\.name) ?? [])
+        sheetStrip.titles = book?.sheets.map(\.name) ?? []
+        // One sheet is the whole workbook: there is nothing to pick between.
+        sheetStrip.isHidden = sheetStrip.titles.count < 2
+        applyFindBarClearance()
         let count = book?.sheets.count ?? 0
         let wanted = isNewBook ? note.selectionLocation : sheetIndex
         sheetIndex = count == 0 ? 0 : min(max(0, wanted), count - 1)
@@ -457,7 +471,7 @@ final class CSVPreviewView: NSView, PreviewContent {
 
     private func loadSheet() {
         if let workbook, workbook.sheets.indices.contains(sheetIndex) {
-            sheetPopup.selectItem(at: sheetIndex)
+            sheetStrip.selectedIndex = sheetIndex
             table = workbook.sheets[sheetIndex].table
         } else {
             table = nil
@@ -469,8 +483,7 @@ final class CSVPreviewView: NSView, PreviewContent {
         reload()
     }
 
-    @objc private func sheetChosen(_ sender: NSPopUpButton) {
-        let index = sender.indexOfSelectedItem
+    private func sheetChosen(_ index: Int) {
         guard index >= 0, index != sheetIndex else { return }
         sheetIndex = index
         loadSheet()
@@ -489,6 +502,7 @@ final class CSVPreviewView: NSView, PreviewContent {
     }
 
     var sheetNamesForTesting: [String] { workbook?.sheets.map(\.name) ?? [] }
+    var sheetStripForTesting: SheetTabStrip { sheetStrip }
 
     /// A different tab has come forward. Everything about the table is this
     /// tab's, so all of it goes.
@@ -502,7 +516,8 @@ final class CSVPreviewView: NSView, PreviewContent {
         workbook = nil
         unreadableWorkbookName = nil
         refreshButton.isHidden = false
-        sheetPopup.isHidden = true
+        sheetStrip.isHidden = true
+        applyFindBarClearance()
         separator = note.fileURL
             .flatMap { CSVTable.Separator(fileExtension: $0.pathExtension) } ?? .comma
         pendingFindLanding = nil

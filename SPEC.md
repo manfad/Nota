@@ -846,12 +846,16 @@
   deletions and drawing shapes are not shown. ⌘F, zoom, scroll memory and ⇧⌘F (one part, revealed in the page) work
   as on a book; the footer counts words. Export offers `Preview as PDF` — the page through WebKit's print.
 - **Excel.** `XLSXWorkbook` reads every visible worksheet into a `CSVTable` (`init(columns:rows:)`) and the `.csv`
-  grid shows it, so paging, sorting, ⌘F, ⌘C and Export CSV come with it. Columns are `A`, `B`, `C` and every row
-  up to the last filled one is a row, empty ones included, so the `#` gutter is Excel's row number. A cell shows
+  grid shows it, so paging, sorting, ⌘F, ⌘C and Export CSV come with it. The first filled row is the header — its
+  words name the columns (a blank one keeps its letter), so a sort never moves it among the rows (2026-10-14; the
+  first cut named the columns `A`, `B`, `C` and counted the header as row 1) — and every row under it up to the last
+  filled one is a row, empty ones included. A cell shows
   its shared or inline string, `TRUE`/`FALSE`, its error, or its number as General prints it (no `.0`, fifteen
   significant digits); a date, time or percentage style shows `2025-01-31`, `14:30:00`, `62.5%` (1900 and 1904
-  date systems). A formula shows its last result. A popup in Refresh's place switches sheets, and the sheet is what
-  the session keeps for the tab. Export offers `Preview as PDF`, the sheet as `TablePDF` draws a grid. Merged cells,
+  date systems). A formula shows its last result. A workbook of two or more sheets shows them as a row of tabs
+  across the top of the pane, Safari's compact shape (`SheetTabStrip`: one grey track, equal shares, the sheet in
+  front a raised pill); the bar sits under it, 10pt from the top, since a viewer has no corner slot to keep clear
+  of. The sheet is what the session keeps for the tab. Export offers `Preview as PDF`, the sheet as `TablePDF` draws a grid. Merged cells,
   colours and charts are not drawn; hidden sheets are left out.
 - **Video.** `VideoPreviewView`: AVKit's player with floating controls (full screen and picture in picture), black
   around the picture. It never starts on its own, pauses when its tab is left or its pane is hidden, and the
