@@ -40,7 +40,7 @@ final class CSVPreviewView: NSView, PreviewContent {
     private let exportButton = NSButton()
     private let rangeLabel = NSTextField(labelWithString: "")
     /// A workbook's sheets, in its own order, as tabs across the top of the
-    /// pane. Shown for an `.xlsx` of more than one sheet; hidden for a `.csv`.
+    /// pane. Shown for every `.xlsx`, one sheet included; hidden for a `.csv`.
     private let sheetStrip = SheetTabStrip()
     private let scrollView = NSScrollView()
     private let grid = SQLGridView()
@@ -460,8 +460,8 @@ final class CSVPreviewView: NSView, PreviewContent {
         workbook = book
         refreshButton.isHidden = true
         sheetStrip.titles = book?.sheets.map(\.name) ?? []
-        // One sheet is the whole workbook: there is nothing to pick between.
-        sheetStrip.isHidden = sheetStrip.titles.count < 2
+        // Shown whatever the count: a lone sheet still says its name.
+        sheetStrip.isHidden = sheetStrip.titles.isEmpty
         applyFindBarClearance()
         let count = book?.sheets.count ?? 0
         let wanted = isNewBook ? note.selectionLocation : sheetIndex

@@ -852,7 +852,7 @@
   filled one is a row, empty ones included. A cell shows
   its shared or inline string, `TRUE`/`FALSE`, its error, or its number as General prints it (no `.0`, fifteen
   significant digits); a date, time or percentage style shows `2025-01-31`, `14:30:00`, `62.5%` (1900 and 1904
-  date systems). A formula shows its last result. A workbook of two or more sheets shows them as a row of tabs
+  date systems). A formula shows its last result. A workbook shows its sheets — one sheet included — as a row of tabs
   across the top of the pane, Safari's compact shape (`SheetTabStrip`: one grey track, equal shares, the sheet in
   front a raised pill); the bar sits under it, 10pt from the top, since a viewer has no corner slot to keep clear
   of. The sheet is what the session keeps for the tab. Export offers `Preview as PDF`, the sheet as `TablePDF` draws a grid. Merged cells,
