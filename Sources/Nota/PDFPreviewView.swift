@@ -557,6 +557,19 @@ final class NotaPDFView: PDFView, NSUserInterfaceValidations {
         super.init(frame: frameRect)
         unregisterDraggedTypes()
         registerForDraggedTypes(PreviewFileDrop.types)
+        Self.turnOffFormDetection(self)
+    }
+
+    /// PDFKit guesses where a form would be filled in on a page that has none
+    /// (Preview's AutoFill) and lays a field over each guess: a blue box that
+    /// lights up as text under it is selected, sits a line off the text it
+    /// covers, and takes the click — handles and all — from the selection. A
+    /// reader has nothing to fill in, so the guessing is turned off. The switch
+    /// is not in the SDK's headers, hence the question first: a PDFKit
+    /// without it is a PDFKit that does not guess.
+    private static func turnOffFormDetection(_ view: PDFView) {
+        guard view.responds(to: NSSelectorFromString("setFormDetectionEnabled:")) else { return }
+        view.setValue(false, forKey: "formDetectionEnabled")
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }

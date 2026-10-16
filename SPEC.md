@@ -801,6 +801,9 @@
   begun anywhere off a glyph, picks a rectangle out of its guess at the page's blocks instead — a box with handles
   that runs into the margin and cuts lines in half — so `NotaPDFView` takes the single click. A click on a link or a
   form field, a double or triple click (word, line) and ⌘/⌥/⌃-clicks are still PDFKit's.
+- No guessed form fields: PDFKit's form detection (Preview's AutoFill — a field laid over every place a page looks
+  fillable, outlined in blue a line off its text, taking the click) is switched off on the view. Only a document's
+  own fields are fields.
 - ⌘+ / ⌘- / ⌘0 zoom the page here (done 2026-09-04). The three keys are one pair of hands doing two jobs, and what
   decides is which of the two the reader can see: with an editor on screen — any text tab in edit or split — they are
   the font size they have always been, and the Markdown and LaTeX renders follow it. With the content alone on screen
