@@ -796,6 +796,11 @@
   the match selected and hands the keyboard back to the document. A document cannot be typed into, so `Find` is
   only a word and Find and Replace… is greyed out — the one Find item a PDF turns down. PDFKit's own find bar never
   appears: `NotaPDFView` takes `performTextFinderAction:` off it.
+- A drag selects text the way a text view does (2026-10-16): the characters between where it began and where the
+  pointer is, in reading order, across pages too, and ⇧-click carries on from the same start. PDFKit's own drag,
+  begun anywhere off a glyph, picks a rectangle out of its guess at the page's blocks instead — a box with handles
+  that runs into the margin and cuts lines in half — so `NotaPDFView` takes the single click. A click on a link or a
+  form field, a double or triple click (word, line) and ⌘/⌥/⌃-clicks are still PDFKit's.
 - ⌘+ / ⌘- / ⌘0 zoom the page here (done 2026-09-04). The three keys are one pair of hands doing two jobs, and what
   decides is which of the two the reader can see: with an editor on screen — any text tab in edit or split — they are
   the font size they have always been, and the Markdown and LaTeX renders follow it. With the content alone on screen

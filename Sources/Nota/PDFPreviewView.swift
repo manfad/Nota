@@ -581,6 +581,74 @@ final class NotaPDFView: PDFView, NSUserInterfaceValidations {
 
     override func concludeDragOperation(_ sender: NSDraggingInfo?) { }
 
+    // MARK: - Selecting text
+
+    /// Where the drag that made the current selection began, so a ⇧-click
+    /// carries on from it.
+    private var selectionAnchor: (page: PDFPage, point: CGPoint)?
+    private var isSelectingText = false
+
+    /// A plain drag selects the characters between where it began and where
+    /// the pointer is, in reading order — the way a text view does.
+    ///
+    /// PDFKit's own drag, begun anywhere off a glyph, picks a rectangle out of
+    /// its guess at the page's blocks instead: a box with handles that runs
+    /// into the margin and cuts lines in half. So a single click is taken here,
+    /// unless it lands on an annotation — a link to follow, a field to fill,
+    /// both PDFKit's — or carries ⌘/⌥/⌃ (its
+    /// own gestures). A double or triple click is still PDFKit's word and line.
+    override func mouseDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control])
+        guard event.clickCount == 1, modifiers.isEmpty,
+              let (page, point) = pagePoint(of: event),
+              page.annotation(at: point) == nil
+        else {
+            isSelectingText = false
+            super.mouseDown(with: event)
+            return
+        }
+        window?.makeFirstResponder(self)
+        isSelectingText = true
+        if event.modifierFlags.contains(.shift), let anchor = selectionAnchor {
+            select(from: anchor, to: (page, point))
+        } else {
+            selectionAnchor = (page, point)
+            clearSelection()
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isSelectingText else { return super.mouseDragged(with: event) }
+        autoscroll(with: event)
+        guard let anchor = selectionAnchor, let current = pagePoint(of: event) else { return }
+        select(from: anchor, to: current)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isSelectingText else { return super.mouseUp(with: event) }
+        isSelectingText = false
+    }
+
+    private func pagePoint(of event: NSEvent) -> (PDFPage, CGPoint)? {
+        let inView = convert(event.locationInWindow, from: nil)
+        guard let page = page(for: inView, nearest: true) else { return nil }
+        return (page, convert(inView, to: page))
+    }
+
+    private func select(from start: (page: PDFPage, point: CGPoint), to end: (page: PDFPage, point: CGPoint)) {
+        let selection: PDFSelection?
+        if start.page === end.page {
+            selection = start.page.selection(from: start.point, to: end.point)
+        } else {
+            selection = document?.selection(from: start.page, at: start.point, to: end.page, at: end.point)
+        }
+        if let selection, !(selection.string ?? "").isEmpty {
+            setCurrentSelection(selection, animate: false)
+        } else {
+            clearSelection()
+        }
+    }
+
     // MARK: - Find
 
     override func performTextFinderAction(_ sender: Any?) {
