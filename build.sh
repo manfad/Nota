@@ -8,13 +8,16 @@ cd "$(dirname "$0")"
 UNIVERSAL=0
 [ "${1:-}" = "--universal" ] && UNIVERSAL=1
 
+# SwiftPM is asked where it put the binary rather than told: the folder a
+# universal build lands in has moved between toolchains
+# (.build/apple/Products/Release once, .build/out/Products/Release now).
 if [ "$UNIVERSAL" = "1" ]; then
-    swift build -c release --arch arm64 --arch x86_64
-    BIN=".build/apple/Products/Release/Nota"
+    ARCHS=(--arch arm64 --arch x86_64)
 else
-    swift build -c release
-    BIN=".build/release/Nota"
+    ARCHS=()
 fi
+swift build -c release ${ARCHS[@]+"${ARCHS[@]}"}
+BIN="$(swift build -c release ${ARCHS[@]+"${ARCHS[@]}"} --show-bin-path)/Nota"
 
 APP="Nota.app"
 rm -rf "$APP"
