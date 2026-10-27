@@ -1391,7 +1391,13 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         // A note that arrived whole — pasted, or let go in the text — is not
         // typing that might carry on, so its reading is put to the reader on
         // the spot, and as a sheet rather than the corner's pill.
-        textView.onBulkInsert = { [weak self] in self?.offerFormatAfterBulkInsert() }
+        textView.onBulkInsert = { [weak self] in
+            // A paste or a drop is one edit, not a burst of keys, so a picture
+            // in it is numbered now rather than after the typing debounce —
+            // otherwise it sits unnumbered for a beat before `Image 3` lands.
+            self?.refreshImages()
+            self?.offerFormatAfterBulkInsert()
+        }
         // The line keys read the front note's own line table, comment by the
         // front note's extension, and stand aside wherever vim has the keys.
         textView.lineIndexProvider = { [weak self] in self?.currentNote?.lineIndex }
