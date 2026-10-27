@@ -58,7 +58,7 @@ enum DefaultAppTypes {
         ),
         DefaultAppGroup(
             titleKey: "Documents and pictures",
-            extensions: ["pdf", "epub", "docx", "xlsx", "png", "jpg", "jpeg", "gif", "webp", "heic",
+            extensions: ["pdf", "epub", "docx", "doc", "xlsx", "xls", "pptx", "png", "jpg", "jpeg", "gif", "webp", "heic",
                          "tiff", "svg", "mp4", "mov", "m4v"],
             isTextLike: false
         ),

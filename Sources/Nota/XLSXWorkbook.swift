@@ -203,6 +203,31 @@ final class XLSXWorkbook {
 
     // MARK: - A sheet
 
+    /// A sheet's cells — row number (1-based) → column (0-based) → what the
+    /// cell shows — laid out the way Excel shows them. Every reader of a
+    /// workbook, whatever the file, hands its cells over here.
+    ///
+    /// The first row with anything in it is the header, the way a sheet of
+    /// records is written: its words name the columns, so a sort never moves
+    /// it in among the rows. A blank header cell is named by its column
+    /// letter.
+    static func table(cells: [Int: [Int: String]], maxRow: Int, maxColumn: Int) -> CSVTable {
+        let width = maxColumn + 1
+        guard let headerRow = cells.keys.min() else {
+            return CSVTable(columns: (0 ..< width).map(columnName), rows: [])
+        }
+        let header = cells[headerRow] ?? [:]
+        let columns = (0 ..< width).map { index -> String in
+            let name = header[index]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return name.isEmpty ? columnName(index) : name
+        }
+        let rows: [[String]] = headerRow >= maxRow ? [] : (headerRow + 1 ... maxRow).map {
+            let line = cells[$0] ?? [:]
+            return (0 ..< width).map { line[$0] ?? "" }
+        }
+        return CSVTable(columns: columns, rows: rows)
+    }
+
     private final class SheetReader: NSObject, XMLParserDelegate {
         let shared: [String]
         let formats: NumberFormats
@@ -233,24 +258,7 @@ final class XLSXWorkbook {
             guard let parser = XMLParser(contentsOf: url) else { return nil }
             parser.delegate = self
             guard parser.parse() else { return nil }
-            let width = maxColumn + 1
-            // The first row with anything in it is the header, the way a
-            // sheet of records is written: its words name the columns, so a
-            // sort never moves it in among the rows. A blank header cell is
-            // named by its column letter.
-            guard let headerRow = cells.keys.min() else {
-                return CSVTable(columns: (0 ..< width).map(XLSXWorkbook.columnName), rows: [])
-            }
-            let header = cells[headerRow] ?? [:]
-            let columns = (0 ..< width).map { index -> String in
-                let name = header[index]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return name.isEmpty ? XLSXWorkbook.columnName(index) : name
-            }
-            let rows: [[String]] = headerRow >= maxRow ? [] : (headerRow + 1 ... maxRow).map {
-                let line = cells[$0] ?? [:]
-                return (0 ..< width).map { line[$0] ?? "" }
-            }
-            return CSVTable(columns: columns, rows: rows)
+            return XLSXWorkbook.table(cells: cells, maxRow: maxRow, maxColumn: maxColumn)
         }
 
         func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?,

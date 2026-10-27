@@ -36,7 +36,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
 | Exporting a `.tex` through a real TeX (finding one, installing Tectonic, compiling) | `TeXEngine.swift`, `TectonicInstaller.swift`, the prompt and the one call `TeXExport.swift` |
 | Preview column plumbing (which view shows, zoom, scroll memory) | `PreviewPaneView.swift`, `PreviewContent.swift`, `RenderedPreviewView.swift` |
 | PDF / picture / HTML / EPUB / RTF viewer tabs | `PDFPreviewView.swift`, `ImagePreviewView.swift`, `HTMLPreviewView.swift`, `EPUBPreviewView.swift` + `EPUBBook.swift`, `RTFPreviewView.swift` |
-| Word / Excel / video viewer tabs | `DOCXDocument.swift` (docx → one HTML page) + `DOCXPreviewView.swift`, `XLSXWorkbook.swift` (sheets → `CSVTable`) shown by `CSVPreviewView` (sheets as tabs in `SheetTabStrip.swift`), `VideoPreviewView.swift` (AVKit); shared unzip and XML helpers `Unzip.swift` |
+| Word / Excel / PowerPoint / video viewer tabs | `DOCXDocument.swift` (docx → one HTML page; a `.doc` reaches it through `LegacyWord.swift`), `PPTXDocument.swift` (pptx → one HTML page, a slide a sheet), both shown by `PrintedPagesView.swift` (the page printed by `WebPDF` onto its own paper, read in a `PDFPreviewView`; `PrintedDocument` is what it takes), `XLSWorkbook.swift` over `CompoundFile.swift` (an `.xls`, into the same `XLSXWorkbook`), `XLSXWorkbook.swift` (sheets → `CSVTable`) shown by `CSVPreviewView` (sheets as tabs in `SheetTabStrip.swift`), `VideoPreviewView.swift` (AVKit); shared unzip and XML helpers `Unzip.swift` |
 | Converting between the things Nota reads: a book or a page printed as a PDF, a PDF read back as a book | `WebPDF.swift` (WebKit's print operation, headless), `EPUBToPDF.swift` (chapters printed and bound), `PDFToEPUB.swift` (a text layer reflowed into EPUB 3) |
 | A `.sql` dump's grid: running it, paging it, sorting it, picking cells out of it, ⌘F over it | `SQLPreviewView.swift` (the pane), `SQLGridView.swift` (the grid, its header and its cells), `SQLQueryBox.swift` (the query editor; its dropdown is `SQLCompletionPopup.swift` over `SQLCompletion.swift`, which also colours the keywords), `SQLDump.swift` (the database), `SQLDumpDialect.swift` (a MySQL, MariaDB, Postgres, SQL Server or Oracle dump made SQLite's), `SQLSourceMap.swift` (which line of the file a row was written on, and where in it a cell's own value is), `SQLQueryRewrite.swift` (the rowid spliced into a query so its rows point at the file too), `GridFindSession.swift` (⌘F over the grid; `SQLDump.hits` is the one statement that answers it) |
 | A `.csv` / `.tsv` file's grid: reading it, paging it, sorting it, ⌘F over it | `CSVPreviewView.swift` (the pane, over `SQLGridView`), `CSVTable.swift` (the RFC 4180 reader, `ordering` — the order the grid and its ⌘F walk — and where each record and each field of it is written) |
@@ -126,7 +126,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   snippet wears its number. Pure; the panel's `.search` mode draws what it returns.
 
 ### Notes, files, session
-- `Note.swift` (~810) — `PreviewMode`, `RenderedPreviewKind` (`.tree(StructuredFormat)` among them), `NoteFormat` (the same list with plain text put back: the word in the footer's badge, the one spelling that means it, and the way back from a session file), `NoteKind` (`text`/`pdf`/`image`/`epub`/`rtf`/`word`/`spreadsheet`/`video`; `wordDocument` and `workbook` read once and held like the book), `Note` (storage, file, dirty, watcher, `formatOverride` — the reader's own word about what the tab is, which `previewKind` / `isJSON` / `isHTML` / `iconSymbolName` all read first — cached PDF/image/book/rich text, `searchSource` — what the tab hands ⇧⌘F, its viewer parts cached beside the rest — `sessionTab()`).
+- `Note.swift` (~810) — `PreviewMode`, `RenderedPreviewKind` (`.tree(StructuredFormat)` among them), `NoteFormat` (the same list with plain text put back: the word in the footer's badge, the one spelling that means it, and the way back from a session file), `NoteKind` (`text`/`pdf`/`image`/`epub`/`rtf`/`word`/`spreadsheet`/`presentation`/`video`; `wordDocument`, `workbook` and `presentation` read once and held like the book, a `.doc`/`.xls` to its own reader; `printedDocument` — the one place that says which kinds are read as printed pages; `load` — every viewer's read-once rule, which asks again when the file was not there), `Note` (storage, file, dirty, watcher, `formatOverride` — the reader's own word about what the tab is, which `previewKind` / `isJSON` / `isHTML` / `iconSymbolName` all read first — cached PDF/image/book/rich text, `searchSource` — what the tab hands ⇧⌘F, its viewer parts cached beside the rest — `sessionTab()`).
 - `NoteText.swift` (~380) — `![](nota://id)` tokens ↔ attachments, and, given a closure for each direction, a
   saved file's own relative image links too: `serialize(_:sidecar:)` and `render(_:…:importing:)`. Touches no disk.
 - `Sidecar.swift` (~215) — the pictures a saved note keeps beside it in `<basename>.assets/`: folder naming,
@@ -139,7 +139,7 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   mapping lines, three even records, two different Markdown signals — and `nil` under three non-blank lines or sixty
   characters. Deliberately shy: prose with a colon, a list of dashes and three paragraphs are all `nil`. Pure; knows
   nothing of AppKit, of a file, or of a note.
-- `TextFile.swift` (~470) — `LineEnding`, `TextFileFormat`, encoding detection, `FileSniff.classify` (PDF, image, EPUB, RTF, Word, spreadsheet, video, text, binary), `FileClass`, `isDrawing` (an `.svg` is text, not a picture — `Note.isImageFile` and the exclusions ask it).
+- `TextFile.swift` (~470) — `LineEnding`, `TextFileFormat`, encoding detection, `FileSniff.classify` (PDF, image, EPUB, RTF, Word, spreadsheet, presentation, video, text, binary; a compound file is a Word document or a workbook by its name), `FileSniff.isCompoundFile`, `FileClass`, `isDrawing` (an `.svg` is text, not a picture — `Note.isImageFile` and the exclusions ask it).
 - `Session.swift` (~580) — `TextStats` (footer count phrases incl. pages/chapters/tables, a table's rows and columns, and a row range), `SessionTab` / `SessionWindow` codables (`sqlTable` / `sqlQuery` for a dump's tab, `formatOverride` for a tab the footer was told what to be), `SessionStore`.
 - `SaveNameComposer.swift` (~100) — pure logic for the Save dialog's Format popup: known extensions, the list one
   the popup does not know is put in front of (`formatOptions(including:)`), splitting a name from its extension,
@@ -330,11 +330,11 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   own start tags (through `HTMLFormat.sourceTags(of:)`) lined up against the DOM's element names in document order,
   skipping what one side has and the other has not, recovering within four tags, and answering `nil` rather than
   pointing at the wrong one. Pure; no WebKit.
-- `PDFPreviewView.swift` (~600) — PDFKit viewer tab, `reveal(page:range:query:)` for a ⇧⌘F hit, and `PDFPageThumbnails` (pages drawn small on one serial queue, from a second `PDFDocument` of the file, cached per document for the sidebar's page list). No outline: a PDF's sidebar is its pages. `ImagePreviewView.swift` (~240) — picture tab.
+- `PDFPreviewView.swift` (~620) — PDFKit viewer tab on the grey `deskColor`, `show(_:readFrom:atPage:missingName:)` for a pane that brings its own pages (the Word tab), `reveal(page:range:query:)` / `reveal(query:)` for a ⇧⌘F hit, and `PDFPageThumbnails` (pages drawn small on one serial queue, from a second `PDFDocument` of the file, cached per document for the sidebar's page list). No outline: a PDF's sidebar is its pages. `ImagePreviewView.swift` (~240) — picture tab.
 - `EPUBBook.swift` (~490) — unpack (ditto), container/OPF/spine/nav/NCX parsing, `contentsEntries`, `contentsLine(ofChapter:)`, `words(ofChapter:)` (the chapter's text with the markup left behind, block elements on lines of their own — what ⇧⌘F searches a book by). `EPUBPreviewView.swift` (~300) — chapter viewer; no floating chapter bar.
 - `WebPDF.swift` (~410) — a page printed to a PDF file, headless: `NSPrintOperation` from `WKWebView` (never
   `createPDF`, which renders one viewport-sized sheet), both panels off, the job saved to `jobSavingURL`, the view
-  in a transparent borderless window parked off every display at the paper's printable width, `readyState` polled
+  in a transparent borderless window parked off every display at the paper's printable width (the region's, or a `Paper` the page brings — a Word section's), `readyState` polled
   and a short settle for pictures, a timeout that fails with a sentence, and one job at a time through its own
   queue. Three doors: a file, a string of HTML with a base URL, and a web view that already holds the page.
 - `EPUBToPDF.swift` (~170) — a book as a PDF: each spine chapter loaded under `nota-file://` and printed by
@@ -353,9 +353,24 @@ suite while working) · app: `./build.sh` → `Nota.app` · icon:
   theme fonts, `numbering.xml` counters, footnotes/endnotes, the section's page size and margins) writes
   `nota-document.html` beside `word/media`; `DOCXRunProps` / `DOCXParaProps` are the "nearer wins" property
   folds. `plainText` is what ⇧⌘F searches. Foundation only.
-- `DOCXPreviewView.swift` (~170) — the Word tab: the page in an `HTMLPreviewView`, scroll memory, zoom, ⌘F, the
-  missing message, `reveal(query:)` for a ⇧⌘F hit.
-- `XLSXWorkbook.swift` (~390) — an `.xlsx` read: workbook and its rels, shared strings and sheets on `XMLParser`,
+- `PrintedPagesView.swift` (~200) — the Word and PowerPoint tab: `PrintedDocument` (a page, where its printout
+  goes, its `paper`, its words) and the pane that prints one with `WebPDF.export(pageAt:to:paper:)` into
+  `pagesURL`, cached per document, shown in a `PDFPreviewView` it holds (pages sidebar, zoom, ⌘F, page memory);
+  `onPagesChange` when the print lands; `reveal(query:)` for a ⇧⌘F hit. The `DOCXDocument` / `PPTXDocument`
+  conformances sit at its foot.
+- `PPTXDocument.swift` (~1980) — a `.pptx` read: unzipped, and `PPTXConverter` (slide → layout → master placeholder
+  chain, the master's text styles over the presentation defaults, the theme's colours / fonts / style matrix, table
+  styles with the built-in default) writes `nota-slides.html` beside `ppt/media`, one exactly-slide-sized sheet per
+  slide, shapes as SVG and words as text. `PPTXRunProps` / `PPTXParaProps` / `PPTXListStyle` / `PPTXBodyProps` are
+  the "nearer wins" folds. `plainText` is what ⇧⌘F searches. Foundation only.
+- `CompoundFile.swift` (~220) — an OLE2 compound file over `Data` (v3/v4, DIFAT, FAT, directory, mini stream, every
+  chain bounded): `streamNames`, `stream(named:)`. Knows nothing of Office.
+- `XLSWorkbook.swift` (~400) — an `.xls`: the `Workbook` stream's BIFF8 records into `XLSXWorkbook.Sheet`s through
+  `XLSXWorkbook.table`, number formats through `NumberFormats.kind` / `XLSXWorkbook.format`.
+- `LegacyWord.swift` (~35) — a `.doc` read by `NSAttributedString` (`.docFormat`), written out as a scratch `.docx`
+  and opened by `DOCXDocument.open(_:archive:)`.
+- `XLSXWorkbook.swift` (~410) — an `.xlsx` read: workbook and its rels, shared strings and sheets on `XMLParser`,
+  `table(cells:maxRow:maxColumn:)` (a sheet's cells laid out as Excel shows them — every workbook reader's last step),
   `NumberFormats` (which style is a date, time or percentage), `format` / `plain` (a value as Excel shows it),
   `columnName` / `columnIndex(ofReference:)`. Each visible sheet becomes a `CSVTable(columns:rows:)`.
 - `VideoPreviewView.swift` (~210) — the video tab: `AVPlayerView` with floating controls, paused when hidden, the

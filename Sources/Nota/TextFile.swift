@@ -322,7 +322,11 @@ enum FileClass {
     /// it, which is what a `.docx` is.
     case word
     /// An Office Open XML workbook: a zip with `xl/` in it — an `.xlsx`.
+    /// A Word or Excel 97–2003 binary is one of these two as well, by its
+    /// name (see `FileSniff.compoundKind`).
     case spreadsheet
+    /// An Office Open XML deck: a zip with `ppt/` in it — a `.pptx`.
+    case presentation
     /// An ISO media file — MP4, MOV, M4V — known by the `ftyp` box (or a
     /// QuickTime `moov` / `mdat` / `wide` atom) after the first length word.
     case video
@@ -349,6 +353,9 @@ enum FileSniff {
     private static let epubMediaType: [UInt8] = Array("application/epub+zip".utf8)
 
     private static let rtfMagic: [UInt8] = Array("{\\rtf".utf8)
+    /// An OLE2 compound file's header — the container every Office 97–2003
+    /// document is.
+    private static let compoundMagic: [UInt8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]
 
     /// Classifies a file by its first 8 KB, in order: the RTFD package, which
     /// is the one kind with no bytes of its own to read, then the PDF
@@ -367,7 +374,7 @@ enum FileSniff {
         if isImage(head) { return .image }
         if isEPUB(head) { return .epub }
         if isRTF(head) { return .rtf }
-        if let office = officeKind(head, url: url) { return office }
+        if let office = officeKind(head, url: url) ?? compoundKind(head, url: url) { return office }
         if isVideo(head) { return .video }
         if TextFile.decode(head) != nil { return .text }
         return .binary
@@ -381,10 +388,31 @@ enum FileSniff {
         guard [UInt8](head.prefix(zipMagic.count)) == zipMagic else { return nil }
         if head.range(of: Data("word/".utf8)) != nil { return .word }
         if head.range(of: Data("xl/".utf8)) != nil { return .spreadsheet }
+        if head.range(of: Data("ppt/".utf8)) != nil { return .presentation }
         let ext = url.pathExtension.lowercased()
         if Note.wordExtensions.contains(ext) { return .word }
         if Note.spreadsheetExtensions.contains(ext) { return .spreadsheet }
+        if Note.presentationExtensions.contains(ext) { return .presentation }
         return nil
+    }
+
+    /// A `.doc` or an `.xls`. Both are compound files, and so are an MSI, a
+    /// `.ppt` and an Outlook message, none of which Nota reads — so the
+    /// container is only half the answer and the name is the other half.
+    private static func compoundKind(_ head: Data, url: URL) -> FileClass? {
+        guard [UInt8](head.prefix(compoundMagic.count)) == compoundMagic else { return nil }
+        switch url.pathExtension.lowercased() {
+        case "doc", "dot": return .word
+        case "xls", "xlt": return .spreadsheet
+        default: return nil
+        }
+    }
+
+    /// Whether the file is a compound file at all — which of a Word or Excel
+    /// tab's two readers it goes to.
+    static func isCompoundFile(_ url: URL) -> Bool {
+        guard let head = TextFile.head(of: url) else { return false }
+        return [UInt8](head.prefix(compoundMagic.count)) == compoundMagic
     }
 
     /// An ISO base media file: a box length, then `ftyp` and a brand. A HEIC

@@ -84,7 +84,7 @@ final class PDFPreviewView: NSView, PreviewContent, PageListSource {
         pdfView.autoScales = false
         pdfView.displayMode = .singlePageContinuous
         pdfView.displaysPageBreaks = true
-        pdfView.backgroundColor = .textBackgroundColor
+        pdfView.backgroundColor = Self.deskColor
         addSubview(pdfView)
 
         // The same quiet voice the rest of the app uses for something that is
@@ -145,11 +145,18 @@ final class PDFPreviewView: NSView, PreviewContent, PageListSource {
     /// costs nothing to hold, and the page has to be right before it is.
     func show(_ note: Note, in context: PreviewContext) {
         let document = note.pdfDocument
-        // Read before the document goes in: installing one lands on its first
-        // page, and the page we are about to restore must not be that.
-        let page = note.selectionLocation
-        documentURL = note.fileURL
-        show(document, missingName: document == nil ? note.title : nil)
+        show(document, readFrom: note.fileURL, atPage: note.selectionLocation,
+             missingName: document == nil ? note.title : nil)
+    }
+
+    /// Puts a document in the pane at a page — the way in for a pane that
+    /// holds pages it made itself rather than a PDF tab's own file. `url` is
+    /// the file the document was read from, which its thumbnails are drawn
+    /// from again. A `nil` document with no `missingName` is an empty desk:
+    /// pages still on their way, nothing to apologise for yet.
+    func show(_ document: PDFDocument?, readFrom url: URL?, atPage page: Int, missingName: String?) {
+        documentURL = url
+        show(document, missingName: missingName)
         // Only when it is not already there: this is asked again on a resize
         // and a settings change, and going to the page you are on would jump
         // a half-read page back to its top.
@@ -177,7 +184,7 @@ final class PDFPreviewView: NSView, PreviewContent, PageListSource {
             fitPage()
         }
         pdfView.isHidden = document == nil
-        missingLabel.isHidden = document != nil
+        missingLabel.isHidden = document != nil || missingName == nil
         guard document == nil else { return }
         missingLabel.font = Preferences.shared.font()
         missingLabel.stringValue = missingName.map { "Couldn’t open “\($0)”." } ?? ""
@@ -235,6 +242,17 @@ final class PDFPreviewView: NSView, PreviewContent, PageListSource {
         else { return }
         goToPage(index)
         guard let selection = page.selection(for: range) else { return }
+        findSession.reveal(selection, for: query)
+    }
+
+    /// A hit known only by its words — a document whose pages were made
+    /// after it was searched: the first place they are printed, selected.
+    func reveal(query: String) {
+        guard let document = pdfView.document,
+              let selection = document.findString(query, withOptions: [.caseInsensitive, .diacriticInsensitive]).first,
+              let page = selection.pages.first
+        else { return }
+        goToPage(document.index(for: page))
         findSession.reveal(selection, for: query)
     }
 
@@ -421,11 +439,20 @@ final class PDFPreviewView: NSView, PreviewContent, PageListSource {
 
     // MARK: - Background
 
+    /// The desk the pages lie on: the grey a Word document's page has always
+    /// sat on (`DOCXConverter.page`, `#e8e8e8` and `#1f1f1f` in dark), so a
+    /// sheet reads as a sheet whichever kind of document it came from.
+    static let deskColor = NSColor(name: "Nota.pageDesk") { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(srgbRed: 0x1f / 255, green: 0x1f / 255, blue: 0x1f / 255, alpha: 1)
+            : NSColor(srgbRed: 0xe8 / 255, green: 0xe8 / 255, blue: 0xe8 / 255, alpha: 1)
+    }
+
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+            layer?.backgroundColor = Self.deskColor.cgColor
         }
     }
 
@@ -433,7 +460,7 @@ final class PDFPreviewView: NSView, PreviewContent, PageListSource {
         super.viewDidChangeEffectiveAppearance()
         // PDFView keeps the colour it was handed rather than resolving it
         // again, so light and dark are swapped by handing it over afresh.
-        pdfView.backgroundColor = .textBackgroundColor
+        pdfView.backgroundColor = Self.deskColor
         needsDisplay = true
     }
 }

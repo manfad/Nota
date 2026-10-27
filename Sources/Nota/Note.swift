@@ -223,9 +223,10 @@ enum NoteFormat: Equatable {
 /// save, and nothing to keep in the cache.
 enum NoteKind {
     case text, pdf, image, epub, rtf
-    /// A `.docx`, a `.xlsx`, a film — Office documents and video, read and
-    /// never written (SPEC "## Office documents and video").
-    case word, spreadsheet, video
+    /// A `.docx` or `.doc`, a `.xlsx` or `.xls`, a `.pptx`, a film — Office
+    /// documents and video, read and never written (SPEC "## Office documents
+    /// and video").
+    case word, spreadsheet, presentation, video
 
     /// Whether the tab is read rather than edited. Everything that follows
     /// from that — locked in reading, never dirty, never cached, never
@@ -355,6 +356,8 @@ final class Note {
     private var hasLoadedWord = false
     private var loadedWorkbook: XLSXWorkbook?
     private var hasLoadedWorkbook = false
+    private var loadedPresentation: PPTXDocument?
+    private var hasLoadedPresentation = false
     /// A viewer's text pulled out part by part for ⇧⌘F, and whether pulling
     /// it has been tried — the same once-and-kept rule the parsed document
     /// and the book follow.
@@ -485,6 +488,8 @@ final class Note {
         hasLoadedWord = false
         loadedWorkbook = nil
         hasLoadedWorkbook = false
+        loadedPresentation = nil
+        hasLoadedPresentation = false
         loadedSearchParts = []
         hasLoadedSearchParts = false
     }
@@ -661,14 +666,17 @@ final class Note {
         let ext = url.pathExtension.lowercased()
         if wordExtensions.contains(ext) { return .word }
         if spreadsheetExtensions.contains(ext) { return .spreadsheet }
+        if presentationExtensions.contains(ext) { return .presentation }
         if isVideoFile(url) { return .video }
         return nil
     }
 
-    /// The spellings a Word document and a workbook go by, for a file whose
-    /// bytes could not say.
-    static let wordExtensions: Set<String> = ["docx", "docm", "dotx"]
-    static let spreadsheetExtensions: Set<String> = ["xlsx", "xlsm", "xltx"]
+    /// The spellings a Word document, a workbook and a deck go by, for a
+    /// file whose bytes could not say. `doc`, `dot`, `xls` and `xlt` are the
+    /// 97–2003 binaries, read by readers of their own into the same tab.
+    static let wordExtensions: Set<String> = ["docx", "docm", "dotx", "doc", "dot"]
+    static let spreadsheetExtensions: Set<String> = ["xlsx", "xlsm", "xltx", "xls", "xlt"]
+    static let presentationExtensions: Set<String> = ["pptx", "pptm", "potx", "ppsx"]
 
     /// A film, by name: whatever the system files under movies.
     static func isVideoFile(_ url: URL) -> Bool {
@@ -727,7 +735,7 @@ final class Note {
     /// binary — does the old name-based guess take over.
     static func isOpenable(_ url: URL) -> Bool {
         switch FileSniff.classify(at: url) {
-        case .pdf, .image, .epub, .rtf, .word, .spreadsheet, .video:
+        case .pdf, .image, .epub, .rtf, .word, .spreadsheet, .presentation, .video:
             return true
         case .text:
             return !TextFile.isDeliberatelyExcluded(url)
@@ -742,10 +750,27 @@ final class Note {
     /// is what the pane shows a message for.
     var pdfDocument: PDFDocument? {
         guard kind == .pdf else { return nil }
-        if hasLoadedPDF { return loadedPDF }
-        hasLoadedPDF = true
-        loadedPDF = fileURL.flatMap { PDFDocument(url: $0) }
-        return loadedPDF
+        return load(&loadedPDF, tried: &hasLoadedPDF) { PDFDocument(url: $0) }
+    }
+
+    /// Reads a viewer's file the first time it is asked for and keeps the
+    /// answer — a file that would not open is not opened again on every tab
+    /// switch — unless the file was not there to read at all. A tab restored
+    /// before its network share is mounted, or whose file is being copied
+    /// back, is asked again the next time it is shown, so it comes back
+    /// once the file does rather than saying "Couldn't open" until it is
+    /// closed.
+    private func load<Value>(
+        _ cache: inout Value?, tried: inout Bool, _ read: (URL) -> Value?
+    ) -> Value? {
+        if tried { return cache }
+        guard let url = fileURL else {
+            tried = true
+            return nil
+        }
+        cache = read(url)
+        tried = cache != nil || FileManager.default.fileExists(atPath: url.path)
+        return cache
     }
 
     /// The picture behind an image tab, read the first time it is asked for
@@ -754,10 +779,7 @@ final class Note {
     /// pane shows a message for.
     var image: NSImage? {
         guard kind == .image else { return nil }
-        if hasLoadedImage { return loadedImage }
-        hasLoadedImage = true
-        loadedImage = fileURL.flatMap { NSImage(contentsOf: $0) }
-        return loadedImage
+        return load(&loadedImage, tried: &hasLoadedImage) { NSImage(contentsOf: $0) }
     }
 
     /// The book behind an EPUB tab, unpacked and parsed the first time it is
@@ -766,10 +788,7 @@ final class Note {
     /// comes apart — which is what the pane shows a message for.
     var epubBook: EPUBBook? {
         guard kind == .epub else { return nil }
-        if hasLoadedBook { return loadedBook }
-        hasLoadedBook = true
-        loadedBook = fileURL.flatMap { EPUBBook.open($0) }
-        return loadedBook
+        return load(&loadedBook, tried: &hasLoadedBook) { EPUBBook.open($0) }
     }
 
     /// The rich-text document behind an RTF tab, read the first time it is
@@ -781,31 +800,45 @@ final class Note {
     /// which is what the pane shows a message for.
     var richText: NSAttributedString? {
         guard kind == .rtf else { return nil }
-        if hasLoadedRichText { return loadedRichText }
-        hasLoadedRichText = true
-        loadedRichText = fileURL.flatMap(Note.readRichText)
-        return loadedRichText
+        return load(&loadedRichText, tried: &hasLoadedRichText, Note.readRichText)
     }
 
-    /// The Word document behind a `.docx` tab, unpacked and turned into a
-    /// page the first time it is asked for and held afterwards, the same way
-    /// a book is. `nil` when the file will not come apart into one.
+    /// The Word document behind a `.docx` or `.doc` tab, unpacked and turned
+    /// into a page the first time it is asked for and held afterwards, the
+    /// same way a book is. `nil` when the file will not come apart into one.
     var wordDocument: DOCXDocument? {
         guard kind == .word else { return nil }
-        if hasLoadedWord { return loadedWord }
-        hasLoadedWord = true
-        loadedWord = fileURL.flatMap { DOCXDocument.open($0) }
-        return loadedWord
+        return load(&loadedWord, tried: &hasLoadedWord) { url in
+            // A 97–2003 binary is a compound file rather than a zip, and is
+            // read by AppKit into a `.docx` first.
+            FileSniff.isCompoundFile(url) ? LegacyWord.open(url) : DOCXDocument.open(url)
+        }
     }
 
-    /// The workbook behind an `.xlsx` tab, every sheet read into a table the
-    /// first time it is asked for.
+    /// The workbook behind an `.xlsx` or `.xls` tab, every sheet read into a
+    /// table the first time it is asked for.
     var workbook: XLSXWorkbook? {
         guard kind == .spreadsheet else { return nil }
-        if hasLoadedWorkbook { return loadedWorkbook }
-        hasLoadedWorkbook = true
-        loadedWorkbook = fileURL.flatMap { XLSXWorkbook.open($0) }
-        return loadedWorkbook
+        return load(&loadedWorkbook, tried: &hasLoadedWorkbook) { url in
+            FileSniff.isCompoundFile(url) ? XLSWorkbook.open(url) : XLSXWorkbook.open(url)
+        }
+    }
+
+    /// The deck behind a `.pptx` tab, its slides written out as one page the
+    /// first time it is asked for.
+    var presentation: PPTXDocument? {
+        guard kind == .presentation else { return nil }
+        return load(&loadedPresentation, tried: &hasLoadedPresentation) { PPTXDocument.open($0) }
+    }
+
+    /// What a tab whose document is read as printed pages hands the pane
+    /// that prints them — the one place that knows which kinds those are.
+    var printedDocument: (any PrintedDocument)? {
+        switch kind {
+        case .word: wordDocument
+        case .presentation: presentation
+        default: nil
+        }
     }
 
     /// The read itself. `.documentType` is left unsaid on purpose: the option
@@ -830,10 +863,10 @@ final class Note {
         case .pdf: return NoteSearchSource(title: title, parts: .pages(searchParts))
         case .epub: return NoteSearchSource(title: title, parts: .chapters(searchParts))
         case .image, .rtf, .video, .spreadsheet: return NoteSearchSource(title: title, text: "")
-        // One part, so a hit is revealed in the page rather than in an
+        // One part, so a hit is revealed in the pages rather than in an
         // editor the tab does not have.
-        case .word:
-            return NoteSearchSource(title: title, parts: .chapters([wordDocument?.plainText ?? ""]))
+        case .word, .presentation:
+            return NoteSearchSource(title: title, parts: .chapters([printedDocument?.plainText ?? ""]))
         }
     }
 

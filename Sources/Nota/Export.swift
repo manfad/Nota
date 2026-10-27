@@ -251,9 +251,9 @@ enum Exporter {
         case .pdf:
             // The one export that is not a PDF: a document already is one.
             targets = [.epub]
-        case .word:
-            // The page as WebKit draws it, through the page exporter.
-            targets = note.wordDocument == nil ? [] : [.previewPDF]
+        case .word, .presentation:
+            // The pages the tab shows, through the page exporter.
+            targets = note.printedDocument == nil ? [] : [.previewPDF]
         case .spreadsheet:
             // The sheet in front, as the grid, through the table exporter.
             targets = [.previewPDF]
@@ -274,7 +274,7 @@ enum Exporter {
         switch note.kind {
         case .rtf: true
         case .text: note.previewKind == .markdown || note.previewKind == .latex
-        case .image, .pdf, .epub, .word, .spreadsheet, .video: false
+        case .image, .pdf, .epub, .word, .spreadsheet, .presentation, .video: false
         }
     }
 
@@ -315,7 +315,7 @@ enum Exporter {
         // The page as WebKit draws it where that exporter is plugged in; the
         // source listing where it is not, which is what the tab's other half
         // shows anyway.
-        if note.kind == .text && note.previewKind == .html || note.kind == .word,
+        if note.kind == .text && note.previewKind == .html || note.printedDocument != nil,
            let hook = htmlPagePDF {
             hook(note, url, context, completion)
             return
@@ -371,7 +371,7 @@ enum Exporter {
         case .rtf:
             guard let rich = note.richText else { throw Failure.nothingToExport }
             try PDFPaginator.write(text: rich, to: url)
-        case .word, .spreadsheet, .video:
+        case .word, .spreadsheet, .presentation, .video:
             throw Failure.nothingToExport
         case .text:
             switch note.previewKind {
@@ -471,7 +471,7 @@ enum Exporter {
         case .rtf:
             guard let rich = note.richText else { throw Failure.nothingToExport }
             return rich
-        case .word, .spreadsheet, .video:
+        case .word, .spreadsheet, .presentation, .video:
             throw Failure.nothingToExport
         case .text:
             switch note.previewKind {

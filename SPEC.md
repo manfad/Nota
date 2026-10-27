@@ -762,13 +762,16 @@
 - A page fits the column's width but is never drawn past actual size (done 2026-09-04): `autoScales` is off and the
   scale is `min(scaleFactorForSizeToFit, 1)`, refitted when the column changes size, so a portrait page in a wide
   window is paper rather than 36pt type — a wider page still shrinks to fit, since that cap is one-sided.
-- Drawn by PDFKit (`PDFView`, single page continuous, page breaks shown) on the same background the
-  editor and the render use, so the column does not change colour between a Markdown tab and a PDF one. No WebView
+- Drawn by PDFKit (`PDFView`, single page continuous, page breaks shown) on a grey desk — `#e8e8e8`, `#1f1f1f` in
+  dark, `PDFPreviewView.deskColor`, the one a Word document's pages lie on too — so a sheet reads as a sheet against
+  the column (2026-10-27; it was the editor's own background before, and a white page vanished into it). No WebView
   and no dependency: PDFKit ships with macOS. The pages are pinned edge to edge rather than inset — `PDFView` scales
   and centres each page in the room it has, so an inset would shrink the paper rather than give the text a margin.
 - Read, never written. The tab is never dirty, ⌘S and Save As are disabled, `:w` does nothing, ⌘W closes with no
   prompt, and nothing about it is written to the cache — the file on disk is the whole of it. The document is parsed
-  once per tab and held, so switching back to it does not read the file again.
+  once per tab and held, so switching back to it does not read the file again — unless the file was not there to read
+  (2026-10-27): a tab restored before its network share is mounted is asked again each time it is shown, and comes
+  back once the share does rather than saying `Couldn't open` until it is closed (`Note.load`, every viewer kind).
 - The page you were on comes back: it rides in the session in the same key the caret does, and the tab reopens there.
   A file that has gone — deleted while the tab was open, or missing when the session comes back — keeps its tab, stays
   clean, and shows a quiet centred `Couldn't open "name.pdf".` in the editor's own font.
@@ -829,18 +832,43 @@
   when there is no document to be in. Everything else in the chrome — the strip, the vim badge, zen — is unchanged.
 
 ## Office documents and video (done 2026-10-14, Done 70)
-- Three more viewer kinds, read and never written, nothing to save, `Read-only` in the footer, like a PDF:
-  `NoteKind.word` (`.docx`), `.spreadsheet` (`.xlsx`) and `.video` (`.mp4`, `.mov`, `.m4v`). The bytes decide first
-  (`FileSniff`): a zip whose first 8 KB names a `word/` part is a Word document and one naming `xl/` a workbook, with
-  the extension (`docx`/`docm`/`dotx`, `xlsx`/`xlsm`/`xltx`) answering when the part is further in; an ISO media
-  file's `ftyp` box (or a QuickTime `moov`/`mdat`/`wide` atom) after the first length word is a film — a HEIC is the
-  same container and is a picture first. Finder offers Nota for all three (Info.plist, ranked Alternate) and
-  Settings › File types lists docx, xlsx, mp4, mov, m4v under Documents and pictures.
+- Four more viewer kinds, read and never written, nothing to save, `Read-only` in the footer, like a PDF:
+  `NoteKind.word` (`.docx`, and the 97–2003 `.doc`), `.spreadsheet` (`.xlsx`, and `.xls`), `.presentation` (`.pptx`;
+  2026-10-27) and `.video` (`.mp4`, `.mov`, `.m4v`). The bytes decide first (`FileSniff`): a zip whose first 8 KB
+  names a `word/` part is a Word document, one naming `xl/` a workbook and one naming `ppt/` a deck, with the
+  extension (`docx`/`docm`/`dotx`, `xlsx`/`xlsm`/`xltx`, `pptx`/`pptm`/`potx`/`ppsx`) answering when the part is
+  further in; an OLE2 compound file (`D0 CF 11 E0`) is a Word document when it is named `doc`/`dot` and a workbook
+  when it is named `xls`/`xlt` — the container is shared with `.ppt`, `.msi` and Outlook mail, none of which Nota
+  reads, so the name is the other half of the answer. An ISO media file's `ftyp` box (or a QuickTime
+  `moov`/`mdat`/`wide` atom) after the first length word is a film — a HEIC is the same container and is a picture
+  first. Finder offers Nota for all of them (Info.plist, ranked Alternate) and Settings › File types lists docx, doc,
+  xlsx, xls, pptx, mp4, mov, m4v under Documents and pictures. The 97–2003 `.ppt` is not read.
+- A Word document and a deck are both read as the pages they print (`PrintedPagesView`, over any
+  `PrintedDocument`; `Note.printedDocument` is the one place that says which kinds those are).
+- **Word 97–2003.** A `.doc` is read by AppKit (`NSAttributedString`, `.docFormat` — TextEdit's reading), written
+  out as a `.docx` in a scratch file and read from there by `DOCXDocument`, so it gets the same printed pages
+  (`LegacyWord`). What survives is what TextEdit keeps: words, fonts, sizes, colours, emphasis, alignment, spacing,
+  lists and simple tables; pictures, headers and footers are lost on the way through.
+- **PowerPoint.** `PPTXDocument` unzips a `.pptx` and writes one HTML page beside `ppt/media`, a sheet per slide at
+  the slide's own size (`sldSz`), printed a slide to a page with no margins and read in the printed pane: the page
+  sidebar lists the slides. Drawn: backgrounds (solid, gradient, picture, the theme's background styles), the
+  master's and layout's own shapes (`showMasterSp`), placeholders placed and styled by their layout and master,
+  shapes as SVG (rect, roundRect, ellipse, triangles, diamond, parallelogram, trapezoid, chevrons, lines and
+  connectors, free-form paths; any other preset as its bounding box) with fills and outlines, text with insets,
+  anchoring, autofit, spacing, bullets and automatic numbers, cropped pictures, tables in their table style
+  (PowerPoint's default style built in) and groups. The words stay text, so they select and search. Left out:
+  charts, SmartArt, embedded objects, Windows metafile pictures, effects, notes, comments, animations, transitions
+  and hidden slides. `Examples/Deck.pptx` carries a title slide, a two-level list, a picture beside a filled
+  rounded box, and a table.
 - **Word.** Nota's own reading, not AppKit's: `NSAttributedString` takes a `.docx` too and makes TextEdit's page of
   it — tables flattened, list numbers lost. `DOCXDocument` unzips the file (`ditto`), and `DOCXConverter` writes one
-  HTML page beside `word/media`, drawn by the web view a book chapter uses (`DOCXPreviewView`): a white sheet the
-  section's page width and margins wide on a grey desk (dark desk in dark mode, the paper stays white, so an
-  author's black stays black); styles folded down their `basedOn` chain over `docDefaults` and the theme's fonts
+  HTML page beside `word/media`, and that page is printed by WebKit (`WebPDF`) onto the section's own paper —
+  `pgSz` width and height, `pgMar` margins — and read a page at a time in the PDF pane (`DOCXPreviewView` holds a
+  `PDFPreviewView`; 2026-10-27, it was one long web page before): white sheets on the PDF tab's grey desk, page and
+  section breaks starting a new sheet, the text breaking onto the next one where it runs out of paper, the pages in
+  the sidebar under `Pages` as a PDF's are, the footer counting words and saying which page is in front, and the
+  page — not a scroll fraction — kept for the tab. The print takes a moment; until it lands the desk is empty and
+  the column stays shut. Styles folded down their `basedOn` chain over `docDefaults` and the theme's fonts
   (size, colour, bold/italic/underline/strike, caps, highlight, shading, alignment, indents, spacing before/after,
   line spacing, contextual spacing); Title and `heading N` / `outlineLvl` as `h1`–`h6`; numbered and bulleted lists
   counted the way Word counts them (`numbering.xml`, every `numFmt` Word uses for counting, `%1.%2` level text,
@@ -850,9 +878,15 @@
   paragraph's own left / centre / right stops through its style chain, else the next multiple of `settings.xml`'s
   `defaultTabStop` (36pt), measured from the page's or the cell's text edge — so a row of tabs lines up as in Word
   (2026-10-14, after a signature block landed half way); external and internal links; text boxes; page and section breaks
-  as a dashed rule; footnotes and endnotes numbered in order and gathered at the foot. Headers, footers, comments,
-  deletions and drawing shapes are not shown. ⌘F, zoom, scroll memory and ⇧⌘F (one part, revealed in the page) work
-  as on a book; the footer counts words. Export offers `Preview as PDF` — the page through WebKit's print.
+  as a new sheet; footnotes and endnotes numbered in order and gathered at the foot. Headers, footers, comments,
+  deletions and drawing shapes are not shown. ⌘F and zoom work as on a PDF; a ⇧⌘F hit (one part) selects the first
+  place its words are printed. Export offers `Preview as PDF` — the same print, on the same paper.
+- **Excel 97–2003.** `XLSWorkbook` reads an `.xls`'s `Workbook` stream out of its compound file (`CompoundFile`:
+  version 3 and 4, the DIFAT, the mini stream, every chain bounded) as BIFF8 records — sheet names, the shared
+  strings across their `CONTINUE`s, number formats and the 1904 date system, and the cell records (strings,
+  numbers, RK and MULRK, booleans and errors, a formula's cached result) — into the same `XLSXWorkbook` an `.xlsx`
+  becomes, laid out by the same `XLSXWorkbook.table`. Hidden sheets, chart sheets and macro sheets are left out; an
+  Excel 5/95 (BIFF5) file and a workbook with a password do not open.
 - **Excel.** `XLSXWorkbook` reads every visible worksheet into a `CSVTable` (`init(columns:rows:)`) and the `.csv`
   grid shows it, so paging, sorting, ⌘F, ⌘C and Export CSV come with it. The first filled row is the header — its
   words name the columns (a blank one keeps its letter), so a sort never moves it among the rows (2026-10-14; the
@@ -1865,6 +1899,10 @@ with nothing else to wire.
 - Choosing a heading puts the caret at its line start and scrolls it into view; in split or reading the render is walked to that block too, by hand through the `highlightBlock(containingSource:)` a caret move already drives.
 - The selected tab is always fully in view: at 40pt the strip stops shrinking and becomes a sliding window over the tabs, anchored on the selected one. Closing with the ✕ freezes the widths until the pointer leaves the strip, so a run of closes keeps each next ✕ under it; ⌘W does not freeze.
 - Tabs reorder by drag: the dragged tab rides the pointer and its neighbours slide into the gap; the order is the session's order.
+  The selected tab's pill is solid — the editor's ground under its 10% wash — so a tab dragged over its neighbours
+  covers their titles instead of showing them through, and while it rides the pointer it wears a soft shadow
+  (`TabItemView.isLifted`) rather than going translucent; a slide that lands hands the frames back to the strip's
+  layout, so no tab comes to rest half over another (2026-10-27).
 - Middle-click closes. ⌘T new, ⌘W close, ⌘1–9, ⌃Tab/⌃⇧Tab. Right-click a tab for Bookmark / Remove Bookmark, Reveal in Finder (greyed on an untitled note; the same item sits at the foot of the File menu as ⌥⌘R, for the front tab) and Close Tab. Closing the only tab leaves a blank Untitled tab in its place and keeps the window; closing that blank tab — no file, nothing typed — is what closes the window, the way the title-bar close button does: the last window hides, any other closes for real. So ⌘W pressed over and over walks every tab out, pauses on an empty window, and one more stroke closes it (decided 2026-09-07; before this, the last tab took the window with it).
 - **Bookmarks** (Done 13). A bookmark is a file path, app-wide, kept in `session.json` beside the
   windows in the order they were added. ⇧⌘D bookmarks the tab in front — any named tab, PDFs and pictures included —
@@ -1980,6 +2018,18 @@ with nothing else to wire.
    as shells and read on selection or in an idle pass.
 
 ## Done (the Todo ledger; numbers are the ones each item had while it was open, and code comments still cite them)
+73. **A pasted picture is numbered at once (done 2026-10-27).** A paste or a drop renumbers the chips straight away
+    (`onBulkInsert` → `refreshImages`) instead of waiting out the 0.15s typing debounce, so `Image 3` is there the
+    moment the picture lands.
+72. **`.doc`, `.xls` and `.pptx` (done 2026-10-27).** A Word 97–2003 document reads through AppKit into the Word
+    pages, an Excel 97–2003 workbook through Nota's own compound-file and BIFF8 reader into the sheet grid, and a
+    deck as its slides, a page each, in the printed pane a Word document uses. A viewer tab whose file was not
+    there when it was read (a network share not yet mounted) is read again when it is shown. See "## Office
+    documents and video".
+71. **A Word document is read in pages (done 2026-10-27).** The `.docx` page is printed onto its section's paper and
+    shown in the PDF pane, so it has a page sidebar, real page breaks and the grey desk; the PDF tab takes the same
+    desk. See "## Office documents and video" and "## PDF". A preview column's pages that arrive after the tab is
+    shown say so through `PreviewContent.onPagesChange`.
 70. **Word, Excel and video viewers (done 2026-10-14).** `.docx`, `.xlsx` and `.mp4`/`.mov`/`.m4v` open as read-only
     viewer tabs; see "## Office documents and video". `Examples/Report.docx` and `Examples/Budget.xlsx` carry
     every feature the two readers claim (lists at two levels, a merged and shaded table, a picture, a link, a

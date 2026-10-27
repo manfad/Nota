@@ -109,9 +109,11 @@ extension Exporter {
             // own folder, so its stylesheet and its pictures still resolve the
             // way they do on screen. An untitled one has no folder to resolve
             // anything against, so it prints the text and stands alone.
-            if let document = note.wordDocument {
-                // A Word document is the page Nota wrote for it.
-                WebPDF.export(pageAt: document.pageURL, to: url, completion: completion)
+            if let document = note.printedDocument {
+                // A Word document or a deck is the page Nota wrote for it, on
+                // its own paper — the pages its tab shows.
+                WebPDF.export(pageAt: document.pageURL, to: url, paper: document.paper,
+                              completion: completion)
             } else if let fileURL = note.fileURL, !note.isDirty {
                 WebPDF.export(pageAt: fileURL, to: url, completion: completion)
             } else {

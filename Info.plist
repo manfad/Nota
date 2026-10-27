@@ -13,9 +13,9 @@
     <key>CFBundleIconFile</key>
     <string>Nota</string>
     <key>CFBundleVersion</key>
-    <string>1.2.16</string>
+    <string>1.2.17</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.2.16</string>
+    <string>1.2.17</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -66,8 +66,8 @@
             </array>
         </dict>
         <!-- Office documents and films, opened as viewers too: a Word
-             document as its page, a workbook as a grid, a film in the
-             system player. -->
+             document (2007 or 97–2003) as its pages, a workbook (either) as
+             a grid, a deck a slide to a page, a film in the system player. -->
         <dict>
             <key>CFBundleTypeName</key>
             <string>Office Document</string>
@@ -78,7 +78,10 @@
             <key>LSItemContentTypes</key>
             <array>
                 <string>org.openxmlformats.wordprocessingml.document</string>
+                <string>com.microsoft.word.doc</string>
                 <string>org.openxmlformats.spreadsheetml.sheet</string>
+                <string>com.microsoft.excel.xls</string>
+                <string>org.openxmlformats.presentationml.presentation</string>
             </array>
         </dict>
         <dict>

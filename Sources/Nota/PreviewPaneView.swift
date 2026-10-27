@@ -30,7 +30,7 @@ final class PreviewPaneView: NSView {
         let csv: CSVPreviewView
         let rtf: RTFPreviewView
         let tree: TreePreviewView
-        let docx: DOCXPreviewView
+        let printed: PrintedPagesView
         let video: VideoPreviewView
         let kind: PreviewContentKind
         var showsPDF: Bool { kind == .pdf }
@@ -51,7 +51,7 @@ final class PreviewPaneView: NSView {
     private let csvContent = CSVPreviewView()
     private let rtfContent = RTFPreviewView()
     private let treeContent = TreePreviewView()
-    private let docxContent = DOCXPreviewView()
+    private let printedContent = PrintedPagesView()
     private let videoContent = VideoPreviewView()
     private var currentKind: PreviewContentKind = .markdown
 
@@ -95,6 +95,7 @@ final class PreviewPaneView: NSView {
     var onPositionChange: ((Int) -> Void)?
     var onZoomChange: ((CGFloat) -> Void)?
     var onStateChange: (() -> Void)?
+    var onPagesChange: (() -> Void)?
     /// The dump's pane or the table's own `Export CSV` button was pressed:
     /// which columns and which file, through the window's own export dialog,
     /// or `nil` for one the reader cancelled. The grid's header rides along,
@@ -273,6 +274,10 @@ final class PreviewPaneView: NSView {
             guard let self, isInFront(content) else { return }
             onStateChange?()
         }
+        content.onPagesChange = { [weak self, weak content] in
+            guard let self, isInFront(content) else { return }
+            onPagesChange?()
+        }
         contentContainer.addSubview(content)
         NSLayoutConstraint.activate([
             content.topAnchor.constraint(equalTo: contentContainer.topAnchor),
@@ -302,7 +307,7 @@ final class PreviewPaneView: NSView {
         case .csv: csvContent
         case .rtf: rtfContent
         case .tree: treeContent
-        case .docx: docxContent
+        case .printed: printedContent
         case .video: videoContent
         }
     }
@@ -386,7 +391,7 @@ final class PreviewPaneView: NSView {
     var panes: Panes {
         Panes(markdown: markdownContent, latex: latexContent, html: htmlContent,
               pdf: pdfContent, image: imageContent, epub: epubContent, sql: sqlContent,
-              csv: csvContent, rtf: rtfContent, tree: treeContent, docx: docxContent,
+              csv: csvContent, rtf: rtfContent, tree: treeContent, printed: printedContent,
               video: videoContent, kind: currentKind)
     }
 }

@@ -1188,6 +1188,14 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         previewColumn.onStateChange = { [weak self] in
             self?.scheduleSave()
         }
+        // A Word document's pages land a moment after its tab does: the
+        // column lists them and the footer counts them once they are there.
+        previewColumn.onPagesChange = { [weak self] in
+            guard let self else { return }
+            previewStatus = currentPreviewFooterStatus
+            updateCursorPosition()
+            refreshImages(force: true)
+        }
         previewColumn.onDropFiles = { [weak self] urls in
             self?.openDroppedFiles(urls)
         }
@@ -1973,6 +1981,7 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         case .rtf: NoteKind.rtf
         case .word: NoteKind.word
         case .spreadsheet: NoteKind.spreadsheet
+        case .presentation: NoteKind.presentation
         case .video: NoteKind.video
         case .unreadable: Note.viewerKind(url)
         case .text, .binary: nil
@@ -3410,6 +3419,9 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
         case .spreadsheet:
             noteRecentDocument(target)
             addTab(fileURL: target, kind: .spreadsheet)
+        case .presentation:
+            noteRecentDocument(target)
+            addTab(fileURL: target, kind: .presentation)
         case .video:
             noteRecentDocument(target)
             addTab(fileURL: target, kind: .video)
@@ -5499,7 +5511,7 @@ extension MainWindowController {
     var sidebarList: SidebarList {
         switch currentNote?.kind {
         case .epub: .contents
-        case .pdf: .pages
+        case .pdf, .word, .presentation: .pages
         default: .gallery
         }
     }
@@ -5780,8 +5792,8 @@ extension MainWindowController {
         case .book(let chapter, _):
             guard let note = currentNote else { return }
             let content = previewColumn.content(for: note)
-            if let word = content as? DOCXPreviewView {
-                word.reveal(query: query)
+            if let printed = content as? PrintedPagesView {
+                printed.reveal(query: query)
             } else {
                 (content as? EPUBPreviewView)?.reveal(chapter: chapter, query: query)
             }

@@ -22,12 +22,22 @@ final class DOCXDocument {
     let pageURL: URL
     /// Every paragraph's words, a line each — what ⇧⌘F searches.
     let plainText: String
+    /// The section's sheet, in points: what the page is printed onto to be
+    /// read a page at a time.
+    let pageSize: CGSize
+    let pageMargins: NSEdgeInsets
+    /// Where that printout goes, beside the page, so it is cleared away with
+    /// the rest of the folder. Nothing is there until somebody prints it.
+    var pagesURL: URL { unpackedURL.appendingPathComponent("nota-document.pdf") }
 
-    private init(fileURL: URL, unpackedURL: URL, pageURL: URL, plainText: String) {
+    private init(fileURL: URL, unpackedURL: URL, pageURL: URL, plainText: String,
+                 pageSize: CGSize, pageMargins: NSEdgeInsets) {
         self.fileURL = fileURL
         self.unpackedURL = unpackedURL
         self.pageURL = pageURL
         self.plainText = plainText
+        self.pageSize = pageSize
+        self.pageMargins = pageMargins
     }
 
     deinit {
@@ -36,8 +46,11 @@ final class DOCXDocument {
 
     /// `nil` for anything that does not come apart into a Word document: a
     /// zip with no `word/document.xml`, or one whose XML will not parse.
-    static func open(_ fileURL: URL) -> DOCXDocument? {
-        guard let folder = Unzip.toTemporaryFolder(fileURL, prefix: "Nota-DOCX") else {
+    ///
+    /// `archive` is the `.docx` actually unpacked, when it is not the file
+    /// itself — a `.doc` written out as one first (`LegacyWord`).
+    static func open(_ fileURL: URL, archive: URL? = nil) -> DOCXDocument? {
+        guard let folder = Unzip.toTemporaryFolder(archive ?? fileURL, prefix: "Nota-DOCX") else {
             return nil
         }
         guard var converter = DOCXConverter(root: folder) else {
@@ -52,8 +65,12 @@ final class DOCXDocument {
             try? FileManager.default.removeItem(at: folder)
             return nil
         }
+        let margins = converter.margins
         return DOCXDocument(
-            fileURL: fileURL, unpackedURL: folder, pageURL: page, plainText: converted.text
+            fileURL: fileURL, unpackedURL: folder, pageURL: page, plainText: converted.text,
+            pageSize: CGSize(width: converter.pageWidth, height: converter.pageHeight),
+            pageMargins: NSEdgeInsets(top: margins.top, left: margins.left,
+                                      bottom: margins.bottom, right: margins.right)
         )
     }
 
@@ -244,6 +261,7 @@ private struct DOCXConverter {
     var noteOrder: [(kind: String, id: String)] = []
     var plain: [String] = []
     var pageWidth: Double = 612
+    var pageHeight: Double = 792
     var margins = (top: 72.0, right: 72.0, bottom: 72.0, left: 72.0)
     var title: String?
     /// Where a tab lands past the last stop a paragraph sets: every this many
@@ -365,6 +383,9 @@ private struct DOCXConverter {
     private mutating func readSection(_ section: XMLElement) {
         if let width = section.child("pgSz")?.attr("w").flatMap(Double.init) {
             pageWidth = width / 20
+        }
+        if let height = section.child("pgSz")?.attr("h").flatMap(Double.init) {
+            pageHeight = height / 20
         }
         if let margin = section.child("pgMar") {
             func twips(_ name: String, _ fallback: Double) -> Double {

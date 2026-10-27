@@ -9,11 +9,11 @@ import AppKit
 /// Nota views rather than edits. This is the only place in the app that has
 /// to be told.
 enum PreviewContentKind: Hashable {
-    case markdown, latex, html, pdf, image, epub, sql, csv, rtf, tree, docx, video
+    case markdown, latex, html, pdf, image, epub, sql, csv, rtf, tree, printed, video
 
     /// Every kind there is, in the order the column keeps them.
     static let all: [PreviewContentKind] = [
-        .markdown, .latex, .html, .pdf, .image, .epub, .sql, .csv, .rtf, .tree, .docx, .video,
+        .markdown, .latex, .html, .pdf, .image, .epub, .sql, .csv, .rtf, .tree, .printed, .video,
     ]
 
     init(_ note: Note) {
@@ -22,7 +22,8 @@ enum PreviewContentKind: Hashable {
         case .image: self = .image
         case .epub: self = .epub
         case .rtf: self = .rtf
-        case .word: self = .docx
+        // A Word document and a deck are both read as the pages they print.
+        case .word, .presentation: self = .printed
         // A workbook's sheet is a table, read in the grid a `.csv` is.
         case .spreadsheet: self = .csv
         case .video: self = .video
@@ -315,6 +316,11 @@ protocol PreviewContent: NSView {
     /// page of a book, and neither has pages to lay out in a column.
     var pageList: PageListSource? { get }
 
+    /// Run when `pageList` has changed under the window rather than because
+    /// a tab was shown — pages that were still being made when it was. The
+    /// column and the footer ask again.
+    var onPagesChange: (() -> Void)? { get set }
+
     /// Files let go on the content from the Finder. Every kind takes them and
     /// every kind does the same thing with them — hands them straight up, to
     /// be opened as tabs — so this is a requirement rather than something a
@@ -462,4 +468,9 @@ extension PreviewContent {
     func goToContentsLine(_ line: Int) { }
 
     var pageList: PageListSource? { nil }
+
+    var onPagesChange: (() -> Void)? {
+        get { nil }
+        set { }
+    }
 }

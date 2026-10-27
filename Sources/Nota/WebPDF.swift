@@ -66,19 +66,33 @@ enum WebPDF {
     /// that.
     static let margin: CGFloat = 36
 
+    /// A sheet a document brings with it — a Word section's page size and
+    /// margins — rather than the one the region prints on.
+    struct Paper: Equatable {
+        var size: NSSize
+        var margins: NSEdgeInsets
+
+        static func == (lhs: Paper, rhs: Paper) -> Bool {
+            lhs.size == rhs.size
+                && lhs.margins.top == rhs.margins.top && lhs.margins.left == rhs.margins.left
+                && lhs.margins.bottom == rhs.margins.bottom && lhs.margins.right == rhs.margins.right
+        }
+    }
+
     /// The paper this Mac prints on — Letter or A4, whichever the region
     /// says — with Nota's margins on it and the job pointed at a file rather
     /// than a printer.
     ///
     /// A copy, never `NSPrintInfo.shared` itself: the shared one belongs to
     /// the app and to whatever the reader prints next.
-    static func printInfo(savingTo url: URL) -> NSPrintInfo {
+    static func printInfo(savingTo url: URL, paper: Paper? = nil) -> NSPrintInfo {
         let info = (NSPrintInfo.shared.copy() as? NSPrintInfo) ?? NSPrintInfo()
         info.orientation = .portrait
-        info.topMargin = margin
-        info.bottomMargin = margin
-        info.leftMargin = margin
-        info.rightMargin = margin
+        info.topMargin = paper?.margins.top ?? margin
+        info.bottomMargin = paper?.margins.bottom ?? margin
+        info.leftMargin = paper?.margins.left ?? margin
+        info.rightMargin = paper?.margins.right ?? margin
+        if let paper { info.paperSize = paper.size }
         info.isHorizontallyCentered = false
         info.isVerticallyCentered = false
         info.horizontalPagination = .fit
@@ -118,15 +132,19 @@ enum WebPDF {
     /// follow, and white type on a black sheet is not what anybody exporting
     /// a book asked for. So the window and the view are pinned to Aqua and
     /// the reader theme is not injected here at all.
+    ///
+    /// `paper` is the sheet the page asks for, when it has one of its own;
+    /// `nil` is the region's paper with Nota's margins.
     static func export(
-        pageAt fileURL: URL, to url: URL, timeout: TimeInterval = defaultTimeout,
+        pageAt fileURL: URL, to url: URL, paper: Paper? = nil,
+        timeout: TimeInterval = defaultTimeout,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         guard let pageURL = PageFiles.pageURL(fileURL) else {
             completion(.failure(Failure.couldNotLoad))
             return
         }
-        enqueue(PrintJob(source: .page(pageURL), destination: url,
+        enqueue(PrintJob(source: .page(pageURL), destination: url, paper: paper,
                          limit: timeout, completion: completion))
     }
 
@@ -141,7 +159,7 @@ enum WebPDF {
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         enqueue(PrintJob(source: .html(html, baseURL.flatMap(PageFiles.pageURL)),
-                         destination: url, limit: timeout, completion: completion))
+                         destination: url, paper: nil, limit: timeout, completion: completion))
     }
 
     /// Prints a web view that already holds the page — the one on screen.
@@ -154,7 +172,7 @@ enum WebPDF {
         page webView: WKWebView, to url: URL, timeout: TimeInterval = defaultTimeout,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
-        enqueue(PrintJob(source: .loaded(webView), destination: url,
+        enqueue(PrintJob(source: .loaded(webView), destination: url, paper: nil,
                          limit: timeout, completion: completion))
     }
 
@@ -212,6 +230,7 @@ private final class PrintJob: NSObject, WKNavigationDelegate {
 
     private let source: Source
     private let destination: URL
+    private let paper: WebPDF.Paper?
     private let limit: TimeInterval
     private let completion: (Result<Void, Error>) -> Void
 
@@ -225,10 +244,11 @@ private final class PrintJob: NSObject, WKNavigationDelegate {
     /// before anybody's completion handler runs.
     private var done: ((Result<Void, Error>) -> Void)?
 
-    init(source: Source, destination: URL, limit: TimeInterval,
+    init(source: Source, destination: URL, paper: WebPDF.Paper?, limit: TimeInterval,
          completion: @escaping (Result<Void, Error>) -> Void) {
         self.source = source
         self.destination = destination
+        self.paper = paper
         self.limit = limit
         self.completion = completion
     }
@@ -263,7 +283,7 @@ private final class PrintJob: NSObject, WKNavigationDelegate {
     /// A web view of our own, in a window of our own, at the width of the
     /// paper it is going to be printed on.
     private func makeWebView() -> WKWebView {
-        let info = WebPDF.printInfo(savingTo: destination)
+        let info = WebPDF.printInfo(savingTo: destination, paper: paper)
         let frame = WebPDF.printableRect(of: info)
 
         let configuration = WKWebViewConfiguration()
@@ -350,7 +370,7 @@ private final class PrintJob: NSObject, WKNavigationDelegate {
             finish(.failure(WebPDF.Failure.couldNotPrint))
             return
         }
-        let info = WebPDF.printInfo(savingTo: destination)
+        let info = WebPDF.printInfo(savingTo: destination, paper: paper)
         let frame = WebPDF.printableRect(of: info)
 
         let operation = webView.printOperation(with: info)
