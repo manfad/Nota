@@ -101,12 +101,11 @@ final class TabBarView: NSView {
     private static let spacing = TabStripLayout.spacing
     private static let newTabButtonSize = TabStripLayout.plusSize
 
-    /// Drag-to-reorder tuning: how raised the dragged tab looks, how long a
-    /// slide/settle animation takes, and — only when tabs are hidden — the
-    /// hot zone at either end that reveals one more slot, and how often. The
-    /// move-vs-click threshold itself lives on `TabItemView`, the only place
-    /// that needs it.
-    private static let draggedTabAlpha: CGFloat = 0.9
+    /// Drag-to-reorder tuning: how long a slide/settle animation takes, and
+    /// — only when tabs are hidden — the hot zone at either end that reveals
+    /// one more slot, and how often. The move-vs-click threshold itself lives
+    /// on `TabItemView`, the only place that needs it; how a lifted tab looks
+    /// is its own `isLifted`.
     private static let dragAnimationDuration: TimeInterval = 0.12
     /// Keeps a tab from flickering between two slots when the pointer rests
     /// directly on their boundary.
@@ -845,10 +844,10 @@ final class TabBarView: NSView {
             lastPointerX: pointer.x,
             grabOffset: NSPoint(x: pointer.x - view.frame.minX, y: pointer.y - view.frame.minY)
         )
-        // Above every sibling while it rides the pointer, and a touch
-        // translucent so it reads as lifted off the strip.
+        // Above every sibling while it rides the pointer, solid so nothing it
+        // passes over shows through, with a shadow under it to read as lifted.
         addSubview(view, positioned: .above, relativeTo: nil)
-        view.alphaValue = Self.draggedTabAlpha
+        view.isLifted = true
         startEscMonitor()
     }
 
@@ -892,7 +891,7 @@ final class TabBarView: NSView {
         stopEscMonitor()
         dragSession = nil
         isTornOff = true
-        itemViews[session.originalIndex].alphaValue = 1
+        itemViews[session.originalIndex].isLifted = false
         restoreSubviewOrdering()
         needsLayout = true
         delegate?.tabBar(self, tearOff: session.originalIndex,
@@ -1077,7 +1076,7 @@ final class TabBarView: NSView {
                 + session.originX
             settle(view, to: targetX) { [weak self] in
                 guard let self else { return }
-                view.alphaValue = 1
+                view.isLifted = false
                 self.restoreSubviewOrdering()
                 self.delegate?.tabBar(self, didMove: session.originalIndex, to: session.currentSlot)
             }
@@ -1089,7 +1088,7 @@ final class TabBarView: NSView {
                 let targetX = slotX(index, order: identityOrder, widths: session.widths)
                     + session.originX
                 settle(itemViews[index], to: targetX, completion: index == session.originalIndex ? {
-                    view.alphaValue = 1
+                    view.isLifted = false
                 } : nil)
             }
             restoreSubviewOrdering()
@@ -1115,18 +1114,29 @@ final class TabBarView: NSView {
         settle(view, to: x, completion: nil)
     }
 
+    /// A slide is aimed at where the drag thought the tab belonged, and an
+    /// animator keeps setting the frame until it lands — so a layout that ran
+    /// meanwhile (a tab opened or closed mid-drag, the selection settling) is
+    /// overwritten, and the tab comes to rest half over its neighbour. Once
+    /// the strip is no longer being dragged, every landing hands the frames
+    /// back to `layout()`, which is the only thing that knows the real slots.
     private func settle(_ view: NSView, to x: CGFloat, completion: (() -> Void)?) {
         var frame = view.frame
         frame.origin.x = x
+        let landed = { [weak self] in
+            completion?()
+            guard let self, self.dragSession == nil, !self.isTornOff else { return }
+            self.needsLayout = true
+        }
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
             view.frame = frame
-            completion?()
+            landed()
             return
         }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = Self.dragAnimationDuration
             view.animator().frame = frame
-        }, completionHandler: completion)
+        }, completionHandler: landed)
     }
 
     /// Restores the strip's normal subview stacking (tabs in index order,
@@ -1527,6 +1537,24 @@ private final class TabItemView: NSView {
 
     override var mouseDownCanMoveWindow: Bool { false }
 
+    /// Riding the pointer in a drag: a soft shadow under the pill, the way a
+    /// lifted tab reads in Safari. The strip leaves 5pt above and below a
+    /// tab, so the shadow is kept inside that.
+    var isLifted = false {
+        didSet {
+            guard isLifted != oldValue else { return }
+            shadow = isLifted ? Self.liftShadow : nil
+        }
+    }
+
+    private static let liftShadow: NSShadow = {
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.22)
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
+        shadow.shadowBlurRadius = 4
+        return shadow
+    }()
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
 
@@ -1850,8 +1878,15 @@ private final class TabItemView: NSView {
         // The hover wash is `hoverFillView`, under everything else, so it can
         // fade in with the slot.
         if isSelected {
+            // The ground first, so the pill is solid: a tab dragged over its
+            // neighbours covers their titles rather than letting them show
+            // through its wash. The ground is the editor's, the one the strip
+            // itself sits on, so at rest the pill reads exactly as before.
+            let pill = NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6)
+            NSColor.textBackgroundColor.setFill()
+            pill.fill()
             StripWash.selected(for: self).setFill()
-            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+            pill.fill()
         }
 
         // Sits behind the ✕, which is a subview and so draws on top of this.
